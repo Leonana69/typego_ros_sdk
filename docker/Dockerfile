@@ -41,7 +41,7 @@ RUN apt-get update && apt-get install -y ros-humble-navigation2 ros-humble-nav2-
 # install cyclonedds
 RUN apt-get update && apt-get install -y ros-humble-rmw-cyclonedds-cpp ros-humble-cyclonedds
 ENV RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
-ENV CYCLONEDDS_URI=/workspace/config/cyclonedds_shm.xml
+ENV CYCLONEDDS_URI=/workspace/src/typego_sdk/config/cyclonedds_shm.xml
 
 # install pip packages
 # RUN apt-get update && apt-get install -y python3-pip
@@ -50,12 +50,9 @@ ENV CYCLONEDDS_URI=/workspace/config/cyclonedds_shm.xml
 # source the setup files
 RUN echo "source /opt/ros/$ROS_DISTRO/setup.bash" >> /root/.bashrc
 
-COPY ../config /workspace/config
-COPY ../resource /workspace/resource
 COPY ../src /workspace/src
 WORKDIR /workspace
 
 RUN /bin/bash -c "source /opt/ros/$ROS_DISTRO/setup.bash && cd /workspace && colcon build"
-ARG ROBOT_TYPE
-RUN chmod +x /workspace/src/${ROBOT_TYPE}_sdk/scripts/*.sh
-CMD ["bash", "-c", "source /workspace/install/setup.bash && /workspace/src/${ROBOT_TYPE}_sdk/scripts/run.sh"]
+RUN chmod +x /workspace/src/typego_sdk/scripts/*.sh
+CMD ["bash", "-c", "source /workspace/install/setup.bash && /workspace/src/typego_sdk/scripts/run.sh"]

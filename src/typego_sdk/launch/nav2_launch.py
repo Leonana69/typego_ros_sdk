@@ -26,8 +26,8 @@ def modify_nav2_params(context):
         scan_topic = '/scan'
     
     # Load original parameters
-    pkg_go2_sdk = get_package_share_directory('go2_sdk')
-    original_config_path = os.path.join(pkg_go2_sdk, 'config', 'nav2_params.yaml')
+    pkg_typego_sdk = get_package_share_directory('typego_sdk')
+    original_config_path = os.path.join(pkg_typego_sdk, 'config', 'nav2_params.yaml')
     
     with open(original_config_path, 'r') as f:
         params = yaml.safe_load(f)

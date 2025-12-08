@@ -6,7 +6,7 @@
 #include <thread>
 #include <cstring>
 
-#include "go2_sdk/namespace_utils.hpp"
+#include "typego_sdk/namespace_utils.hpp"
 
 class GStreamerStream {
 public:
@@ -132,12 +132,12 @@ private:
 
 class VideoServiceNode : public rclcpp::Node {
 public:
-    VideoServiceNode() : Node("video_service", go2_sdk::get_namespace_from_env()) {
+    VideoServiceNode() : Node("video_service", typego_sdk::get_namespace_from_env()) {
         gst_init(nullptr, nullptr);
         
         // Get frame prefix from namespace
         std::string ns = this->get_namespace();
-        frame_prefix_ = go2_sdk::get_frame_prefix_from_namespace(ns);
+        frame_prefix_ = typego_sdk::get_frame_prefix_from_namespace(ns);
 
         RCLCPP_INFO(this->get_logger(), "Dual GStreamer node initializing in namespace: %s with frame prefix: %s", 
                     ns.c_str(), frame_prefix_.empty() ? "<none>" : frame_prefix_.c_str());

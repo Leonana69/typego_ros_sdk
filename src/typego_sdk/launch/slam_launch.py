@@ -35,7 +35,7 @@ def generate_launch_description():
     ]
 
     def launch_setup(context, *args, **kwargs):
-        pkg_dir = FindPackageShare("go2_sdk").find("go2_sdk")
+        pkg_dir = FindPackageShare("typego_sdk").find("typego_sdk")
 
         ns = context.perform_substitution(LaunchConfiguration("robot_namespace"))
         slam_yaml = context.perform_substitution(LaunchConfiguration("slam_params_file"))
@@ -47,7 +47,7 @@ def generate_launch_description():
             use_existing_map = False
 
         slam_params_path = os.path.join(pkg_dir, "config", slam_yaml)
-        rviz_config_path = os.path.join(pkg_dir, "rviz_config", "slam.rviz")
+        rviz_config_path = os.path.join(pkg_dir, "config", "slam.rviz")
         map_file_path = os.path.join(pkg_dir, f"resource/Map-{existing_map}/{existing_map}")
 
         # ------------------------------------------------------------

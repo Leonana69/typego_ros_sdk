@@ -1,10 +1,10 @@
-#ifndef GO2_SDK__NAMESPACE_UTILS_HPP_
-#define GO2_SDK__NAMESPACE_UTILS_HPP_
+#ifndef TYPEGO_SDK__NAMESPACE_UTILS_HPP_
+#define TYPEGO_SDK__NAMESPACE_UTILS_HPP_
 
 #include <string>
 #include <cstring>
 
-namespace go2_sdk {
+namespace typego_sdk {
 
 /**
  * @brief Get ROS namespace from ROBOT_ID environment variable
@@ -31,6 +31,6 @@ inline std::string get_frame_prefix_from_namespace(const std::string& ns) {
     return ns.substr(1) + "/";
 }
 
-}  // namespace go2_sdk
+}  // namespace typego_sdk
 
-#endif  // GO2_SDK__NAMESPACE_UTILS_HPP_
+#endif  // TYPEGO_SDK__NAMESPACE_UTILS_HPP_

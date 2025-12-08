@@ -1,11 +1,11 @@
 <?xml version="1.0"?>
 <?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
 <package format="3">
-  <name>go2_sdk</name>
+  <name>typego_sdk</name>
   <version>0.0.0</version>
-  <description>TODO: Package description</description>
+  <description>ROS2 SDK for TypeGo</description>
   <maintainer email="guojun.chen@yale.edu">Guojun Chen</maintainer>
-  <license>TODO: License declaration</license>
+  <license>MIT</license>
 
   <buildtool_depend>ament_cmake</buildtool_depend>
 
@@ -13,13 +13,9 @@
   <depend>rclcpp</depend>
   <depend>sensor_msgs</depend>
   <depend>tf2_ros</depend>
-  <depend>gstreamer1.0</depend>
-  <depend>gstreamer1.0-apps</depend>
-  <depend>libopencv-dev</depend>
   <depend>libcurl4-openssl-dev</depend>
 
   <depend>typego_interface</depend>
-  <depend>typego_sdk</depend>
 
   <test_depend>ament_lint_auto</test_depend>
   <test_depend>ament_lint_common</test_depend>

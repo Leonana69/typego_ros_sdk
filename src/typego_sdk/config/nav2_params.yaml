@@ -233,5 +233,5 @@ bt_navigator:
   ros__parameters:
     global_frame: map
     robot_base_frame: base_link
-    default_nav_to_pose_bt_xml: $(find-pkg-share go2_sdk)/config/custom_nav_to_pose_bt.xml
-    default_nav_through_poses_bt_xml: $(find-pkg-share go2_sdk)/config/custom_nav_through_pose_bt.xml
+    default_nav_to_pose_bt_xml: $(find-pkg-share typego_sdk)/config/custom_nav_to_pose_bt.xml
+    default_nav_through_poses_bt_xml: $(find-pkg-share typego_sdk)/config/custom_nav_through_pose_bt.xml

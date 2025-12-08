@@ -15,11 +15,11 @@
 #include <arpa/inet.h>
 #include <fcntl.h>
 
-#include "go2_sdk/namespace_utils.hpp"
+#include "typego_sdk/namespace_utils.hpp"
 
 class TFServiceNode : public rclcpp::Node {
 public:
-    TFServiceNode() : Node("tf_service", go2_sdk::get_namespace_from_env()) {
+    TFServiceNode() : Node("tf_service", typego_sdk::get_namespace_from_env()) {
         // Get namespace
         std::string ns = this->get_namespace();
         

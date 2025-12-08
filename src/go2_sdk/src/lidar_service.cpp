@@ -15,11 +15,11 @@
 #include <fcntl.h>
 
 #include "tf2_ros/static_transform_broadcaster.h"
-#include "go2_sdk/namespace_utils.hpp"
+#include "typego_sdk/namespace_utils.hpp"
 
 class LidarServiceNode : public rclcpp::Node {
 public:
-    LidarServiceNode() : Node("lidar_service", go2_sdk::get_namespace_from_env()) {
+    LidarServiceNode() : Node("lidar_service", typego_sdk::get_namespace_from_env()) {
         publisher_ = this->create_publisher<sensor_msgs::msg::PointCloud2>("livox_points", 10);
         laserscan_publisher_ = this->create_publisher<sensor_msgs::msg::LaserScan>("scan", 10);
 

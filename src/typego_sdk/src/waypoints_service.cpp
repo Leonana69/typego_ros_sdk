@@ -19,7 +19,7 @@
 #include "typego_interface/msg/way_point.hpp"
 #include "typego_interface/msg/way_point_array.hpp"
 
-#include "go2_sdk/namespace_utils.hpp"
+#include "typego_sdk/namespace_utils.hpp"
 
 static const char* labels[] = {
     "hallway",
@@ -83,7 +83,7 @@ int grid_distance(const nav_msgs::msg::OccupancyGrid &grid, int sx, int sy, int 
 class AdaptiveWaypointNode : public rclcpp::Node {
 public:
     AdaptiveWaypointNode()
-        : Node("waypoints_service", go2_sdk::get_namespace_from_env()), 
+        : Node("waypoints_service", typego_sdk::get_namespace_from_env()), 
           tf_buffer_(this->get_clock()), 
           tf_listener_(tf_buffer_) {
 
@@ -108,8 +108,8 @@ public:
             slam_map_name_ = "empty_map";
             RCLCPP_WARN(this->get_logger(), "SLAM_MAP_NAME not set, using default: %s", slam_map_name_.c_str());
         }
-        std::string pkg_go2_sdk = ament_index_cpp::get_package_share_directory("go2_sdk");
-        waypoint_file_ = pkg_go2_sdk + "/resource/Map-" + slam_map_name_ + "/waypoints.csv";
+        std::string pkg_typego_sdk = ament_index_cpp::get_package_share_directory("typego_sdk");
+        waypoint_file_ = pkg_typego_sdk + "/resource/Map-" + slam_map_name_ + "/waypoints.csv";
         
         load_waypoints(waypoint_file_);
 
@@ -357,7 +357,7 @@ private:
         
         // Prepare JSON data
         nlohmann::json json_data = {
-            {"robot_info", "go2"},
+            {"robot_info", "typego"},
             {"service_type", "clip"},
             {"image_id", 1},
             {"queries", {
