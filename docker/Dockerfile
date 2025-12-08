@@ -44,16 +44,18 @@ ENV RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
 ENV CYCLONEDDS_URI=/workspace/config/cyclonedds_shm.xml
 
 # install pip packages
-RUN apt-get update && apt-get install -y python3-pip
-RUN pip3 install flask pillow numpy opencv-python openai groq requests aiohttp overrides
+# RUN apt-get update && apt-get install -y python3-pip
+# RUN pip3 install flask pillow numpy opencv-python openai groq requests aiohttp overrides
 
 # source the setup files
 RUN echo "source /opt/ros/$ROS_DISTRO/setup.bash" >> /root/.bashrc
 
 COPY ../config /workspace/config
+COPY ../resource /workspace/resource
 COPY ../src /workspace/src
 WORKDIR /workspace
 
 RUN /bin/bash -c "source /opt/ros/$ROS_DISTRO/setup.bash && cd /workspace && colcon build"
-RUN chmod +x /workspace/src/go2_sdk/scripts/*.sh
-CMD ["bash", "-c", "source /workspace/install/setup.bash && /workspace/src/go2_sdk/scripts/run.sh"]
+ARG ROBOT_TYPE
+RUN chmod +x /workspace/src/${ROBOT_TYPE}_sdk/scripts/*.sh
+CMD ["bash", "-c", "source /workspace/install/setup.bash && /workspace/src/${ROBOT_TYPE}_sdk/scripts/run.sh"]

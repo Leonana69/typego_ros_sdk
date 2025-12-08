@@ -2,6 +2,8 @@ SHELL := /bin/zsh
 
 # --- Default environment setup ---
 ENV_FILE := ./docker/.env
+-include $(ENV_FILE)
+
 SETUP_FILE := ./install/setup.zsh  # can also be setup.bash if preferred
 
 .PHONY: docker_stop docker_start docker_remove docker_open docker_build build
@@ -27,7 +29,7 @@ docker_start:
 	docker run -td --privileged --net=host --ipc=host \
     	--name="go2-sdk" \
 		--shm-size=2g \
-		--env-file ./docker/.env \
+		--env-file $(ENV_FILE) \
 		go2-sdk:0.1
 
 docker_remove:
@@ -44,7 +46,7 @@ docker_build:
 	@make docker_stop
 	@make docker_remove
 	@echo -n "=>"
-	docker build -t go2-sdk:0.1 -f ./docker/Dockerfile .
+	docker build --build-arg ROBOT_TYPE=$(ROBOT_TYPE) -t go2-sdk:0.1 -f ./docker/Dockerfile .
 	@echo -n "=>"
 	@make docker_start
 

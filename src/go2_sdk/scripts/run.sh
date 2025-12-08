@@ -19,9 +19,9 @@ echo "🤖 Using robot namespace: ${ROBOT_NS:-<none>}, SLAM map name: ${SLAM_MAP
 iox-roudi &
 ros2 run go2_sdk tf_service_node \
     --ros-args -r /tf:=${ROBOT_NS}/tf -r /tf_static:=${ROBOT_NS}/tf_static &
-ros2 run go2_sdk livox_udp_receiver_node \
+ros2 run go2_sdk lidar_service_node \
     --ros-args -r /tf:=${ROBOT_NS}/tf -r /tf_static:=${ROBOT_NS}/tf_static &
-ros2 run go2_sdk gstreamer_receiver_node &
+ros2 run go2_sdk video_service_node &
 
 # Launch SLAM with robot namespace (works with empty string too)
 
@@ -38,7 +38,7 @@ while ! ros2 topic list | grep -q "${MAP_TOPIC}"; do
 	sleep 1
 done
 
-ros2 run go2_sdk waypoints_node \
+ros2 run go2_sdk waypoints_service_node \
     --ros-args -r /tf:=${ROBOT_NS}/tf -r /tf_static:=${ROBOT_NS}/tf_static &
 
 # Launch Nav2 with robot namespace (works with empty string too)

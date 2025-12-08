@@ -102,8 +102,9 @@ install(TARGETS
 
 install(DIRECTORY launch DESTINATION share/${PROJECT_NAME}/)
 install(DIRECTORY config DESTINATION share/${PROJECT_NAME}/)
-install(DIRECTORY resource DESTINATION share/${PROJECT_NAME}/)
 install(DIRECTORY rviz_config DESTINATION share/${PROJECT_NAME}/)
 install(DIRECTORY include/ DESTINATION include/)
+# install the resource directory from the parent directory
+install(DIRECTORY ../../resource DESTINATION share/${PROJECT_NAME}/)
 
 ament_package()
