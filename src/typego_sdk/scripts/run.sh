@@ -12,22 +12,19 @@ else
 fi
 
 ROBOT_TYPE="${ROBOT_TYPE:-go2}"
-
 SLAM_MAP_NAME="${SLAM_MAP_NAME:-empty_map}"
-
 echo "🤖 Using robot namespace: ${ROBOT_NS:-<none>}, SLAM map name: ${SLAM_MAP_NAME:-<none>}"
 
-# Source the ROS 2 setup file and run the nodes in the background
+# Start the IOX router
 iox-roudi &
 
-ros2 run ${ROBOT_TYPE}_sdk tf_service_node \
-    --ros-args -r /tf:=${ROBOT_NS}/tf -r /tf_static:=${ROBOT_NS}/tf_static &
-ros2 run ${ROBOT_TYPE}_sdk lidar_service_node \
-    --ros-args -r /tf:=${ROBOT_NS}/tf -r /tf_static:=${ROBOT_NS}/tf_static &
-ros2 run ${ROBOT_TYPE}_sdk video_service_node &
+# Run the script in $(ROBOT_TYPE)_sdk/scripts/run.sh
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+WORKSPACE_SRC="$(cd "$SCRIPT_DIR/../.." && pwd)"
+chmod +x "${WORKSPACE_SRC}/${ROBOT_TYPE}_sdk/scripts/run.sh"
+"${WORKSPACE_SRC}/${ROBOT_TYPE}_sdk/scripts/run.sh"
 
 # Launch SLAM with robot namespace (works with empty string too)
-
 if [ -n "$ROBOT_NS" ]; then
 	ros2 launch typego_sdk slam_launch.py robot_namespace:=$ROBOT_NAME existing_map:=$SLAM_MAP_NAME &
 else
@@ -41,6 +38,7 @@ while ! ros2 topic list | grep -q "${MAP_TOPIC}"; do
 	sleep 1
 done
 
+# Run the waypoints service node
 ros2 run typego_sdk waypoints_service_node \
     --ros-args -r /tf:=${ROBOT_NS}/tf -r /tf_static:=${ROBOT_NS}/tf_static &
 
