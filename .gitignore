@@ -1,0 +1,6 @@
+log/
+install/
+build/
+
+.vscode/
+.DS_Store
