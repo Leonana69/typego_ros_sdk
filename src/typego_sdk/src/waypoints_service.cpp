@@ -15,6 +15,7 @@
 #include <sensor_msgs/msg/image.hpp>
 #include <ament_index_cpp/get_package_share_directory.hpp>
 #include <filesystem>
+#include <algorithm>
 
 #include "typego_interface/msg/way_point.hpp"
 #include "typego_interface/msg/way_point_array.hpp"
@@ -212,6 +213,8 @@ private:
     }
 
     void cmd_vel_callback(geometry_msgs::msg::Twist::SharedPtr msg) {
+        const double max_speed_ = 0.8;
+        const double max_angular_speed_ = 1.0;
         if (!accept_cmd_vel_) {
             return;
         }
@@ -220,6 +223,11 @@ private:
         if (msg->linear.x == 0.0 && msg->linear.y == 0.0 && msg->angular.z == 0.0) {
             return;
         }
+
+        // Limit the velocity to the maximum speed
+        msg->linear.x  = std::clamp(msg->linear.x, -max_speed_, max_speed_);
+        msg->linear.y  = std::clamp(msg->linear.y, -max_speed_, max_speed_);
+        msg->angular.z = std::clamp(msg->angular.z, -max_angular_speed_, max_angular_speed_);
 
         // Prepare JSON control command
         nlohmann::json control = {
