@@ -330,6 +330,13 @@ private:
         if (min_dist > threshold_distance_meters_ && valid_waypoint_found) {
             RCLCPP_INFO(this->get_logger(), "Adding new waypoint at (%.2f, %.2f)", x, y);
 
+            // Add waypoint immediately with temporary label to prevent duplicates
+            int waypoint_id = next_id_++;
+            Waypoint wp{waypoint_id, x, y, "pending"};
+            waypoints_.push_back(wp);
+            save_waypoints(waypoint_file_);
+            publish_waypoints();
+
             // Copy image safely
             cv::Mat cloned_image;
             {
@@ -344,8 +351,8 @@ private:
                 }
             }
 
-            // Run detection in background
-            std::thread([this, img = std::move(cloned_image), x, y]() {
+            // Run detection in background and update label
+            std::thread([this, img = std::move(cloned_image), waypoint_id]() {
                 int label_index = -1;
                 if (!img.empty()) {
                     label_index = send_image_for_detection(img);
@@ -354,8 +361,14 @@ private:
                 }
                 std::string label = (label_index >= 0 && label_index < 3)
                                 ? labels[label_index] : "no_label";
-                Waypoint wp{next_id_++, x, y, label};
-                waypoints_.push_back(wp);
+                
+                // Update the waypoint label
+                for (auto &wp : waypoints_) {
+                    if (wp.id == waypoint_id) {
+                        wp.label = label;
+                        break;
+                    }
+                }
                 save_waypoints(waypoint_file_);
                 publish_waypoints();
             }).detach();
