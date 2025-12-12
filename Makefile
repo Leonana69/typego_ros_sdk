@@ -66,4 +66,4 @@ save_map:
 	mkdir -p $(CURDIR)/src/typego_sdk/resource/Map-$(FILE)
 	docker cp typego-sdk:/workspace/$(FILE).posegraph $(CURDIR)/src/typego_sdk/resource/Map-$(FILE)/$(FILE).posegraph
 	docker cp typego-sdk:/workspace/$(FILE).data $(CURDIR)/src/typego_sdk/resource/Map-$(FILE)/$(FILE).data
-	# docker cp typego-sdk:/workspace/$(FILE).pgm $(CURDIR)/src/typego_sdk/resource/Map-$(FILE)/waypoints.csv
+	docker cp typego-sdk:/workspace/install/typego_sdk/share/typego_sdk/resource/Map-empty_map/waypoints.csv $(CURDIR)/src/typego_sdk/resource/Map-$(FILE)/waypoints.csv

@@ -73,7 +73,7 @@ def generate_launch_description():
 
         map_params = {
             "map_file_name": map_file_path,
-            "map_start_pose": [-0.9, 0.9, -0.76]
+            "map_start_pose": [0.0, 0.5, 3.14]
         }
 
         nodes = []
