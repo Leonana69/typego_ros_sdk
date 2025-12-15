@@ -9,10 +9,10 @@ else
     ROBOT_NS=""
 fi
 
-echo "Go2🤖 Using robot namespace: ${ROBOT_NS:-<none>}"
+echo "Kami 🤖 Using robot namespace: ${ROBOT_NS:-<none>}"
 
-ros2 run go2_sdk tf_service_node \
+ros2 run kami_sdk tf_service_node \
     --ros-args -r /tf:=${ROBOT_NS}/tf -r /tf_static:=${ROBOT_NS}/tf_static &
-ros2 run go2_sdk lidar_service_node \
+ros2 run kami_sdk lidar_service_node \
     --ros-args -r /tf:=${ROBOT_NS}/tf -r /tf_static:=${ROBOT_NS}/tf_static &
-ros2 run go2_sdk video_service_node &
+ros2 run kami_sdk video_service_node &
