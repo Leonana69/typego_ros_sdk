@@ -1,16 +1,8 @@
 SHELL := /bin/zsh
 
-JETSON ?= 0
-
 DOCKERFILE = ./docker/Dockerfile
 IMAGE = typego-sdk:0.1
 CONTAINER_NAME = typego-sdk
-
-ifeq ($(JETSON),1)
-	DOCKERFILE = ./docker/Dockerfile-jetson
-	IMAGE = typego-sdk-jetson:0.1
-	CONTAINER_NAME = typego-sdk-jetson
-endif
 
 # --- Default environment setup ---
 ENV_FILE := ./docker/.env
