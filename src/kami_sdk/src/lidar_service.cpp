@@ -13,9 +13,9 @@
 class LidarServiceNode : public rclcpp::Node {
 public:
     LidarServiceNode() : Node("lidar_service", typego_sdk::get_namespace_from_env()) {
-        // Subscribe to livox_points topic
+        // Subscribe to /livox/lidar topic
         pointcloud_sub_ = this->create_subscription<sensor_msgs::msg::PointCloud2>(
-            "livox_points", 10,
+            "/livox/lidar", 10,
             std::bind(&LidarServiceNode::pointcloud_callback, this, std::placeholders::_1));
         
         // Publish LaserScan
@@ -24,7 +24,7 @@ public:
         init_lidar_link();
 
         RCLCPP_INFO(this->get_logger(), 
-                    "Lidar Service initialized: subscribing to livox_points, publishing to scan");
+                    "Lidar Service initialized: subscribing to /livox/lidar, publishing to scan");
     }
 
 private:
@@ -86,7 +86,7 @@ private:
             float z = *reinterpret_cast<const float*>(point_ptr + z_offset);
 
             // Filter: only use points near z=0 for 2D lidar (within 0.1m)
-            if (std::abs(z) > 0.1f) continue;
+            if (std::abs(z) > 0.2f) continue;
 
             // Calculate angle and range
             float angle = std::atan2(y, x);

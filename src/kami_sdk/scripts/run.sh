@@ -15,4 +15,3 @@ ros2 run kami_sdk tf_service_node \
     --ros-args -r /tf:=${ROBOT_NS}/tf -r /tf_static:=${ROBOT_NS}/tf_static &
 ros2 run kami_sdk lidar_service_node \
     --ros-args -r /tf:=${ROBOT_NS}/tf -r /tf_static:=${ROBOT_NS}/tf_static &
-ros2 run kami_sdk video_service_node &

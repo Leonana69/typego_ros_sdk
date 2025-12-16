@@ -14,16 +14,16 @@ public:
         // Create TF broadcaster
         tf_broadcaster_ = std::make_shared<tf2_ros::TransformBroadcaster>(*this);
 
-        // Subscribe to /odom/master topic
+        // Subscribe to /odom/mc_odom topic
         odom_sub_ = this->create_subscription<nav_msgs::msg::Odometry>(
-            "/odom/master", 10,
+            "/odom/mc_odom", 10,
             std::bind(&TFServiceNode::odom_callback, this, std::placeholders::_1));
 
         RCLCPP_INFO(this->get_logger(),
             "TF broadcaster initialized. Will publish to /tf");
 
         RCLCPP_INFO(this->get_logger(), 
-                    "Kami TF Service initialized in namespace: %s, subscribing to /odom/master, publishing to /tf", 
+                    "Kami TF Service initialized in namespace: %s, subscribing to /odom/mc_odom, publishing to /tf", 
                     ns.c_str());
     }
 
