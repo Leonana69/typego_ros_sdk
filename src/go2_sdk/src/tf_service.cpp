@@ -37,7 +37,7 @@ public:
         imu_pub_ = this->create_publisher<sensor_msgs::msg::Imu>("imu/data", 10);
 
         const char* go2_ip = std::getenv("ROBOT_IP");
-        std::string go2_ip_ = go2_ip ? std::string(go2_ip) : "192.168.0.253";
+        std::string go2_ip_ = go2_ip ? std::string(go2_ip) : "192.168.0.243";
         const uint16_t go2_livox_port = 8889;
 
         // UDP setup

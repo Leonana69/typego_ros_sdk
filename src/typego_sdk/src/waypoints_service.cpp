@@ -126,7 +126,7 @@ public:
 
         // Get robot URL from environment variable or use default
         const char* robot_url = std::getenv("ROBOT_URL");
-        robot_url_ = robot_url ? std::string(robot_url) : "http://192.168.0.253:18080";
+        robot_url_ = robot_url ? std::string(robot_url) : "http://192.168.0.243:18080";
         RCLCPP_INFO(this->get_logger(), "Using ROBOT_URL: %s", robot_url_.c_str());
 
         // Accept cmd_vel parameter (default: true)

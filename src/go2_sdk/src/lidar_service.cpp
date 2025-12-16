@@ -26,7 +26,7 @@ public:
         init_lidar_link();
 
         const char* go2_ip = std::getenv("ROBOT_IP");
-        std::string go2_ip_ = go2_ip ? std::string(go2_ip) : "192.168.0.253";
+        std::string go2_ip_ = go2_ip ? std::string(go2_ip) : "192.168.0.243";
         const uint16_t go2_livox_port = 8888;
 
         // UDP setup with non-blocking socket and initial dummy packet
