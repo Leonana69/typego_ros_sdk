@@ -23,13 +23,13 @@ build:
 	}
 
 docker_stop:
-	@echo "=> Stopping typego-sdk..."
+	@echo "=> Stopping TypeGo SDK..."
 	@-docker stop -t 0 $(CONTAINER_NAME) > /dev/null 2>&1
 	@-docker rm -f $(CONTAINER_NAME) > /dev/null 2>&1
 
 docker_start:
 	@make docker_stop
-	@echo "=> Starting typego-sdk..."
+	@echo "=> Starting TypeGo SDK..."
 	docker run -td --privileged --net=host --ipc=host \
     	--name="$(CONTAINER_NAME)" \
 		--shm-size=2g \
@@ -37,22 +37,29 @@ docker_start:
 		$(IMAGE)
 
 docker_remove:
-	@echo "=> Removing typego-sdk..."
+	@echo "=> Removing TypeGo SDK..."
 	@-docker image rm -f $(IMAGE)  > /dev/null 2>&1
-	@-docker rm -f typego-sdk > /dev/null 2>&1
+	@-docker rm -f $(CONTAINER_NAME) > /dev/null 2>&1
 
 docker_open:
-	@echo "=> Opening bash in typego-sdk..."
+	@echo "=> Opening bash in TypeGo SDK..."
 	@docker exec -it $(CONTAINER_NAME) bash
 
 docker_build:
-	@echo "=> Building typego-sdk..."
+	@echo "=> Building TypeGo SDK..."
 	@make docker_stop
 	@make docker_remove
 	@echo -n "=>"
 	docker build -t $(IMAGE) -f $(DOCKERFILE) .
 	@echo -n "=>"
 	@make docker_start
+
+rviz:
+	@{ \
+		echo "→ Loading $(ENV_FILE)"; \
+		set -a; source $(ENV_FILE); set +a; \
+		ros2 run rviz2 rviz2 --ros-args -r /tf:=/robot$${ROBOT_ID}/tf -r /tf_static:=/robot$${ROBOT_ID}/tf_static -r /goal_pose:=/robot$${ROBOT_ID}/goal_pose; \
+	}
 
 save_map:
 	@echo "=> Saving map..."
