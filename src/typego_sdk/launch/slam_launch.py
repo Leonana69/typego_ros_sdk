@@ -5,6 +5,7 @@ from launch_ros.substitutions import FindPackageShare
 from launch.substitutions import LaunchConfiguration
 from launch.conditions import IfCondition, UnlessCondition
 import os
+import json
 
 
 def generate_launch_description():
@@ -49,6 +50,7 @@ def generate_launch_description():
         slam_params_path = os.path.join(pkg_dir, "config", slam_yaml)
         rviz_config_path = os.path.join(pkg_dir, "config", "slam.rviz")
         map_file_path = os.path.join(pkg_dir, f"resource/Map-{existing_map}/{existing_map}")
+        init_pose_path = os.path.join(pkg_dir, f"resource/Map-{existing_map}/init_pose.json")
 
         # ------------------------------------------------------------
         # 🔥 FRAME IDs MUST MATCH WHAT OTHER NODES PUBLISH
@@ -71,9 +73,26 @@ def generate_launch_description():
             "scan_topic": scan_topic,
         }
 
+        # Read initial pose from init_pose.json if it exists
+        map_start_pose = [0.0, 0.0, 0.0]  # Default values
+        if os.path.exists(init_pose_path):
+            try:
+                with open(init_pose_path, 'r') as f:
+                    init_pose_data = json.load(f)
+                    map_start_pose = [
+                        init_pose_data.get("x", 0.0),
+                        init_pose_data.get("y", 0.0),
+                        init_pose_data.get("yaw", 0.0)
+                    ]
+                print(f"📍 Loaded initial pose from {init_pose_path}: {map_start_pose}")
+            except (json.JSONDecodeError, KeyError) as e:
+                print(f"⚠️  Failed to parse {init_pose_path}: {e}. Using default pose.")
+        else:
+            print(f"⚠️  {init_pose_path} not found. Using default pose: {map_start_pose}")
+
         map_params = {
             "map_file_name": map_file_path,
-            "map_start_pose": [0.0, 0.5, 3.14]
+            "map_start_pose": map_start_pose
         }
 
         nodes = []

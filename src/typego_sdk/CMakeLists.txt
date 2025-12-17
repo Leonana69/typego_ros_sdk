@@ -57,9 +57,32 @@ if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" AND CMAKE_CXX_COMPILER_VERSION VERSION_L
   target_link_libraries(waypoints_service_node PUBLIC stdc++fs)
 endif()
 
+# ----------- get_position_node -----------
+add_executable(get_position_node src/get_position.cpp)
+set_target_properties(get_position_node PROPERTIES
+  CXX_STANDARD 17
+  CXX_STANDARD_REQUIRED ON
+)
+ament_target_dependencies(get_position_node PUBLIC
+  rclcpp
+  geometry_msgs
+  tf2_ros
+)
+target_link_libraries(get_position_node PUBLIC
+  ${geometry_msgs_TARGETS}
+  rclcpp::rclcpp
+  tf2::tf2
+  tf2_ros::tf2_ros
+)
+# Link filesystem library if needed (for GCC < 9)
+if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" AND CMAKE_CXX_COMPILER_VERSION VERSION_LESS "9.0")
+  target_link_libraries(get_position_node PUBLIC stdc++fs)
+endif()
+
 # ----------- install targets -----------
 install(TARGETS
   waypoints_service_node
+  get_position_node
   DESTINATION lib/${PROJECT_NAME})
 
 install(DIRECTORY launch DESTINATION share/${PROJECT_NAME}/)
