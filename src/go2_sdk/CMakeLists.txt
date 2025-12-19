@@ -86,11 +86,25 @@ target_link_libraries(video_service_node PUBLIC
   ${OpenCV_LIBS}
 )
 
+# ----------- cmd_vel_controller_node -----------
+add_executable(cmd_vel_controller_node src/cmd_vel_controller.cpp)
+ament_target_dependencies(cmd_vel_controller_node PUBLIC
+  rclcpp
+  geometry_msgs
+  typego_sdk
+)
+target_link_libraries(cmd_vel_controller_node PUBLIC
+  ${geometry_msgs_TARGETS}
+  rclcpp::rclcpp
+  ${CURL_LIBRARIES}
+)
+
 # ----------- install targets -----------
 install(TARGETS
   lidar_service_node
   video_service_node
   tf_service_node
+  cmd_vel_controller_node
   DESTINATION lib/${PROJECT_NAME})
 
 # install(DIRECTORY include/ DESTINATION include/)

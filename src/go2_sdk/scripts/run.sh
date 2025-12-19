@@ -16,3 +16,4 @@ ros2 run go2_sdk tf_service_node \
 ros2 run go2_sdk lidar_service_node \
     --ros-args -r /tf:=${ROBOT_NS}/tf -r /tf_static:=${ROBOT_NS}/tf_static &
 ros2 run go2_sdk video_service_node &
+ros2 run go2_sdk cmd_vel_controller_node &

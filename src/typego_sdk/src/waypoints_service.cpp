@@ -1,6 +1,5 @@
 #include <rclcpp/rclcpp.hpp>
 #include <geometry_msgs/msg/pose_stamped.hpp>
-#include <geometry_msgs/msg/twist.hpp>
 #include <visualization_msgs/msg/marker_array.hpp>
 #include <nav_msgs/msg/occupancy_grid.hpp>
 #include <tf2_ros/transform_listener.h>
@@ -94,8 +93,6 @@ public:
             "camera/color/image_raw",
             rclcpp::QoS(10).reliability(rclcpp::ReliabilityPolicy::BestEffort),
             std::bind(&AdaptiveWaypointNode::image_callback, this, std::placeholders::_1));
-        cmd_vel_sub_ = this->create_subscription<geometry_msgs::msg::Twist>(
-            "cmd_vel", 10, std::bind(&AdaptiveWaypointNode::cmd_vel_callback, this, std::placeholders::_1));
         timer_ = this->create_wall_timer(std::chrono::milliseconds(100), std::bind(&AdaptiveWaypointNode::on_timer, this));
 
         waypoint_pub_ = this->create_publisher<typego_interface::msg::WayPointArray>("waypoints", 10);
@@ -123,15 +120,6 @@ public:
         } else {
             RCLCPP_INFO(this->get_logger(), "Using EDGE_SERVICE_IP: %s", edge_service_ip_.c_str());
         }
-
-        // Get robot URL from environment variable or use default
-        const char* robot_url = std::getenv("ROBOT_URL");
-        robot_url_ = robot_url ? std::string(robot_url) : "http://192.168.0.243:18080";
-        RCLCPP_INFO(this->get_logger(), "Using ROBOT_URL: %s", robot_url_.c_str());
-
-        // Accept cmd_vel parameter (default: true)
-        this->declare_parameter("accept_cmd_vel", true);
-        accept_cmd_vel_ = this->get_parameter("accept_cmd_vel").as_bool();
     }
 
 private:
@@ -139,7 +127,6 @@ private:
     tf2_ros::TransformListener tf_listener_;
     rclcpp::Subscription<nav_msgs::msg::OccupancyGrid>::SharedPtr map_sub_;
     rclcpp::Subscription<sensor_msgs::msg::Image>::SharedPtr image_sub_;
-    rclcpp::Subscription<geometry_msgs::msg::Twist>::SharedPtr cmd_vel_sub_;
     rclcpp::Publisher<typego_interface::msg::WayPointArray>::SharedPtr waypoint_pub_;
     rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr waypoint_marker_pub_;
     rclcpp::TimerBase::SharedPtr timer_;
@@ -149,8 +136,6 @@ private:
     std::string waypoint_file_;
     std::string edge_service_ip_;
     std::string edge_service_port_;
-    std::string robot_url_;
-    bool accept_cmd_vel_;
     const double threshold_distance_meters_ = 3.0;
     std::mutex image_mutex_;
 
@@ -210,78 +195,6 @@ private:
     void image_callback(sensor_msgs::msg::Image::SharedPtr msg) {
         std::lock_guard<std::mutex> lock(image_mutex_);
         latest_image_ = msg;
-    }
-
-    void cmd_vel_callback(geometry_msgs::msg::Twist::SharedPtr msg) {
-        const double max_speed_ = 0.8;
-        const double max_angular_speed_ = 1.0;
-        const double min_angular_speed_ = 0.2;
-        if (!accept_cmd_vel_) {
-            return;
-        }
-
-        // Ignore zero velocity commands
-        if (msg->linear.x == 0.0 && msg->linear.y == 0.0 && msg->angular.z == 0.0) {
-            return;
-        }
-
-        // Limit the velocity to the maximum speed
-        msg->linear.x  = std::clamp(msg->linear.x, -max_speed_, max_speed_);
-        msg->linear.y  = std::clamp(msg->linear.y, -max_speed_, max_speed_);
-        msg->angular.z = std::clamp(msg->angular.z, -max_angular_speed_, max_angular_speed_);
-
-        if (msg->angular.z > 0.0 && msg->angular.z < min_angular_speed_) {
-            msg->angular.z = min_angular_speed_;
-        } else if (msg->angular.z < 0.0 && msg->angular.z > -min_angular_speed_) {
-            msg->angular.z = -min_angular_speed_;
-        }
-
-        // Prepare JSON control command
-        nlohmann::json control = {
-            {"command", "nav"},
-            {"vx", msg->linear.x},
-            {"vy", msg->linear.y},
-            {"vyaw", msg->angular.z}
-        };
-
-        // Send request asynchronously to avoid blocking
-        std::thread([this, control]() {
-            send_control_request(control);
-        }).detach();
-    }
-
-    void send_control_request(const nlohmann::json& control) {
-        CURL *curl = curl_easy_init();
-        if (curl) {
-            std::string url = robot_url_ + "/control";
-            std::string json_str = control.dump();
-
-            curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
-            curl_easy_setopt(curl, CURLOPT_POSTFIELDS, json_str.c_str());
-
-            // Set headers
-            struct curl_slist *headers = nullptr;
-            headers = curl_slist_append(headers, "Content-Type: application/json");
-            curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
-
-            // Set timeout
-            curl_easy_setopt(curl, CURLOPT_TIMEOUT_MS, 500L);
-
-            // Response handling (optional, can be discarded)
-            std::string response_string;
-            curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, WriteCallback);
-            curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response_string);
-
-            // Perform the request
-            CURLcode res = curl_easy_perform(curl);
-            if (res != CURLE_OK) {
-                RCLCPP_WARN(this->get_logger(), "Failed to send control command: %s", curl_easy_strerror(res));
-            }
-
-            // Cleanup
-            curl_slist_free_all(headers);
-            curl_easy_cleanup(curl);
-        }
     }
 
     void on_timer() {
