@@ -47,7 +47,7 @@ private:
         // Convert PointCloud2 to LaserScan
         sensor_msgs::msg::LaserScan scan_msg;
         scan_msg.header.stamp = msg->header.stamp;
-        scan_msg.header.frame_id = msg->header.frame_id;
+        scan_msg.header.frame_id = "lidar_link";
         
         // LaserScan parameters
         scan_msg.angle_min = -M_PI;
