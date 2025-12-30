@@ -1,4 +1,5 @@
-SHELL := /bin/zsh
+DETECTED_SHELL := $(or $(shell echo $$SHELL),/bin/bash)
+SHELL := $(DETECTED_SHELL)
 
 DOCKERFILE = ./docker/Dockerfile
 IMAGE = typego-sdk:0.1
@@ -7,8 +8,6 @@ CONTAINER_NAME = typego-sdk
 # --- Default environment setup ---
 ENV_FILE := ./docker/.env
 -include $(ENV_FILE)
-
-SETUP_FILE := ./install/setup.zsh  # can also be setup.bash if preferred
 
 .PHONY: docker_stop docker_start docker_remove docker_open docker_build build
 
