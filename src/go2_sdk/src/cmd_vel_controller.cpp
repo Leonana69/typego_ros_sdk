@@ -18,10 +18,10 @@ class CmdVelControllerNode : public rclcpp::Node {
 public:
     CmdVelControllerNode() : Node("cmd_vel_controller", typego_sdk::get_namespace_from_env()) {
         // Get robot URL from environment variable or use default
-        const char* go2_ip = std::getenv("ROBOT_IP");
-        std::string go2_ip_ = go2_ip ? std::string(go2_ip) : "192.168.0.243";
-        robot_url_ = "http://" + go2_ip_ + ":18080";
-        RCLCPP_INFO(this->get_logger(), "Go2 IP: %s", go2_ip_.c_str());
+        const char* robot_ip = std::getenv("ROBOT_IP");
+        std::string robot_ip_ = robot_ip ? std::string(robot_ip) : "192.168.0.243";
+        robot_url_ = "http://" + robot_ip_ + ":18080";
+        RCLCPP_INFO(this->get_logger(), "Go2 IP: %s", robot_ip_.c_str());
 
         // Accept cmd_vel parameter (default: true)
         this->declare_parameter("accept_cmd_vel", true);
