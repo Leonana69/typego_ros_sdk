@@ -34,7 +34,7 @@ if(BUILD_TESTING)
 endif()
 
 # ----------- lidar_service_node -----------
-add_executable(lidar_service_node src/lidar_service.cpp)
+add_executable(lidar_service_node src/lidar_client.cpp)
 ament_target_dependencies(lidar_service_node PUBLIC
   rclcpp
   sensor_msgs

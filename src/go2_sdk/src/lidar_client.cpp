@@ -17,9 +17,9 @@
 #include "tf2_ros/static_transform_broadcaster.h"
 #include "typego_sdk/namespace_utils.hpp"
 
-class LidarServiceNode : public rclcpp::Node {
+class LidarClientNode : public rclcpp::Node {
 public:
-    LidarServiceNode() : Node("lidar_service", typego_sdk::get_namespace_from_env()) {
+    LidarClientNode() : Node("lidar_service", typego_sdk::get_namespace_from_env()) {
         publisher_ = this->create_publisher<sensor_msgs::msg::PointCloud2>("livox_points", 10);
         laserscan_publisher_ = this->create_publisher<sensor_msgs::msg::LaserScan>("scan", 10);
 
@@ -57,12 +57,12 @@ public:
         // Poll socket at ~1kHz
         recv_timer_ = this->create_wall_timer(
             std::chrono::milliseconds(1),
-            std::bind(&LidarServiceNode::poll_socket, this));
+            std::bind(&LidarClientNode::poll_socket, this));
 
         // Aggregate publish at 10Hz
         pub_timer_ = this->create_wall_timer(
             std::chrono::milliseconds(100),
-            std::bind(&LidarServiceNode::publish_aggregated_cloud, this));
+            std::bind(&LidarClientNode::publish_aggregated_cloud, this));
 
         // Prepare PointCloud2 fields once
         for (auto&& [name, offset] : {std::pair{"x",0}, {"y",4}, {"z",8}}) {
@@ -75,7 +75,7 @@ public:
         }
     }
 
-    ~LidarServiceNode() {
+    ~LidarClientNode() {
         close(socket_);
     }
 
@@ -180,7 +180,7 @@ private:
 
 int main(int argc, char** argv) {
     rclcpp::init(argc, argv);
-    rclcpp::spin(std::make_shared<LidarServiceNode>());
+    rclcpp::spin(std::make_shared<LidarClientNode>());
     rclcpp::shutdown();
     return 0;
 }

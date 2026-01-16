@@ -33,15 +33,31 @@ if(BUILD_TESTING)
   ament_lint_auto_find_test_dependencies()
 endif()
 
-# ----------- lidar_service_node -----------
-add_executable(lidar_service_node src/lidar_service.cpp)
-ament_target_dependencies(lidar_service_node PUBLIC
+# ----------- lidar_client_node -----------
+add_executable(lidar_client_node src/lidar_client.cpp)
+ament_target_dependencies(lidar_client_node PUBLIC
   rclcpp
   sensor_msgs
   tf2_ros
   typego_sdk
 )
-target_link_libraries(lidar_service_node PUBLIC
+target_link_libraries(lidar_client_node PUBLIC
+  ${sensor_msgs_TARGETS}
+  rclcpp::rclcpp
+  sensor_msgs::sensor_msgs_library
+  tf2_ros::static_transform_broadcaster_node
+  tf2_ros::tf2_ros
+)
+
+# ----------- lidar_full_client_node -----------
+add_executable(lidar_full_client_node src/lidar_full_client.cpp)
+ament_target_dependencies(lidar_full_client_node PUBLIC
+  rclcpp
+  sensor_msgs
+  tf2_ros
+  typego_sdk
+)
+target_link_libraries(lidar_full_client_node PUBLIC
   ${sensor_msgs_TARGETS}
   rclcpp::rclcpp
   sensor_msgs::sensor_msgs_library
@@ -101,7 +117,8 @@ target_link_libraries(cmd_vel_controller_node PUBLIC
 
 # ----------- install targets -----------
 install(TARGETS
-  lidar_service_node
+  lidar_client_node
+  lidar_full_client_node
   video_service_node
   tf_service_node
   cmd_vel_controller_node

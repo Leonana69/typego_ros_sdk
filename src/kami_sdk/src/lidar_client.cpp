@@ -10,13 +10,13 @@
 
 #include "typego_sdk/namespace_utils.hpp"
 
-class LidarServiceNode : public rclcpp::Node {
+class LidarClientNode : public rclcpp::Node {
 public:
-    LidarServiceNode() : Node("lidar_service", typego_sdk::get_namespace_from_env()) {
+    LidarClientNode() : Node("lidar_client", typego_sdk::get_namespace_from_env()) {
         // Subscribe to /livox/lidar topic
         pointcloud_sub_ = this->create_subscription<sensor_msgs::msg::PointCloud2>(
             "/livox/lidar", 10,
-            std::bind(&LidarServiceNode::pointcloud_callback, this, std::placeholders::_1));
+            std::bind(&LidarClientNode::pointcloud_callback, this, std::placeholders::_1));
         
         // Publish LaserScan
         laserscan_publisher_ = this->create_publisher<sensor_msgs::msg::LaserScan>("scan", 10);
@@ -24,7 +24,7 @@ public:
         init_lidar_link();
 
         RCLCPP_INFO(this->get_logger(), 
-                    "Lidar Service initialized: subscribing to /livox/lidar, publishing to scan");
+                    "Lidar Client initialized: subscribing to /livox/lidar, publishing to scan");
     }
 
 private:
@@ -115,7 +115,7 @@ private:
 
 int main(int argc, char** argv) {
     rclcpp::init(argc, argv);
-    rclcpp::spin(std::make_shared<LidarServiceNode>());
+    rclcpp::spin(std::make_shared<LidarClientNode>());
     rclcpp::shutdown();
     return 0;
 }
