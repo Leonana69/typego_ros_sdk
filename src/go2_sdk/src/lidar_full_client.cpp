@@ -48,10 +48,32 @@ constexpr size_t OPTIMIZED_POINT_SIZE = sizeof(OptimizedPoint);  // 6 bytes
 class LidarFullClientNode : public rclcpp::Node {
 public:
     LidarFullClientNode() : Node("lidar_full_client", typego_sdk::get_namespace_from_env()) {
+        // Declare parameters
+        this->declare_parameter<double>("publish_rate", 10.0);  // Hz
+        this->declare_parameter<int>("scan_timeout_ms", 200);   // milliseconds
+        
+        // Get parameters
+        double publish_rate = this->get_parameter("publish_rate").as_double();
+        scan_timeout_ms_ = this->get_parameter("scan_timeout_ms").as_int();
+        
+        // Validate parameters
+        if (publish_rate <= 0.0) {
+            RCLCPP_WARN(this->get_logger(), "Invalid publish_rate %f, using default 10.0 Hz", publish_rate);
+            publish_rate = 10.0;
+        }
+        if (scan_timeout_ms_ <= 0) {
+            RCLCPP_WARN(this->get_logger(), "Invalid scan_timeout_ms %d, using default 200 ms", scan_timeout_ms_);
+            scan_timeout_ms_ = 200;
+        }
+        
+        int publish_period_ms = static_cast<int>(1000.0 / publish_rate);
+        RCLCPP_INFO(this->get_logger(), "Publish rate: %.1f Hz (period: %d ms), Scan timeout: %d ms", 
+                   publish_rate, publish_period_ms, scan_timeout_ms_);
+        
         publisher_ = this->create_publisher<sensor_msgs::msg::PointCloud2>("livox_points", 10);
         laserscan_publisher_ = this->create_publisher<sensor_msgs::msg::LaserScan>("scan", 10);
 
-        init_lidar_link();
+        init_lidar_link_tf();
 
         const char* go2_ip = std::getenv("ROBOT_IP");
         std::string go2_ip_ = go2_ip ? std::string(go2_ip) : "192.168.0.243";
@@ -96,14 +118,10 @@ public:
             std::chrono::milliseconds(1),
             std::bind(&LidarFullClientNode::poll_socket, this));
 
-        // Publish aggregated cloud at 10Hz (fallback if no scan boundary detected)
+        // Publish aggregated cloud at configured rate (fallback if no scan boundary detected)
         pub_timer_ = this->create_wall_timer(
-            std::chrono::milliseconds(100),
+            std::chrono::milliseconds(publish_period_ms),
             std::bind(&LidarFullClientNode::publish_aggregated_cloud, this));
-        
-        // Scan boundary detection: if no packets arrive for 200ms, consider scan complete
-        // This helps separate different lidar scans and prevent z-axis drift
-        scan_timeout_ms_ = 200;
 
         // Prepare PointCloud2 fields
         sensor_msgs::msg::PointField f;
@@ -125,7 +143,7 @@ public:
     }
 
 private:
-    void init_lidar_link() {
+    void init_lidar_link_tf() {
         static_tf_broadcaster_ = std::make_unique<tf2_ros::StaticTransformBroadcaster>(this);
 
         geometry_msgs::msg::TransformStamped t;

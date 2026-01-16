@@ -21,14 +21,14 @@ public:
         // Publish LaserScan
         laserscan_publisher_ = this->create_publisher<sensor_msgs::msg::LaserScan>("scan", 10);
 
-        init_lidar_link();
+        init_lidar_link_tf();
 
         RCLCPP_INFO(this->get_logger(), 
                     "Lidar Client initialized: subscribing to /livox/lidar, publishing to scan");
     }
 
 private:
-    void init_lidar_link() {
+    void init_lidar_link_tf() {
         static_tf_broadcaster_ = std::make_unique<tf2_ros::StaticTransformBroadcaster>(this);
 
         geometry_msgs::msg::TransformStamped t;

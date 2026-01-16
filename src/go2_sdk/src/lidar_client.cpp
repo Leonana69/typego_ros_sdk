@@ -23,7 +23,7 @@ public:
         publisher_ = this->create_publisher<sensor_msgs::msg::PointCloud2>("livox_points", 10);
         laserscan_publisher_ = this->create_publisher<sensor_msgs::msg::LaserScan>("scan", 10);
 
-        init_lidar_link();
+        init_lidar_link_tf();
 
         const char* go2_ip = std::getenv("ROBOT_IP");
         std::string go2_ip_ = go2_ip ? std::string(go2_ip) : "192.168.0.243";
@@ -80,7 +80,7 @@ public:
     }
 
 private:
-    void init_lidar_link() {
+    void init_lidar_link_tf() {
         static_tf_broadcaster_ = std::make_unique<tf2_ros::StaticTransformBroadcaster>(this);
 
         geometry_msgs::msg::TransformStamped t;
