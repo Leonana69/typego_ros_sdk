@@ -1,6 +1,7 @@
 #include "rclcpp/rclcpp.hpp"
 #include "sensor_msgs/msg/point_cloud2.hpp"
 #include "sensor_msgs/msg/laser_scan.hpp"
+#include "sensor_msgs/msg/imu.hpp"
 #include "geometry_msgs/msg/transform_stamped.hpp"
 #include "tf2_ros/transform_broadcaster.h"
 #include <netinet/in.h>
@@ -10,6 +11,7 @@
 #include <mutex>
 #include <thread>
 #include <atomic>
+#include <chrono>
 #include <cmath>
 #include <arpa/inet.h>
 #include <fcntl.h>
@@ -43,7 +45,36 @@ struct PointCloudPacketHeader {
 };
 #pragma pack(pop)
 
+// IMU data structure (packed for network transmission)
+#pragma pack(push, 1)
+struct ImuData {
+    float acc_x;
+    float acc_y;
+    float acc_z;
+    float gyro_x;
+    float gyro_y;
+    float gyro_z;
+};
+#pragma pack(pop)
+
+// Packet header structure for IMU data transmission
+#pragma pack(push, 1)
+struct ImuPacketHeader {
+    uint16_t sequence_id;
+    uint32_t timestamp_sec;
+    uint32_t timestamp_nsec;
+    uint32_t handle;
+    uint8_t dev_type;
+    uint8_t data_type;  // Will contain IMU data type from Livox SDK
+    uint16_t imu_count;  // Number of IMU samples in this packet
+    // ImuData[] follows immediately after header
+};
+#pragma pack(pop)
+
 constexpr size_t OPTIMIZED_POINT_SIZE = sizeof(OptimizedPoint);  // 6 bytes
+constexpr size_t IMU_DATA_SIZE = sizeof(ImuData);  // 24 bytes
+constexpr size_t IMU_PACKET_HEADER_SIZE = sizeof(ImuPacketHeader);  // 18 bytes
+constexpr size_t IMU_PACKET_SIZE_SINGLE = IMU_PACKET_HEADER_SIZE + IMU_DATA_SIZE;  // 42 bytes for 1 IMU sample
 
 class LidarFullClientNode : public rclcpp::Node {
 public:
@@ -70,8 +101,9 @@ public:
         RCLCPP_INFO(this->get_logger(), "Publish rate: %.1f Hz (period: %d ms), Scan timeout: %d ms", 
                    publish_rate, publish_period_ms, scan_timeout_ms_);
         
-        publisher_ = this->create_publisher<sensor_msgs::msg::PointCloud2>("livox_points", 10);
+        publisher_ = this->create_publisher<sensor_msgs::msg::PointCloud2>("livox/lidar", 10);
         laserscan_publisher_ = this->create_publisher<sensor_msgs::msg::LaserScan>("scan", 10);
+        imu_publisher_ = this->create_publisher<sensor_msgs::msg::Imu>("livox/imu", 10);
 
         init_lidar_link_tf();
 
@@ -113,17 +145,17 @@ public:
         sendto(socket_, init_packet, sizeof(init_packet), 0, 
             (sockaddr*)&server_addr, sizeof(server_addr));
 
-        // Poll socket at ~1kHz
-        recv_timer_ = this->create_wall_timer(
-            std::chrono::milliseconds(1),
-            std::bind(&LidarFullClientNode::poll_socket, this));
+        // Start dedicated receive thread for high-frequency UDP reception (2000+ Hz)
+        // This is more efficient than timer-based polling and won't miss packets
+        recv_thread_running_ = true;
+        recv_thread_ = std::thread(&LidarFullClientNode::receive_thread_func, this);
 
         // Publish aggregated cloud at configured rate (fallback if no scan boundary detected)
         pub_timer_ = this->create_wall_timer(
             std::chrono::milliseconds(publish_period_ms),
             std::bind(&LidarFullClientNode::publish_aggregated_cloud, this));
 
-        // Prepare PointCloud2 fields
+        // Prepare PointCloud2 fields (x, y, z, intensity)
         sensor_msgs::msg::PointField f;
         f.name = "x";
         f.offset = 0;
@@ -136,9 +168,17 @@ public:
         f.name = "z";
         f.offset = 8;
         fields_.push_back(f);
+        f.name = "intensity";
+        f.offset = 12;
+        fields_.push_back(f);
     }
 
     ~LidarFullClientNode() {
+        // Stop receive thread
+        recv_thread_running_ = false;
+        if (recv_thread_.joinable()) {
+            recv_thread_.join();
+        }
         close(socket_);
     }
 
@@ -158,17 +198,95 @@ private:
         static_tf_broadcaster_->sendTransform(t);
     }
 
-    void poll_socket() {
+    void receive_thread_func() {
+        // Dedicated thread for high-frequency UDP packet reception
+        // Runs in a tight loop to handle 2000+ Hz packet rates without missing packets
         constexpr size_t MAX_UDP_PAYLOAD = 1472;
         std::vector<uint8_t> buffer(MAX_UDP_PAYLOAD);
         
-        ssize_t rlen = recvfrom(socket_, buffer.data(), buffer.size(), 0, nullptr, nullptr);
+        while (recv_thread_running_) {
+            ssize_t rlen = recvfrom(socket_, buffer.data(), buffer.size(), 0, nullptr, nullptr);
+            if (rlen < static_cast<ssize_t>(IMU_PACKET_HEADER_SIZE)) {
+                // No data available (non-blocking socket) or error
+                // Small sleep to prevent CPU spinning when no packets arrive
+                std::this_thread::sleep_for(std::chrono::microseconds(10));
+                continue;
+            }
+            
+            // Process the received packet (check if it's IMU or point cloud)
+            if (rlen == static_cast<ssize_t>(IMU_PACKET_SIZE_SINGLE)) {
+                // Likely an IMU packet (single IMU sample)
+                process_imu_packet(buffer.data(), rlen);
+            } else {
+                // Likely a point cloud packet
+                process_packet(buffer.data(), rlen);
+            }
+        }
+    }
+    
+    void process_imu_packet(const uint8_t* buffer_data, ssize_t rlen) {
+        if (rlen < static_cast<ssize_t>(IMU_PACKET_HEADER_SIZE)) {
+            return;
+        }
+
+        // Parse IMU packet header
+        const ImuPacketHeader* header = reinterpret_cast<const ImuPacketHeader*>(buffer_data);
+        uint16_t imu_count = ntohs(header->imu_count);
+        
+        // Verify packet integrity
+        if (imu_count == 0) {
+            return;
+        }
+        
+        size_t expected_packet_size = IMU_PACKET_HEADER_SIZE + (imu_count * IMU_DATA_SIZE);
+        if (rlen < static_cast<ssize_t>(expected_packet_size)) {
+            RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 1000,
+                                "Incomplete IMU packet: received %zd bytes, expected %zu (imu_count: %u)", 
+                                rlen, expected_packet_size, imu_count);
+            return;
+        }
+        
+        // Extract IMU data (only use first sample as user specified)
+        const ImuData* imu_data = reinterpret_cast<const ImuData*>(buffer_data + IMU_PACKET_HEADER_SIZE);
+        
+        // Create and publish IMU message
+        sensor_msgs::msg::Imu imu_msg;
+        imu_msg.header.stamp = this->now();
+        imu_msg.header.frame_id = "lidar_link";
+        
+        // Linear acceleration (m/s²)
+        imu_msg.linear_acceleration.x = imu_data[0].acc_x;
+        imu_msg.linear_acceleration.y = imu_data[0].acc_y;
+        imu_msg.linear_acceleration.z = imu_data[0].acc_z;
+        
+        // Angular velocity (rad/s)
+        imu_msg.angular_velocity.x = imu_data[0].gyro_x;
+        imu_msg.angular_velocity.y = imu_data[0].gyro_y;
+        imu_msg.angular_velocity.z = imu_data[0].gyro_z;
+        
+        // Orientation is not provided, so we'll leave it uninitialized (ROS will treat as unknown)
+        // Set covariance matrices to indicate unknown orientation
+        imu_msg.orientation_covariance[0] = -1.0;  // -1 indicates unknown
+        
+        // Set reasonable covariance values for acceleration and angular velocity
+        imu_msg.linear_acceleration_covariance[0] = 0.01;
+        imu_msg.linear_acceleration_covariance[4] = 0.01;
+        imu_msg.linear_acceleration_covariance[8] = 0.01;
+        
+        imu_msg.angular_velocity_covariance[0] = 0.0001;
+        imu_msg.angular_velocity_covariance[4] = 0.0001;
+        imu_msg.angular_velocity_covariance[8] = 0.0001;
+        
+        imu_publisher_->publish(imu_msg);
+    }
+    
+    void process_packet(const uint8_t* buffer_data, ssize_t rlen) {
         if (rlen < static_cast<ssize_t>(sizeof(PointCloudPacketHeader))) {
             return;
         }
 
         // Parse packet header
-        PointCloudPacketHeader* header = reinterpret_cast<PointCloudPacketHeader*>(buffer.data());
+        const PointCloudPacketHeader* header = reinterpret_cast<const PointCloudPacketHeader*>(buffer_data);
         uint16_t seq_id = ntohs(header->sequence_id);
         uint16_t point_count = ntohs(header->point_count);
         uint32_t timestamp_sec = ntohl(header->timestamp_sec);
@@ -197,7 +315,7 @@ private:
 
         // Extract optimized points from raw buffer
         // Points are int16_t values in millimeters, need to convert to meters (floats)
-        const OptimizedPoint* opt_points = reinterpret_cast<const OptimizedPoint*>(buffer.data() + header_size);
+        const OptimizedPoint* opt_points = reinterpret_cast<const OptimizedPoint*>(buffer_data + header_size);
         
         bool scan_boundary_detected = false;
         {
@@ -275,7 +393,7 @@ private:
         // Use ROS time for stable timestamps (more reliable than packet timestamps)
         rclcpp::Time timestamp = this->now();
 
-        // Publish full point cloud
+        // Publish full point cloud with intensity (for color visualization in RViz2)
         sensor_msgs::msg::PointCloud2 cloud_msg;
         cloud_msg.header.stamp = timestamp;
         cloud_msg.header.frame_id = "lidar_link";
@@ -283,11 +401,29 @@ private:
         cloud_msg.width = num_points;
         cloud_msg.is_dense = true;
         cloud_msg.is_bigendian = false;
-        cloud_msg.point_step = 12;  // 3 floats * 4 bytes
-        cloud_msg.row_step = 12 * num_points;
+        cloud_msg.point_step = 16;  // 4 floats * 4 bytes (x, y, z, intensity)
+        cloud_msg.row_step = 16 * num_points;
         cloud_msg.fields = fields_;
-        cloud_msg.data.resize(local_buffer.size() * sizeof(float));
-        memcpy(cloud_msg.data.data(), local_buffer.data(), cloud_msg.data.size());
+        
+        // Create point cloud data with intensity computed from distance
+        cloud_msg.data.resize(num_points * cloud_msg.point_step);
+        for (size_t i = 0; i < num_points; ++i) {
+            float x = local_buffer[3 * i];
+            float y = local_buffer[3 * i + 1];
+            float z = local_buffer[3 * i + 2];
+            
+            // Compute intensity from distance (normalized to 0-1 range, max at 20m)
+            float distance = std::sqrt(x * x + y * y + z * z);
+            float intensity = std::min(distance / 20.0f, 1.0f);  // Normalize to 0-1, max at 20m
+            
+            // Write point data (x, y, z, intensity)
+            float* point_data = reinterpret_cast<float*>(cloud_msg.data.data() + i * cloud_msg.point_step);
+            point_data[0] = x;
+            point_data[1] = y;
+            point_data[2] = z;
+            point_data[3] = intensity;
+        }
+        
         publisher_->publish(cloud_msg);
 
         // Publish filtered laser scan (2D projection)
@@ -331,13 +467,15 @@ private:
     }
 
     int socket_;
-    rclcpp::TimerBase::SharedPtr recv_timer_;
+    std::thread recv_thread_;
+    std::atomic<bool> recv_thread_running_{false};
     rclcpp::TimerBase::SharedPtr pub_timer_;
     std::mutex buffer_mutex_;
     std::vector<float> point_buffer_;
     std::vector<sensor_msgs::msg::PointField> fields_;
     rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr publisher_;
     rclcpp::Publisher<sensor_msgs::msg::LaserScan>::SharedPtr laserscan_publisher_;
+    rclcpp::Publisher<sensor_msgs::msg::Imu>::SharedPtr imu_publisher_;
     std::unique_ptr<tf2_ros::StaticTransformBroadcaster> static_tf_broadcaster_;
     
     // Packet sequence tracking
