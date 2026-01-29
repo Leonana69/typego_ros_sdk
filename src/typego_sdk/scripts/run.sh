@@ -18,11 +18,8 @@ echo "🤖 Using robot namespace: ${ROBOT_NS:-<none>}, SLAM map name: ${SLAM_MAP
 # Start the IOX router
 iox-roudi &
 
-# Run the script in $(ROBOT_TYPE)_sdk/scripts/run.sh
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-WORKSPACE_SRC="$(cd "$SCRIPT_DIR/../.." && pwd)"
-chmod +x "${WORKSPACE_SRC}/${ROBOT_TYPE}_sdk/scripts/run.sh"
-"${WORKSPACE_SRC}/${ROBOT_TYPE}_sdk/scripts/run.sh"
+# Launch the robot-specific SDK using ros2 launch
+ros2 launch ${ROBOT_TYPE}_sdk ${ROBOT_TYPE}_sdk.launch.py &
 
 # Launch SLAM with robot namespace (works with empty string too)
 if [ -n "$ROBOT_NS" ]; then
