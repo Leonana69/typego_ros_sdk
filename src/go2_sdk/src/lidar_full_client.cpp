@@ -21,6 +21,8 @@
 
 #include "tf2_ros/static_transform_broadcaster.h"
 #include "typego_sdk/namespace_utils.hpp"
+#include "livox_ros_driver2/msg/custom_msg.hpp"
+#include "livox_ros_driver2/msg/custom_point.hpp"
 
 // Optimized point structure (xyz only, int16 in millimeters)
 #pragma pack(push, 1)
@@ -82,10 +84,12 @@ public:
         // Declare parameters
         this->declare_parameter<double>("publish_rate", 10.0);  // Hz
         this->declare_parameter<int>("scan_timeout_ms", 200);   // milliseconds
+        this->declare_parameter<std::string>("xfer_format", "PointCloud2");  // "PointCloud2" or "CustomMsg"
         
         // Get parameters
         double publish_rate = this->get_parameter("publish_rate").as_double();
         scan_timeout_ms_ = this->get_parameter("scan_timeout_ms").as_int();
+        std::string xfer_format = this->get_parameter("xfer_format").as_string();
         
         // Validate parameters
         if (publish_rate <= 0.0) {
@@ -97,11 +101,25 @@ public:
             scan_timeout_ms_ = 200;
         }
         
+        // Set transfer format
+        if (xfer_format == "CustomMsg") {
+            use_custom_msg_ = true;
+            RCLCPP_INFO(this->get_logger(), "Using Livox CustomMsg format");
+        } else {
+            use_custom_msg_ = false;
+            RCLCPP_INFO(this->get_logger(), "Using PointCloud2 format");
+        }
+        
         int publish_period_ms = static_cast<int>(1000.0 / publish_rate);
         RCLCPP_INFO(this->get_logger(), "Publish rate: %.1f Hz (period: %d ms), Scan timeout: %d ms", 
                    publish_rate, publish_period_ms, scan_timeout_ms_);
         
-        publisher_ = this->create_publisher<sensor_msgs::msg::PointCloud2>("livox/lidar", 10);
+        // Create publishers based on format
+        if (use_custom_msg_) {
+            custom_publisher_ = this->create_publisher<livox_ros_driver2::msg::CustomMsg>("livox/lidar", 10);
+        } else {
+            publisher_ = this->create_publisher<sensor_msgs::msg::PointCloud2>("livox/lidar", 10);
+        }
         laserscan_publisher_ = this->create_publisher<sensor_msgs::msg::LaserScan>("scan", 10);
         imu_publisher_ = this->create_publisher<sensor_msgs::msg::Imu>("livox/imu", 10);
 
@@ -338,13 +356,42 @@ private:
             current_sequence_id_ = seq_id;
             last_packet_time_ = this->now();
             
+            // Store packet timestamp for CustomMsg
+            if (custom_points_.empty()) {
+                // First packet in this scan, store base timestamp
+                packet_base_time_ns_ = static_cast<uint64_t>(timestamp_sec) * 1000000000ULL + 
+                                       static_cast<uint64_t>(timestamp_nsec);
+            }
+            
             // Add points to buffer (full point cloud - no filtering)
             // Convert from int16_t (mm) to float (meters) by dividing by 1000.0f
             constexpr float MM_TO_M = 1.0f / 1000.0f;
-            for (uint16_t i = 0; i < point_count; ++i) {
-                point_buffer_.push_back(opt_points[i].x * MM_TO_M);  // x in meters
-                point_buffer_.push_back(opt_points[i].y * MM_TO_M);  // y in meters
-                point_buffer_.push_back(opt_points[i].z * MM_TO_M);  // z in meters
+            
+            if (use_custom_msg_) {
+                // Store points with additional info for CustomMsg format
+                for (uint16_t i = 0; i < point_count; ++i) {
+                    livox_ros_driver2::msg::CustomPoint pt;
+                    pt.x = opt_points[i].x * MM_TO_M;
+                    pt.y = opt_points[i].y * MM_TO_M;
+                    pt.z = opt_points[i].z * MM_TO_M;
+                    // Calculate distance for reflectivity approximation
+                    float dist = std::sqrt(pt.x * pt.x + pt.y * pt.y + pt.z * pt.z);
+                    pt.reflectivity = static_cast<uint8_t>(std::min(dist * 12.75f, 255.0f));  // Approx
+                    pt.tag = 0;  // Not available in our optimized format
+                    pt.line = 0;  // Not available in our optimized format
+                    // Offset time in nanoseconds from base time
+                    uint64_t current_time_ns = static_cast<uint64_t>(timestamp_sec) * 1000000000ULL + 
+                                               static_cast<uint64_t>(timestamp_nsec);
+                    pt.offset_time = static_cast<uint32_t>(current_time_ns - packet_base_time_ns_);
+                    custom_points_.push_back(pt);
+                }
+            } else {
+                // Store points for PointCloud2 format
+                for (uint16_t i = 0; i < point_count; ++i) {
+                    point_buffer_.push_back(opt_points[i].x * MM_TO_M);  // x in meters
+                    point_buffer_.push_back(opt_points[i].y * MM_TO_M);  // y in meters
+                    point_buffer_.push_back(opt_points[i].z * MM_TO_M);  // z in meters
+                }
             }
         }
         
@@ -356,9 +403,15 @@ private:
 
     void publish_aggregated_cloud() {
         std::vector<float> local_buffer;
+        std::vector<livox_ros_driver2::msg::CustomPoint> local_custom_points;
+        uint64_t local_base_time_ns = 0;
+        
         {
             std::lock_guard<std::mutex> lock(buffer_mutex_);
-            if (point_buffer_.empty()) return;
+            
+            // Check which buffer to use
+            size_t buffer_size = use_custom_msg_ ? custom_points_.size() : point_buffer_.size();
+            if (buffer_size == 0) return;
             
             // Check if enough time has passed since last packet (scan timeout)
             // This helps detect when a scan is complete and prevent mixing scans
@@ -371,62 +424,106 @@ private:
             
             // Always publish when timer fires (10Hz), but prefer publishing when scan is complete
             // This ensures we don't accumulate too many points while still allowing scan completion detection
-            if (!scan_complete && point_buffer_.size() < 500) {
+            size_t min_points = use_custom_msg_ ? 500 : 1500;  // 500 points for custom, 1500 floats (500 points) for PC2
+            if (!scan_complete && buffer_size < min_points) {
                 // Very few points and scan still active, wait for more to avoid fragmenting scans
                 return;
             }
             
-            local_buffer.swap(point_buffer_);
-        }
-
-        size_t num_points = local_buffer.size() / 3;
-        if (num_points == 0) return;
-
-        // Log statistics periodically
-        static uint64_t publish_count = 0;
-        if (++publish_count % 100 == 0) {
-            RCLCPP_INFO(this->get_logger(), 
-                       "Published cloud: %zu points (total received: %lu packets, %lu points, dropped: %lu)",
-                       num_points, total_packets_received_, total_points_received_, packets_dropped_);
+            if (use_custom_msg_) {
+                local_custom_points.swap(custom_points_);
+                local_base_time_ns = packet_base_time_ns_;
+                packet_base_time_ns_ = 0;  // Reset for next scan
+            } else {
+                local_buffer.swap(point_buffer_);
+            }
         }
 
         // Use ROS time for stable timestamps (more reliable than packet timestamps)
         rclcpp::Time timestamp = this->now();
 
-        // Publish full point cloud with intensity (for color visualization in RViz2)
-        sensor_msgs::msg::PointCloud2 cloud_msg;
-        cloud_msg.header.stamp = timestamp;
-        cloud_msg.header.frame_id = "lidar_link";
-        cloud_msg.height = 1;
-        cloud_msg.width = num_points;
-        cloud_msg.is_dense = true;
-        cloud_msg.is_bigendian = false;
-        cloud_msg.point_step = 16;  // 4 floats * 4 bytes (x, y, z, intensity)
-        cloud_msg.row_step = 16 * num_points;
-        cloud_msg.fields = fields_;
+        size_t num_points = 0;
         
-        // Create point cloud data with intensity computed from distance
-        cloud_msg.data.resize(num_points * cloud_msg.point_step);
-        for (size_t i = 0; i < num_points; ++i) {
-            float x = local_buffer[3 * i];
-            float y = local_buffer[3 * i + 1];
-            float z = local_buffer[3 * i + 2];
+        if (use_custom_msg_) {
+            // Publish CustomMsg format
+            num_points = local_custom_points.size();
+            if (num_points == 0) return;
             
-            // Compute intensity from distance (normalized to 0-1 range, max at 20m)
-            float distance = std::sqrt(x * x + y * y + z * z);
-            float intensity = std::min(distance / 20.0f, 1.0f);  // Normalize to 0-1, max at 20m
+            livox_ros_driver2::msg::CustomMsg custom_msg;
+            custom_msg.header.stamp = timestamp;
+            custom_msg.header.frame_id = "lidar_link";
+            custom_msg.timebase = local_base_time_ns;
+            custom_msg.point_num = static_cast<uint32_t>(num_points);
+            custom_msg.lidar_id = 0;  // Not available in our format
+            custom_msg.points = std::move(local_custom_points);
             
-            // Write point data (x, y, z, intensity)
-            float* point_data = reinterpret_cast<float*>(cloud_msg.data.data() + i * cloud_msg.point_step);
-            point_data[0] = x;
-            point_data[1] = y;
-            point_data[2] = z;
-            point_data[3] = intensity;
-        }
-        
-        publisher_->publish(cloud_msg);
+            custom_publisher_->publish(custom_msg);
+            
+            // Log statistics periodically
+            static uint64_t publish_count = 0;
+            if (++publish_count % 100 == 0) {
+                RCLCPP_INFO(this->get_logger(), 
+                           "Published CustomMsg: %zu points (total received: %lu packets, %lu points, dropped: %lu)",
+                           num_points, total_packets_received_, total_points_received_, packets_dropped_);
+            }
+            
+            // Publish laser scan from custom points
+            publish_laser_scan_from_custom(custom_msg.points, timestamp);
+            
+        } else {
+            // Publish PointCloud2 format
+            num_points = local_buffer.size() / 3;
+            if (num_points == 0) return;
 
-        // Publish filtered laser scan (2D projection)
+            // Log statistics periodically
+            static uint64_t publish_count = 0;
+            if (++publish_count % 100 == 0) {
+                RCLCPP_INFO(this->get_logger(), 
+                           "Published PointCloud2: %zu points (total received: %lu packets, %lu points, dropped: %lu)",
+                           num_points, total_packets_received_, total_points_received_, packets_dropped_);
+            }
+
+            // Publish full point cloud with intensity (for color visualization in RViz2)
+            sensor_msgs::msg::PointCloud2 cloud_msg;
+            cloud_msg.header.stamp = timestamp;
+            cloud_msg.header.frame_id = "lidar_link";
+            cloud_msg.height = 1;
+            cloud_msg.width = num_points;
+            cloud_msg.is_dense = true;
+            cloud_msg.is_bigendian = false;
+            cloud_msg.point_step = 16;  // 4 floats * 4 bytes (x, y, z, intensity)
+            cloud_msg.row_step = 16 * num_points;
+            cloud_msg.fields = fields_;
+            
+            // Create point cloud data with intensity computed from distance
+            cloud_msg.data.resize(num_points * cloud_msg.point_step);
+            for (size_t i = 0; i < num_points; ++i) {
+                float x = local_buffer[3 * i];
+                float y = local_buffer[3 * i + 1];
+                float z = local_buffer[3 * i + 2];
+                
+                // Compute intensity from distance (normalized to 0-1 range, max at 20m)
+                float distance = std::sqrt(x * x + y * y + z * z);
+                float intensity = std::min(distance / 20.0f, 1.0f);  // Normalize to 0-1, max at 20m
+                
+                // Write point data (x, y, z, intensity)
+                float* point_data = reinterpret_cast<float*>(cloud_msg.data.data() + i * cloud_msg.point_step);
+                point_data[0] = x;
+                point_data[1] = y;
+                point_data[2] = z;
+                point_data[3] = intensity;
+            }
+            
+            publisher_->publish(cloud_msg);
+
+            // Publish laser scan from buffer
+            publish_laser_scan_from_buffer(local_buffer, timestamp);
+        }
+    }
+    
+    void publish_laser_scan_from_buffer(const std::vector<float>& buffer, const rclcpp::Time& timestamp) {
+        size_t num_points = buffer.size() / 3;
+        
         sensor_msgs::msg::LaserScan scan_msg;
         scan_msg.header.stamp = timestamp;
         scan_msg.header.frame_id = "lidar_link";
@@ -445,15 +542,52 @@ private:
         // Filter points: only use points near z=0 (ground plane)
         constexpr float z_threshold = 0.1f;
         for (size_t i = 0; i < num_points; ++i) {
-            float x = local_buffer[3 * i];
-            float y = local_buffer[3 * i + 1];
-            float z = local_buffer[3 * i + 2];
+            float x = buffer[3 * i];
+            float y = buffer[3 * i + 1];
+            float z = buffer[3 * i + 2];
             
             // Filter out points far from ground plane
             if (std::abs(z) > z_threshold) continue;
 
             float angle = std::atan2(y, x);
             float range = std::hypot(x, y);
+            
+            // Skip if out of range
+            if (range < scan_msg.range_min || range > scan_msg.range_max) continue;
+
+            int idx = static_cast<int>((angle - scan_msg.angle_min) / scan_msg.angle_increment);
+            if (idx >= 0 && idx < num_beams && range < scan_msg.ranges[idx]) {
+                scan_msg.ranges[idx] = range;
+            }
+        }
+        laserscan_publisher_->publish(scan_msg);
+    }
+    
+    void publish_laser_scan_from_custom(const std::vector<livox_ros_driver2::msg::CustomPoint>& points, 
+                                        const rclcpp::Time& timestamp) {
+        sensor_msgs::msg::LaserScan scan_msg;
+        scan_msg.header.stamp = timestamp;
+        scan_msg.header.frame_id = "lidar_link";
+        scan_msg.angle_min = -M_PI;
+        scan_msg.angle_max = M_PI;
+        scan_msg.angle_increment = M_PI / 180.0f;  // 1 degree resolution
+        scan_msg.scan_time = 0.1f;
+        scan_msg.time_increment = scan_msg.scan_time / (360.0f);  // Approximate
+        scan_msg.range_min = 0.1f;
+        scan_msg.range_max = 20.0f;
+
+        int num_beams = static_cast<int>((scan_msg.angle_max - scan_msg.angle_min) /
+                                         scan_msg.angle_increment);
+        scan_msg.ranges.assign(num_beams, std::numeric_limits<float>::infinity());
+
+        // Filter points: only use points near z=0 (ground plane)
+        constexpr float z_threshold = 0.1f;
+        for (const auto& point : points) {
+            // Filter out points far from ground plane
+            if (std::abs(point.z) > z_threshold) continue;
+
+            float angle = std::atan2(point.y, point.x);
+            float range = std::hypot(point.x, point.y);
             
             // Skip if out of range
             if (range < scan_msg.range_min || range > scan_msg.range_max) continue;
@@ -472,16 +606,22 @@ private:
     rclcpp::TimerBase::SharedPtr pub_timer_;
     std::mutex buffer_mutex_;
     std::vector<float> point_buffer_;
+    std::vector<livox_ros_driver2::msg::CustomPoint> custom_points_;
     std::vector<sensor_msgs::msg::PointField> fields_;
     rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr publisher_;
+    rclcpp::Publisher<livox_ros_driver2::msg::CustomMsg>::SharedPtr custom_publisher_;
     rclcpp::Publisher<sensor_msgs::msg::LaserScan>::SharedPtr laserscan_publisher_;
     rclcpp::Publisher<sensor_msgs::msg::Imu>::SharedPtr imu_publisher_;
     std::unique_ptr<tf2_ros::StaticTransformBroadcaster> static_tf_broadcaster_;
+    
+    // Transfer format flag
+    bool use_custom_msg_{false};
     
     // Packet sequence tracking
     uint16_t current_sequence_id_{0};
     rclcpp::Time last_packet_time_{0, 0};
     int32_t scan_timeout_ms_{50};  // Timeout in ms to detect scan completion
+    uint64_t packet_base_time_ns_{0};  // Base timestamp for CustomMsg
     
     // Statistics for debugging
     uint64_t total_packets_received_{0};

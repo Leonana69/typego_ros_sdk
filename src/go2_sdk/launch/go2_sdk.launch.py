@@ -21,6 +21,10 @@ def generate_launch_description():
             ('/tf_static', f'{robot_ns}/tf_static')
         ]
     
+    lidar_remappings=[
+        ('livox/lidar', '/lidar/scan'),
+        ('livox/imu', '/imu/data')
+    ]
     # Define nodes
     tf_service_node = Node(
         package='go2_sdk',
@@ -34,7 +38,12 @@ def generate_launch_description():
         package='go2_sdk',
         executable='lidar_full_client_node',
         name='lidar_full_client_node',
-        remappings=tf_remappings,
+        remappings=lidar_remappings,
+        parameters=[{
+            'xfer_format': 'CustomMsg',  # Use 'CustomMsg' or 'PointCloud2'
+            'publish_rate': 10.0,        # Hz
+            'scan_timeout_ms': 200       # milliseconds
+        }],
         output='screen'
     )
     
@@ -49,6 +58,10 @@ def generate_launch_description():
         package='go2_sdk',
         executable='cmd_vel_controller_node',
         name='cmd_vel_controller_node',
+        parameters=[{
+            'accept_cmd_vel': True,
+            'cmd_vel_type': 'TwistStamped'  # Use 'Twist' or 'TwistStamped'
+        }],
         output='screen'
     )
     

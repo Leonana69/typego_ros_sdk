@@ -1,5 +1,6 @@
 #include "rclcpp/rclcpp.hpp"
 #include "geometry_msgs/msg/twist.hpp"
+#include "geometry_msgs/msg/twist_stamped.hpp"
 #include <nlohmann/json.hpp>
 #include <thread>
 #include <algorithm>
@@ -34,15 +35,25 @@ public:
             setsockopt(sock_, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
         }
 
-        // Accept cmd_vel parameter (default: true)
+        // Declare parameters
         this->declare_parameter("accept_cmd_vel", true);
+        this->declare_parameter<std::string>("cmd_vel_type", "Twist");  // "Twist" or "TwistStamped"
+        
         accept_cmd_vel_ = this->get_parameter("accept_cmd_vel").as_bool();
+        std::string cmd_vel_type = this->get_parameter("cmd_vel_type").as_string();
 
-        // Subscribe to cmd_vel topic
-        cmd_vel_sub_ = this->create_subscription<geometry_msgs::msg::Twist>(
-            "cmd_vel", 10, std::bind(&CmdVelControllerNode::cmd_vel_callback, this, std::placeholders::_1));
-
-        RCLCPP_INFO(this->get_logger(), "CmdVel Controller node initialized");
+        // Subscribe based on message type
+        if (cmd_vel_type == "TwistStamped") {
+            use_twist_stamped_ = true;
+            cmd_vel_stamped_sub_ = this->create_subscription<geometry_msgs::msg::TwistStamped>(
+                "cmd_vel", 10, std::bind(&CmdVelControllerNode::cmd_vel_stamped_callback, this, std::placeholders::_1));
+            RCLCPP_INFO(this->get_logger(), "CmdVel Controller initialized with TwistStamped support");
+        } else {
+            use_twist_stamped_ = false;
+            cmd_vel_sub_ = this->create_subscription<geometry_msgs::msg::Twist>(
+                "cmd_vel", 10, std::bind(&CmdVelControllerNode::cmd_vel_callback, this, std::placeholders::_1));
+            RCLCPP_INFO(this->get_logger(), "CmdVel Controller initialized with Twist support");
+        }
     }
 
     ~CmdVelControllerNode() {
@@ -53,22 +64,31 @@ public:
 
 private:
     void cmd_vel_callback(geometry_msgs::msg::Twist::SharedPtr msg) {
+        process_twist_command(msg->linear.x, msg->linear.y, msg->angular.z);
+    }
+
+    void cmd_vel_stamped_callback(geometry_msgs::msg::TwistStamped::SharedPtr msg) {
+        process_twist_command(msg->twist.linear.x, msg->twist.linear.y, msg->twist.angular.z);
+    }
+
+    void process_twist_command(double linear_x, double linear_y, double angular_z) {
         const double max_speed_ = 0.8;
         const double max_angular_speed_ = 1.0;
         const double min_angular_speed_ = 0.2;
+        
         if (!accept_cmd_vel_) {
             return;
         }
 
         // Ignore zero velocity commands
-        if (msg->linear.x == 0.0 && msg->linear.y == 0.0 && msg->angular.z == 0.0) {
+        if (linear_x == 0.0 && linear_y == 0.0 && angular_z == 0.0) {
             return;
         }
 
         // Limit the velocity to the maximum speed
-        double vx = std::clamp(msg->linear.x, -max_speed_, max_speed_);
-        double vy = std::clamp(msg->linear.y, -max_speed_, max_speed_);
-        double vyaw = std::clamp(msg->angular.z, -max_angular_speed_, max_angular_speed_);
+        double vx = std::clamp(linear_x, -max_speed_, max_speed_);
+        double vy = std::clamp(linear_y, -max_speed_, max_speed_);
+        double vyaw = std::clamp(angular_z, -max_angular_speed_, max_angular_speed_);
 
         if (vyaw > 0.0 && vyaw < min_angular_speed_) {
             vyaw = min_angular_speed_;
@@ -122,10 +142,12 @@ private:
     }
 
     rclcpp::Subscription<geometry_msgs::msg::Twist>::SharedPtr cmd_vel_sub_;
+    rclcpp::Subscription<geometry_msgs::msg::TwistStamped>::SharedPtr cmd_vel_stamped_sub_;
     std::string robot_ip_;
     int ctrl_port_;
     int sock_;
     bool accept_cmd_vel_;
+    bool use_twist_stamped_;
 };
 
 int main(int argc, char** argv) {

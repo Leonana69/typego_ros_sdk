@@ -44,6 +44,10 @@ def generate_launch_description():
         package='kami_sdk',
         executable='cmd_vel_controller_node',
         name='cmd_vel_controller_node',
+        parameters=[{
+            'accept_cmd_vel': True,
+            'cmd_vel_type': 'Twist'  # Use 'Twist' or 'TwistStamped'
+        }],
         output='screen'
     )
     
