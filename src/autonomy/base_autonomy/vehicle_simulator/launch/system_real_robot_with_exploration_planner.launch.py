@@ -96,10 +96,11 @@ def generate_launch_description():
     }.items()
   )
 
-  start_mid360 = IncludeLaunchDescription(
-    PythonLaunchDescriptionSource(
-      [get_package_share_directory('livox_ros_driver2'), '/launch_ROS2/msg_MID360_launch.py']),
-  )
+  ### Lidar data will be provided by the real robot from other source
+  # start_mid360 = IncludeLaunchDescription(
+  #   PythonLaunchDescriptionSource(
+  #     [get_package_share_directory('livox_ros_driver2'), '/launch_ROS2/msg_MID360_launch.py']),
+  # )
 
   ld = LaunchDescription()
 
@@ -121,6 +122,6 @@ def generate_launch_description():
   ld.add_action(start_visualization_tools)
   ld.add_action(start_joy)
   ld.add_action(start_tare_planner)
-  ld.add_action(start_mid360)
+  # ld.add_action(start_mid360)
 
   return ld
