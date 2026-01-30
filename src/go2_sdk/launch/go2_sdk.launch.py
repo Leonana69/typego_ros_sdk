@@ -35,10 +35,10 @@ def generate_launch_description():
         output='screen'
     )
     
-    lidar_full_client_node = Node(
+    lidar_client_node = Node(
         package='go2_sdk',
-        executable='lidar_full_client_node',
-        name='lidar_full_client_node',
+        executable='lidar_client_node',
+        name='lidar_client_node',
         remappings=lidar_remappings,
         parameters=[{
             'xfer_format': 'CustomMsg',  # Use 'CustomMsg' or 'PointCloud2'
@@ -68,7 +68,7 @@ def generate_launch_description():
     
     return LaunchDescription([
         tf_client_node,
-        lidar_full_client_node,
+        lidar_client_node,
         video_client_node,
         cmd_vel_controller_node,
     ])

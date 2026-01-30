@@ -5,6 +5,12 @@ if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
   add_compile_options(-Wall -Wextra -Wpedantic)
 endif()
 
+# Prefer system Python over conda Python to avoid library conflicts
+if(DEFINED ENV{CONDA_PREFIX})
+  set(Python3_ROOT_DIR "/usr")
+  set(Python_ROOT_DIR "/usr")
+endif()
+
 # find dependencies
 find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
@@ -41,6 +47,7 @@ ament_target_dependencies(lidar_client_node PUBLIC
   sensor_msgs
   tf2_ros
   typego_sdk
+  livox_ros_driver2
 )
 target_link_libraries(lidar_client_node PUBLIC
   ${sensor_msgs_TARGETS}
@@ -49,22 +56,10 @@ target_link_libraries(lidar_client_node PUBLIC
   tf2_ros::static_transform_broadcaster_node
   tf2_ros::tf2_ros
 )
-
-# ----------- lidar_full_client_node -----------
-add_executable(lidar_full_client_node src/lidar_full_client.cpp)
-ament_target_dependencies(lidar_full_client_node PUBLIC
-  rclcpp
-  sensor_msgs
-  tf2_ros
-  typego_sdk
-  livox_ros_driver2
-)
-target_link_libraries(lidar_full_client_node PUBLIC
-  ${sensor_msgs_TARGETS}
-  rclcpp::rclcpp
-  sensor_msgs::sensor_msgs_library
-  tf2_ros::static_transform_broadcaster_node
-  tf2_ros::tf2_ros
+# Set RPATH to prefer system libraries over conda
+set_target_properties(lidar_client_node PROPERTIES
+  INSTALL_RPATH_USE_LINK_PATH TRUE
+  BUILD_WITH_INSTALL_RPATH TRUE
 )
 
 # ----------- tf_client_node -----------
@@ -120,7 +115,6 @@ target_link_libraries(cmd_vel_controller_node PUBLIC
 # ----------- install targets -----------
 install(TARGETS
   lidar_client_node
-  lidar_full_client_node
   video_client_node
   tf_client_node
   cmd_vel_controller_node

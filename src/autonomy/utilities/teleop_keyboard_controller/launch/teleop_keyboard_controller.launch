@@ -1,0 +1,13 @@
+<launch>
+
+  <!-- 
+    Note: This node requires keyboard input. When running via launch file,
+    you may need to run it in a separate terminal or use:
+    ros2 run teleop_keyboard_controller teleopKeyboardController
+  -->
+  <node pkg="teleop_keyboard_controller" exec="teleopKeyboardController" name="teleopKeyboardController" output="screen">
+    <param name="maxYawRate" value="80.0" />
+    <param name="maxSpeed" value="1.0" />
+  </node>
+
+</launch>
