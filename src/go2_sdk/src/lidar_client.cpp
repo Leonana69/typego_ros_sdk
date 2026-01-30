@@ -84,7 +84,7 @@ public:
         // Declare parameters
         this->declare_parameter<double>("publish_rate", 10.0);  // Hz
         this->declare_parameter<int>("scan_timeout_ms", 200);   // milliseconds
-        this->declare_parameter<std::string>("xfer_format", "PointCloud2");  // "PointCloud2" or "CustomMsg"
+        this->declare_parameter<std::string>("xfer_format", "PointCloud2");  // "PointCloud2", "CustomMsg", or "None"
         
         // Get parameters
         double publish_rate = this->get_parameter("publish_rate").as_double();
@@ -104,10 +104,16 @@ public:
         // Set transfer format
         if (xfer_format == "CustomMsg") {
             use_custom_msg_ = true;
+            publish_point_cloud_ = true;
             RCLCPP_INFO(this->get_logger(), "Using Livox CustomMsg format");
+        } else if (xfer_format == "PointCloud2") {
+            use_custom_msg_ = false;
+            publish_point_cloud_ = true;
+            RCLCPP_INFO(this->get_logger(), "Using PointCloud2 format");
         } else {
             use_custom_msg_ = false;
-            RCLCPP_INFO(this->get_logger(), "Using PointCloud2 format");
+            publish_point_cloud_ = false;
+            RCLCPP_INFO(this->get_logger(), "Point cloud publishing disabled - only laser scan will be published");
         }
         
         int publish_period_ms = static_cast<int>(1000.0 / publish_rate);
@@ -115,11 +121,15 @@ public:
                    publish_rate, publish_period_ms, scan_timeout_ms_);
         
         // Create publishers based on format
-        if (use_custom_msg_) {
-            custom_publisher_ = this->create_publisher<livox_ros_driver2::msg::CustomMsg>("livox/lidar", 10);
-        } else {
-            publisher_ = this->create_publisher<sensor_msgs::msg::PointCloud2>("livox/lidar", 10);
+        // Point cloud publishers are only created if publish_point_cloud_ is true
+        if (publish_point_cloud_) {
+            if (use_custom_msg_) {
+                custom_publisher_ = this->create_publisher<livox_ros_driver2::msg::CustomMsg>("livox/lidar", 10);
+            } else {
+                publisher_ = this->create_publisher<sensor_msgs::msg::PointCloud2>("livox/lidar", 10);
+            }
         }
+        // Laser scan publisher is always created (always enabled)
         laserscan_publisher_ = this->create_publisher<sensor_msgs::msg::LaserScan>("scan", 10);
         imu_publisher_ = this->create_publisher<sensor_msgs::msg::Imu>("livox/imu", 10);
 
@@ -424,7 +434,8 @@ private:
             
             // Always publish when timer fires (10Hz), but prefer publishing when scan is complete
             // This ensures we don't accumulate too many points while still allowing scan completion detection
-            size_t min_points = use_custom_msg_ ? 500 : 1500;  // 500 points for custom, 1500 floats (500 points) for PC2
+            // For "None" mode, we still need points for laser scan, so use same thresholds
+            size_t min_points = use_custom_msg_ ? 500 : 1500;  // 500 points for custom, 1500 floats (500 points) for PC2/None
             if (!scan_complete && buffer_size < min_points) {
                 // Very few points and scan still active, wait for more to avoid fragmenting scans
                 return;
@@ -435,6 +446,7 @@ private:
                 local_base_time_ns = packet_base_time_ns_;
                 packet_base_time_ns_ = 0;  // Reset for next scan
             } else {
+                // Use point_buffer_ for both PointCloud2 and None modes
                 local_buffer.swap(point_buffer_);
             }
         }
@@ -444,80 +456,99 @@ private:
 
         size_t num_points = 0;
         
-        if (use_custom_msg_) {
-            // Publish CustomMsg format
-            num_points = local_custom_points.size();
-            if (num_points == 0) return;
-            
-            livox_ros_driver2::msg::CustomMsg custom_msg;
-            custom_msg.header.stamp = timestamp;
-            custom_msg.header.frame_id = "lidar_link";
-            custom_msg.timebase = local_base_time_ns;
-            custom_msg.point_num = static_cast<uint32_t>(num_points);
-            custom_msg.lidar_id = 0;  // Not available in our format
-            custom_msg.points = std::move(local_custom_points);
-            
-            custom_publisher_->publish(custom_msg);
-            
-            // Log statistics periodically
-            static uint64_t publish_count = 0;
-            if (++publish_count % 100 == 0) {
-                RCLCPP_INFO(this->get_logger(), 
-                           "Published CustomMsg: %zu points (total received: %lu packets, %lu points, dropped: %lu)",
-                           num_points, total_packets_received_, total_points_received_, packets_dropped_);
+        // Publish point cloud only if enabled
+        if (publish_point_cloud_) {
+            if (use_custom_msg_) {
+                // Publish CustomMsg format
+                num_points = local_custom_points.size();
+                if (num_points == 0) return;
+                
+                livox_ros_driver2::msg::CustomMsg custom_msg;
+                custom_msg.header.stamp = timestamp;
+                custom_msg.header.frame_id = "lidar_link";
+                custom_msg.timebase = local_base_time_ns;
+                custom_msg.point_num = static_cast<uint32_t>(num_points);
+                custom_msg.lidar_id = 0;  // Not available in our format
+                custom_msg.points = std::move(local_custom_points);
+                
+                custom_publisher_->publish(custom_msg);
+                
+                // Log statistics periodically
+                static uint64_t publish_count = 0;
+                if (++publish_count % 100 == 0) {
+                    RCLCPP_INFO(this->get_logger(), 
+                               "Published CustomMsg: %zu points (total received: %lu packets, %lu points, dropped: %lu)",
+                               num_points, total_packets_received_, total_points_received_, packets_dropped_);
+                }
+                
+                // Publish laser scan from custom points
+                publish_laser_scan_from_custom(custom_msg.points, timestamp);
+                
+            } else {
+                // Publish PointCloud2 format
+                num_points = local_buffer.size() / 3;
+                if (num_points == 0) return;
+
+                // Log statistics periodically
+                static uint64_t publish_count = 0;
+                if (++publish_count % 100 == 0) {
+                    RCLCPP_INFO(this->get_logger(), 
+                               "Published PointCloud2: %zu points (total received: %lu packets, %lu points, dropped: %lu)",
+                               num_points, total_packets_received_, total_points_received_, packets_dropped_);
+                }
+
+                // Publish full point cloud with intensity (for color visualization in RViz2)
+                sensor_msgs::msg::PointCloud2 cloud_msg;
+                cloud_msg.header.stamp = timestamp;
+                cloud_msg.header.frame_id = "lidar_link";
+                cloud_msg.height = 1;
+                cloud_msg.width = num_points;
+                cloud_msg.is_dense = true;
+                cloud_msg.is_bigendian = false;
+                cloud_msg.point_step = 16;  // 4 floats * 4 bytes (x, y, z, intensity)
+                cloud_msg.row_step = 16 * num_points;
+                cloud_msg.fields = fields_;
+                
+                // Create point cloud data with intensity computed from distance
+                cloud_msg.data.resize(num_points * cloud_msg.point_step);
+                for (size_t i = 0; i < num_points; ++i) {
+                    float x = local_buffer[3 * i];
+                    float y = local_buffer[3 * i + 1];
+                    float z = local_buffer[3 * i + 2];
+                    
+                    // Compute intensity from distance (normalized to 0-1 range, max at 20m)
+                    float distance = std::sqrt(x * x + y * y + z * z);
+                    float intensity = std::min(distance / 20.0f, 1.0f);  // Normalize to 0-1, max at 20m
+                    
+                    // Write point data (x, y, z, intensity)
+                    float* point_data = reinterpret_cast<float*>(cloud_msg.data.data() + i * cloud_msg.point_step);
+                    point_data[0] = x;
+                    point_data[1] = y;
+                    point_data[2] = z;
+                    point_data[3] = intensity;
+                }
+                
+                publisher_->publish(cloud_msg);
+
+                // Publish laser scan from buffer
+                publish_laser_scan_from_buffer(local_buffer, timestamp);
             }
-            
-            // Publish laser scan from custom points
-            publish_laser_scan_from_custom(custom_msg.points, timestamp);
-            
         } else {
-            // Publish PointCloud2 format
+            // Point cloud publishing disabled - only publish laser scan
+            // Use buffer format for laser scan generation
             num_points = local_buffer.size() / 3;
             if (num_points == 0) return;
-
+            
+            // Publish laser scan from buffer
+            publish_laser_scan_from_buffer(local_buffer, timestamp);
+            
             // Log statistics periodically
             static uint64_t publish_count = 0;
             if (++publish_count % 100 == 0) {
                 RCLCPP_INFO(this->get_logger(), 
-                           "Published PointCloud2: %zu points (total received: %lu packets, %lu points, dropped: %lu)",
+                           "Published LaserScan only: %zu points (total received: %lu packets, %lu points, dropped: %lu)",
                            num_points, total_packets_received_, total_points_received_, packets_dropped_);
             }
-
-            // Publish full point cloud with intensity (for color visualization in RViz2)
-            sensor_msgs::msg::PointCloud2 cloud_msg;
-            cloud_msg.header.stamp = timestamp;
-            cloud_msg.header.frame_id = "lidar_link";
-            cloud_msg.height = 1;
-            cloud_msg.width = num_points;
-            cloud_msg.is_dense = true;
-            cloud_msg.is_bigendian = false;
-            cloud_msg.point_step = 16;  // 4 floats * 4 bytes (x, y, z, intensity)
-            cloud_msg.row_step = 16 * num_points;
-            cloud_msg.fields = fields_;
-            
-            // Create point cloud data with intensity computed from distance
-            cloud_msg.data.resize(num_points * cloud_msg.point_step);
-            for (size_t i = 0; i < num_points; ++i) {
-                float x = local_buffer[3 * i];
-                float y = local_buffer[3 * i + 1];
-                float z = local_buffer[3 * i + 2];
-                
-                // Compute intensity from distance (normalized to 0-1 range, max at 20m)
-                float distance = std::sqrt(x * x + y * y + z * z);
-                float intensity = std::min(distance / 20.0f, 1.0f);  // Normalize to 0-1, max at 20m
-                
-                // Write point data (x, y, z, intensity)
-                float* point_data = reinterpret_cast<float*>(cloud_msg.data.data() + i * cloud_msg.point_step);
-                point_data[0] = x;
-                point_data[1] = y;
-                point_data[2] = z;
-                point_data[3] = intensity;
-            }
-            
-            publisher_->publish(cloud_msg);
-
-            // Publish laser scan from buffer
-            publish_laser_scan_from_buffer(local_buffer, timestamp);
         }
     }
     
@@ -614,8 +645,9 @@ private:
     rclcpp::Publisher<sensor_msgs::msg::Imu>::SharedPtr imu_publisher_;
     std::unique_ptr<tf2_ros::StaticTransformBroadcaster> static_tf_broadcaster_;
     
-    // Transfer format flag
+    // Transfer format flags
     bool use_custom_msg_{false};
+    bool publish_point_cloud_{true};  // If false, only publish laser scan
     
     // Packet sequence tracking
     uint16_t current_sequence_id_{0};
