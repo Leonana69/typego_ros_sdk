@@ -49,16 +49,16 @@ target_link_libraries(lidar_service_node PUBLIC
   tf2_ros::tf2_ros
 )
 
-# ----------- tf_service_node -----------
-add_executable(tf_service_node src/tf_service.cpp)
-ament_target_dependencies(tf_service_node PUBLIC
+# ----------- tf_client_node -----------
+add_executable(tf_client_node src/tf_client.cpp)
+ament_target_dependencies(tf_client_node PUBLIC
   rclcpp
   nav_msgs
   geometry_msgs
   tf2_ros
   typego_sdk
 )
-target_link_libraries(tf_service_node PUBLIC
+target_link_libraries(tf_client_node PUBLIC
   rclcpp::rclcpp
   tf2_ros::tf2_ros
 )
@@ -78,7 +78,7 @@ target_link_libraries(cmd_vel_controller_node PUBLIC
 # ----------- install targets -----------
 install(TARGETS
   lidar_service_node
-  tf_service_node
+  tf_client_node
   cmd_vel_controller_node
   DESTINATION lib/${PROJECT_NAME})
 

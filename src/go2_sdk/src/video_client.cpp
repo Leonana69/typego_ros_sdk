@@ -130,9 +130,9 @@ private:
     std::string frame_prefix_;
 };
 
-class VideoServiceNode : public rclcpp::Node {
+class VideoClientNode : public rclcpp::Node {
 public:
-    VideoServiceNode() : Node("video_service", typego_sdk::get_namespace_from_env()) {
+    VideoClientNode() : Node("video_client", typego_sdk::get_namespace_from_env()) {
         gst_init(nullptr, nullptr);
         
         // Get frame prefix from namespace
@@ -169,7 +169,7 @@ private:
 
 int main(int argc, char** argv) {
     rclcpp::init(argc, argv);
-    rclcpp::spin(std::make_shared<VideoServiceNode>());
+    rclcpp::spin(std::make_shared<VideoClientNode>());
     rclcpp::shutdown();
     return 0;
 }

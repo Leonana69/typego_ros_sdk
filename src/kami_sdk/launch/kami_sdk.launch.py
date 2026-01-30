@@ -24,10 +24,10 @@ def generate_launch_description():
         ]
     
     # Define nodes
-    tf_service_node = Node(
+    tf_client_node = Node(
         package='kami_sdk',
-        executable='tf_service_node',
-        name='tf_service_node',
+        executable='tf_client_node',
+        name='tf_client_node',
         remappings=tf_remappings,
         output='screen'
     )
@@ -52,7 +52,7 @@ def generate_launch_description():
     )
     
     return LaunchDescription([
-        tf_service_node,
+        tf_client_node,
         lidar_client_node,
         cmd_vel_controller_node,
     ])

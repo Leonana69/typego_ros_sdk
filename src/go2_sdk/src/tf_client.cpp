@@ -17,9 +17,9 @@
 
 #include "typego_sdk/namespace_utils.hpp"
 
-class TFServiceNode : public rclcpp::Node {
+class TFClientNode : public rclcpp::Node {
 public:
-    TFServiceNode() : Node("tf_service", typego_sdk::get_namespace_from_env()) {
+    TFClientNode() : Node("tf_client", typego_sdk::get_namespace_from_env()) {
         // Get namespace
         std::string ns = this->get_namespace();
         
@@ -65,12 +65,12 @@ public:
 
         timer_ = this->create_wall_timer(
             std::chrono::milliseconds(5),
-            std::bind(&TFServiceNode::poll_socket, this));
+            std::bind(&TFClientNode::poll_socket, this));
 
         init_static_tf();
 
         RCLCPP_INFO(this->get_logger(), 
-                    "Go2 TF Service initialized in namespace: %s, publishing to %s/tf", 
+                    "Go2 TF Client initialized in namespace: %s, publishing to %s/tf", 
                     ns.c_str(), ns.c_str());
     }
 
@@ -147,7 +147,7 @@ private:
 
 int main(int argc, char** argv) {
     rclcpp::init(argc, argv);
-    rclcpp::spin(std::make_shared<TFServiceNode>());
+    rclcpp::spin(std::make_shared<TFClientNode>());
     rclcpp::shutdown();
     return 0;
 }

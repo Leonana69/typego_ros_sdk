@@ -67,15 +67,15 @@ target_link_libraries(lidar_full_client_node PUBLIC
   tf2_ros::tf2_ros
 )
 
-# ----------- tf_service_node -----------
-add_executable(tf_service_node src/tf_service.cpp)
-ament_target_dependencies(tf_service_node PUBLIC
+# ----------- tf_client_node -----------
+add_executable(tf_client_node src/tf_client.cpp)
+ament_target_dependencies(tf_client_node PUBLIC
   rclcpp
   sensor_msgs
   tf2_ros
   typego_sdk
 )
-target_link_libraries(tf_service_node PUBLIC
+target_link_libraries(tf_client_node PUBLIC
   ${sensor_msgs_TARGETS}
   rclcpp::rclcpp
   sensor_msgs::sensor_msgs_library
@@ -83,20 +83,20 @@ target_link_libraries(tf_service_node PUBLIC
   tf2_ros::tf2_ros
 )
 
-# ----------- video_service_node -----------
+# ----------- video_client_node -----------
 pkg_check_modules(GST REQUIRED gstreamer-1.0 gstreamer-app-1.0)
 
-add_executable(video_service_node src/video_service.cpp)
-ament_target_dependencies(video_service_node PUBLIC
+add_executable(video_client_node src/video_client.cpp)
+ament_target_dependencies(video_client_node PUBLIC
   rclcpp
   sensor_msgs
   typego_sdk
 )
-target_include_directories(video_service_node PRIVATE
+target_include_directories(video_client_node PRIVATE
   ${GST_INCLUDE_DIRS}
   ${OpenCV_INCLUDE_DIRS}
 )
-target_link_libraries(video_service_node PUBLIC
+target_link_libraries(video_client_node PUBLIC
   ${sensor_msgs_TARGETS}
   rclcpp::rclcpp
   sensor_msgs::sensor_msgs_library
@@ -121,8 +121,8 @@ target_link_libraries(cmd_vel_controller_node PUBLIC
 install(TARGETS
   lidar_client_node
   lidar_full_client_node
-  video_service_node
-  tf_service_node
+  video_client_node
+  tf_client_node
   cmd_vel_controller_node
   DESTINATION lib/${PROJECT_NAME})
 

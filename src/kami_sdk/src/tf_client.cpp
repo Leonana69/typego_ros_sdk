@@ -5,9 +5,9 @@
 
 #include "typego_sdk/namespace_utils.hpp"
 
-class TFServiceNode : public rclcpp::Node {
+class TFClientNode : public rclcpp::Node {
 public:
-    TFServiceNode() : Node("tf_service", typego_sdk::get_namespace_from_env()) {
+    TFClientNode() : Node("tf_client", typego_sdk::get_namespace_from_env()) {
         // Get namespace
         std::string ns = this->get_namespace();
         
@@ -17,13 +17,13 @@ public:
         // Subscribe to /odom/mc_odom topic
         odom_sub_ = this->create_subscription<nav_msgs::msg::Odometry>(
             "/odom/mc_odom", 10,
-            std::bind(&TFServiceNode::odom_callback, this, std::placeholders::_1));
+            std::bind(&TFClientNode::odom_callback, this, std::placeholders::_1));
 
         RCLCPP_INFO(this->get_logger(),
             "TF broadcaster initialized. Will publish to /tf");
 
         RCLCPP_INFO(this->get_logger(), 
-                    "Kami TF Service initialized in namespace: %s, subscribing to /odom/mc_odom, publishing to /tf", 
+                    "Kami TF Client initialized in namespace: %s, subscribing to /odom/mc_odom, publishing to /tf", 
                     ns.c_str());
     }
 
@@ -53,7 +53,7 @@ private:
 
 int main(int argc, char** argv) {
     rclcpp::init(argc, argv);
-    rclcpp::spin(std::make_shared<TFServiceNode>());
+    rclcpp::spin(std::make_shared<TFClientNode>());
     rclcpp::shutdown();
     return 0;
 }

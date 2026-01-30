@@ -5,6 +5,7 @@ from launch_ros.actions import Node
 def generate_launch_description():
     # Get robot namespace from ROBOT_ID environment variable
     robot_id = os.environ.get('ROBOT_ID', '')
+    autonomy_type = os.environ.get('AUTONOMY_TYPE', 'base_autonomy')
     if robot_id:
         robot_name = f'robot{robot_id}'
         robot_ns = f'/{robot_name}'
@@ -26,10 +27,10 @@ def generate_launch_description():
         ('livox/imu', '/imu/data')
     ]
     # Define nodes
-    tf_service_node = Node(
+    tf_client_node = Node(
         package='go2_sdk',
-        executable='tf_service_node',
-        name='tf_service_node',
+        executable='tf_client_node',
+        name='tf_client_node',
         remappings=tf_remappings,
         output='screen'
     )
@@ -47,10 +48,10 @@ def generate_launch_description():
         output='screen'
     )
     
-    video_service_node = Node(
+    video_client_node = Node(
         package='go2_sdk',
-        executable='video_service_node',
-        name='video_service_node',
+        executable='video_client_node',
+        name='video_client_node',
         output='screen'
     )
     
@@ -66,8 +67,8 @@ def generate_launch_description():
     )
     
     return LaunchDescription([
-        tf_service_node,
+        tf_client_node,
         lidar_full_client_node,
-        video_service_node,
+        video_client_node,
         cmd_vel_controller_node,
     ])
