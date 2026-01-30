@@ -16,9 +16,11 @@ AUTONOMY_TYPE := $(strip $(AUTONOMY_TYPE))
 build:
 	@if [ "$(AUTONOMY_TYPE)" = "base" ]; then \
 		echo "=> AUTONOMY_TYPE=base, excluding autonomy packages..."; \
+		KEEP_PACKAGE=livox_ros_driver2; \
 		AUTONOMY_PACKAGES=$$(find src/autonomy -name "package.xml" \
 			-exec grep -h "<name>" {} \; \
 			| sed 's/.*<name>\(.*\)<\/name>.*/\1/' \
+			| grep -vw $$KEEP_PACKAGE \
 			| tr '\n' ' '); \
 		echo "=> Skipping packages: $$AUTONOMY_PACKAGES"; \
 		if [ -n "$$AUTONOMY_PACKAGES" ]; then \
