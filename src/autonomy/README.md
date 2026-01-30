@@ -32,7 +32,7 @@ This launch file adds the exploration planner to the real-robot pipeline. The de
 ### 1) Data sources
 - **Livox Mid-360 driver** (external to this launch file):
   - Common raw topics are `/livox/lidar` (PointCloud2 or Livox CustomMsg) and `/livox/imu` (Imu).
-  - `arise_slam_mid360` expects `/lidar/scan` and `/imu/data` by default, so remap if needed.
+  - `arise_slam_mid360` expects `/livox/lidar` and `/livox/imu` by default, so remap if needed.
 - **Joystick** (`joy_node`):
   - Publishes `/joy` for manual control and safety overrides.
 - **Exploration trigger** (optional):
@@ -41,13 +41,13 @@ This launch file adds the exploration planner to the real-robot pipeline. The de
 ### 2) SLAM and state estimation (arise_slam_mid360)
 ProjectName is empty in `livox_mid360.yaml`, so SLAM topics are rooted at `/`.
 - **feature_extraction_node**
-  - Subscribes: `/lidar/scan` (Livox CustomMsg) and `/imu/data` (Imu)
+  - Subscribes: `/livox/lidar` (Livox CustomMsg) and `/livox/imu` (Imu)
   - Publishes: `/feature_info` (LaserFeature), `/planner_points`, `/edge_points`
 - **laser_mapping_node**
   - Subscribes: `/feature_info`, `/integrated_to_init5`
   - Publishes: `/registered_scan` (PointCloud2), `/laser_odometry` (Odometry), `/laser_cloud_map`
 - **imu_preintegration_node**
-  - Subscribes: `/imu/data`, `/laser_odometry`
+  - Subscribes: `/livox/imu`, `/laser_odometry`
   - Publishes: `/state_estimation` (Odometry), `/state_estimation_health`, `/imuodom_path`
 
 ### 3) Sensor processing (sensor_scan_generation)
@@ -87,7 +87,7 @@ Configured by `exploration_planner_config` (default `indoor_small`):
 
 ### Summary diagram
 Livox LiDAR + IMU
-  -> /lidar/scan, /imu/data
+  -> /livox/lidar, /livox/imu
   -> arise_slam_mid360
        -> /registered_scan, /state_estimation
        -> sensor_scan_generation -> /sensor_scan, /state_estimation_at_scan

@@ -22,10 +22,6 @@ def generate_launch_description():
             ('/tf_static', f'{robot_ns}/tf_static')
         ]
     
-    lidar_remappings=[
-        ('livox/lidar', '/lidar/scan'),
-        ('livox/imu', '/imu/data')
-    ]
     # Define nodes
     tf_client_node = Node(
         package='go2_sdk',
@@ -39,7 +35,6 @@ def generate_launch_description():
         package='go2_sdk',
         executable='lidar_client_node',
         name='lidar_client_node',
-        remappings=lidar_remappings,
         parameters=[{
             'xfer_format': 'CustomMsg',  # Use 'CustomMsg' or 'PointCloud2'
             'publish_rate': 10.0,        # Hz

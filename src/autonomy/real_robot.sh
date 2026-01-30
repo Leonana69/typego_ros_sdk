@@ -27,6 +27,6 @@ case "$MODE" in
 esac
 
 sleep 1
-if [ "${RUN_RVIZ:-0}" -eq 1 ]; then
+if [ "${RUN_RVIZ:-1}" -eq 1 ]; then
   ros2 run rviz2 rviz2 -d $SCRIPT_DIR/base_autonomy/vehicle_simulator/rviz/vehicle_simulator.rviz
 fi
