@@ -8,18 +8,29 @@ CONTAINER_NAME = typego-sdk
 # --- Default environment setup ---
 ENV_FILE := ./docker/.env
 -include $(ENV_FILE)
+# Strip whitespace from AUTONOMY_TYPE if it exists
+AUTONOMY_TYPE := $(strip $(AUTONOMY_TYPE))
 
 .PHONY: docker_stop docker_start docker_remove docker_open docker_build build
 
 build:
-	colcon build
-	@{ \
-		if [ -f ./install/typego/lib/typego/webui ]; then \
-			sed -i '1s|^#!.*|#!'"$$(which python)"'|' ./install/typego/lib/typego/webui; \
+	@if [ "$(AUTONOMY_TYPE)" = "base" ]; then \
+		echo "=> AUTONOMY_TYPE=base, excluding autonomy packages..."; \
+		AUTONOMY_PACKAGES=$$(find src/autonomy -name "package.xml" \
+			-exec grep -h "<name>" {} \; \
+			| sed 's/.*<name>\(.*\)<\/name>.*/\1/' \
+			| tr '\n' ' '); \
+		echo "=> Skipping packages: $$AUTONOMY_PACKAGES"; \
+		if [ -n "$$AUTONOMY_PACKAGES" ]; then \
+			colcon build --packages-skip $$(echo $$AUTONOMY_PACKAGES); \
 		else \
-			echo "Warning: ./install/typego/lib/typego/webui not found. Skipping shebang update."; \
-		fi \
-	}
+			echo "Warning: No autonomy packages found to skip"; \
+			colcon build; \
+		fi; \
+	else \
+		echo "=> AUTONOMY_TYPE=$(AUTONOMY_TYPE:-unset), building all packages..."; \
+		colcon build; \
+	fi
 
 docker_stop:
 	@echo "=> Stopping TypeGo SDK..."
