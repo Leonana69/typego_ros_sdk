@@ -3,7 +3,7 @@
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
 
 cd $SCRIPT_DIR
-source ./install/setup.bash
+# source ./install/setup.bash
 
 # 0: system_real_robot.launch.py
 # 1: system_real_robot_with_route_planner.launch.py

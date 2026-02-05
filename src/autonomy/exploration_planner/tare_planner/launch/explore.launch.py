@@ -30,7 +30,16 @@ def generate_launch_description():
     workspace_root = None
     if ament_prefix_path:
         first_prefix = ament_prefix_path.split(':')[0]
-        workspace_root = os.path.dirname(first_prefix)
+        candidate = os.path.abspath(first_prefix)
+        # Walk up until we find the repo root (contains src/).
+        while True:
+            if os.path.isdir(os.path.join(candidate, 'src')):
+                workspace_root = candidate
+                break
+            parent = os.path.dirname(candidate)
+            if parent == candidate:
+                break
+            candidate = parent
     if workspace_root is None or workspace_root == '':
         workspace_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '../../../../..'))
 
@@ -48,6 +57,8 @@ def generate_launch_description():
         ld_library_path_value = f"{ortools_lib_dir}:{existing_ld_library_path}"
     else:
         ld_library_path_value = ortools_lib_dir
+
+    print(f"ortools_lib_dir: {ortools_lib_dir}")
     
     declare_use_sim_time_cmd = DeclareLaunchArgument(
         'use_sim_time',
