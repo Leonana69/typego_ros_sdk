@@ -11,10 +11,9 @@ Eigen::Map<Eigen::Vector3d> t_w_curr(parameters);
 Eigen::Map<Eigen::Quaterniond> q_w_curr(parameters+3);
 
 namespace arise_slam {
-
     laserMapping::laserMapping(const rclcpp::NodeOptions & options)
     : Node("laser_mapping_node", options) {
-    this->get_logger().set_level(rclcpp::Logger::Level::Debug);
+        this->get_logger().set_level(rclcpp::Logger::Level::Debug);
     }
 
     void laserMapping::initInterface() {
@@ -23,20 +22,17 @@ namespace arise_slam {
         rclcpp::SubscriptionOptions sub_options;
         sub_options.callback_group = cb_group_;
 
-        if(!readGlobalparam(shared_from_this()))
-        {
+        if (!readGlobalparam(shared_from_this())) {
             RCLCPP_ERROR(this->get_logger(), "[AriseSlam::laserMapping] Could not read calibration. Exiting...");
             rclcpp::shutdown();
         }
 
-        if (!readParameters())
-        {
+        if (!readParameters()) {
             RCLCPP_ERROR(this->get_logger(), "[AriseSlam::laserMapping] Could not read parameters. Exiting...");
             rclcpp::shutdown();
         }
 
-        if (!readCalibration(shared_from_this()))
-        {
+        if (!readCalibration(shared_from_this())) {
             RCLCPP_ERROR(this->get_logger(), "[AriseSlam::laserMapping] Could not read parameters. Exiting...");
             rclcpp::shutdown();
         }
@@ -154,7 +150,6 @@ namespace arise_slam {
     }
 
     void laserMapping::initializationParam() {
-
         laserCloudCornerLast.reset(new pcl::PointCloud<PointType>());
         laserCloudSurfLast.reset(new pcl::PointCloud<PointType>());
         laserCloudSurround.reset(new pcl::PointCloud<PointType>());
@@ -188,7 +183,7 @@ namespace arise_slam {
 
         if (slam.local_mode) {
             RCLCPP_INFO(this->get_logger(), "\033[1;32m Loading map....\033[0m");
-            if(readPointCloud()) {
+            if (readPointCloud()) {
                 slam.localMap.addSurfPointCloud(*laserCloudPrior);
                 RCLCPP_INFO(this->get_logger(), "\033[1;32m Loaded map succesfully, started SLAM in localization mode.\033[0m");
             } else {
@@ -200,8 +195,7 @@ namespace arise_slam {
         }
     }
 
-    bool laserMapping::readParameters()
-    {
+    bool laserMapping::readParameters() {
         this->declare_parameter<float>("scanPeriod", 0.1);
         this->declare_parameter<float>("mapping_line_resolution", 0.1);
         this->declare_parameter<float>("mapping_plane_resolution", 0.2);
@@ -250,8 +244,7 @@ namespace arise_slam {
         config_.local_mode = get_parameter("local_mode").as_bool();
         config_.read_pose_file = get_parameter("read_pose_file").as_bool();
 
-        if(config_.read_pose_file)
-        {   
+        if (config_.read_pose_file) {   
             readLocalizationPose(config_.map_dir);
             config_.init_x= odometryResults[0].x;
             config_.init_y= odometryResults[0].y;
@@ -259,9 +252,7 @@ namespace arise_slam {
             config_.init_roll= odometryResults[0].roll;
             config_.init_pitch= odometryResults[0].pitch;
             config_.init_yaw= odometryResults[0].yaw;
-        }
-        else
-        {  
+        } else {  
             config_.init_x = get_parameter("init_x").as_double(); 
             config_.init_y = get_parameter("init_y").as_double(); 
             config_.init_z = get_parameter("init_z").as_double(); 
@@ -273,8 +264,7 @@ namespace arise_slam {
         return true;
     }
     
-    bool laserMapping::readPointCloud()
-    {
+    bool laserMapping::readPointCloud() {
         // Load PCD file
         if (slam.map_dir.size() >= 4 &&
             slam.map_dir.substr(slam.map_dir.size() - 4) == ".pcd") {
@@ -323,8 +313,7 @@ namespace arise_slam {
         return true;
     } 
 
-    void laserMapping::readLocalizationPose(const std::string& parentPath)
-    {   
+    void laserMapping::readLocalizationPose(const std::string& parentPath) {   
         std::cerr << "Reading localization pose..." << std::endl;
         std::string saveOdomPath;
         size_t lastSlashPos = parentPath.find_last_of('/');
@@ -365,16 +354,16 @@ namespace arise_slam {
         size_t lastSlashPos = parentPath.find_last_of('/');
         if (lastSlashPos != std::string::npos) {
             saveOdomPath=parentPath.substr(0, lastSlashPos + 1); // Include the trailing slash
-            }
+        }
 
         arise_slam::OdometryData odom;
         {
-         odom.timestamp = timestamp;
-         odom.x = T_w_lidar.pos.x();
-         odom.y = T_w_lidar.pos.y();
-         odom.z = T_w_lidar.pos.z(); 
-         tf2::Quaternion orientation(T_w_lidar.rot.x(), T_w_lidar.rot.y(), T_w_lidar.rot.z(), T_w_lidar.rot.w());
-         tf2::Matrix3x3(orientation).getRPY(odom.roll, odom.pitch, odom.yaw);
+            odom.timestamp = timestamp;
+            odom.x = T_w_lidar.pos.x();
+            odom.y = T_w_lidar.pos.y();
+            odom.z = T_w_lidar.pos.z(); 
+            tf2::Quaternion orientation(T_w_lidar.rot.x(), T_w_lidar.rot.y(), T_w_lidar.rot.z(), T_w_lidar.rot.w());
+            tf2::Matrix3x3(orientation).getRPY(odom.roll, odom.pitch, odom.yaw);
         }
 
         odometryResults.push_back(odom);
@@ -394,13 +383,10 @@ namespace arise_slam {
     }
 
     void laserMapping::transformAssociateToMap(Transformd T_w_pre, Transformd T_wodom_curr, Transformd T_wodom_pre) {
-
         Transformd T_wodom_pre_curr = T_wodom_pre.inverse() * T_wodom_curr;
-
         Transformd T_w_curr_predict = T_w_pre * T_wodom_pre_curr;
         q_w_curr = T_w_curr_predict.rot;
         t_w_curr = T_w_curr_predict.pos;
-
     }
 
     void laserMapping::transformAssociateToMap() {
@@ -424,8 +410,7 @@ namespace arise_slam {
         // po->intensity = 1.0;
     }
 
-    void laserMapping::pointAssociateToMap(pcl::PointXYZHSV const *const pi, pcl::PointXYZHSV *const po)
-    {
+    void laserMapping::pointAssociateToMap(pcl::PointXYZHSV const *const pi, pcl::PointXYZHSV *const po) {
         Eigen::Vector3d point_curr(pi->x, pi->y, pi->z);
         Eigen::Vector3d point_w = q_w_curr * point_curr + t_w_curr;
         po->x = point_w.x();
@@ -448,7 +433,6 @@ namespace arise_slam {
 
 
     void laserMapping::laserFeatureInfoHandler(const arise_slam_mid360_msgs::msg::LaserFeature::SharedPtr msgIn) {
-       
         mBuf.lock();
         cornerLastBuf.push(msgIn->cloud_corner);
         surfLastBuf.push(msgIn->cloud_surface);
@@ -463,7 +447,6 @@ namespace arise_slam {
 
 
     void laserMapping::IMUOdometryHandler(const nav_msgs::msg::Odometry::SharedPtr imuOdometry) {
-     
         mBuf.lock();
         imu_odom_buf.addMeas(imuOdometry, secs(imuOdometry));
         timeLatestImuOdometry = imuOdometry->header.stamp;
@@ -476,17 +459,14 @@ namespace arise_slam {
        mBuf.unlock();
     }
 
-    void laserMapping::setInitialGuess()
-    {
+    void laserMapping::setInitialGuess() {
         use_imu_roll_pitch_this_step=false;
 
-        if (initialization == false)  //directly hardset the imu rotation as the first pose
-        {
+        // directly hardset the imu rotation as the first pose
+        if (initialization == false) {
             use_imu_roll_pitch_this_step=true;
 
-            if(use_imu_roll_pitch_this_step)
-            {
-                
+            if (use_imu_roll_pitch_this_step) {
                 double roll, pitch, yaw;
                 tf2::Quaternion orientation_curr(q_wodom_curr.x(), q_wodom_curr.y(), q_wodom_curr.z(), q_wodom_curr.w());
                 tf2::Matrix3x3(orientation_curr).getRPY(roll, pitch, yaw);
@@ -509,44 +489,37 @@ namespace arise_slam {
                 q_wodom_pre = q_w_curr;
                 T_w_lidar.rot=q_w_curr;
                 
-                if(slam.local_mode)
-                {
-                    
-                T_w_lidar.pos=Eigen::Vector3d(slam.init_x, slam.init_y, slam.init_z);
-                tf2::Quaternion quat ;
-                quat.setRPY(slam.init_roll,slam.init_pitch, slam.init_yaw);
-                T_w_lidar.rot=Eigen::Quaterniond(quat.w(), quat.x(), quat.y(), quat.z());
-                RCLCPP_DEBUG(this->get_logger(), "\033[1;32m  Localization Mode: x: %f y: %f z: %f roll: %f pitch: %f yaw:%f \033[0m",
-                            slam.init_x,slam.init_y,slam.init_z,slam.init_roll, slam.init_pitch, slam.init_yaw);
-                slam.last_T_w_lidar=T_w_lidar;
+                if (slam.local_mode) {
+                    T_w_lidar.pos=Eigen::Vector3d(slam.init_x, slam.init_y, slam.init_z);
+                    tf2::Quaternion quat ;
+                    quat.setRPY(slam.init_roll,slam.init_pitch, slam.init_yaw);
+                    T_w_lidar.rot=Eigen::Quaterniond(quat.w(), quat.x(), quat.y(), quat.z());
+                    RCLCPP_DEBUG(this->get_logger(), "\033[1;32m  Localization Mode: x: %f y: %f z: %f roll: %f pitch: %f yaw:%f \033[0m",
+                                slam.init_x,slam.init_y,slam.init_z,slam.init_roll, slam.init_pitch, slam.init_yaw);
+                    slam.last_T_w_lidar=T_w_lidar;
                 }
 
                 //  initialization = true;
 
-            }else
-            {   
-               
+            } else {
                 RCLCPP_WARN(this->get_logger(), "start from zero");
                 q_w_curr = Eigen::Quaterniond(cos(slam.init_yaw / 2), 0, 0, sin(slam.init_yaw / 2));
                 q_wodom_pre = Eigen::Quaterniond(cos(slam.init_yaw / 2), 0, 0, sin(slam.init_yaw / 2));
                 T_w_lidar.rot=q_w_curr;
-                if(slam.local_mode)
-                { 
-                  T_w_lidar.pos=Eigen::Vector3d(slam.init_x, slam.init_y, slam.init_z);
-                  tf2::Quaternion quat ;
-                  quat.setRPY(slam.init_roll,slam.init_pitch, slam.init_yaw);
-                  T_w_lidar.rot=Eigen::Quaterniond(quat.w(), quat.x(), quat.y(), quat.z());
-                
+                if (slam.local_mode) { 
+                    T_w_lidar.pos=Eigen::Vector3d(slam.init_x, slam.init_y, slam.init_z);
+                    tf2::Quaternion quat ;
+                    quat.setRPY(slam.init_roll,slam.init_pitch, slam.init_yaw);
+                    T_w_lidar.rot=Eigen::Quaterniond(quat.w(), quat.x(), quat.y(), quat.z());
                 }
             }
 
-        } else if (startupCount>0) // To use IMU orientation for a while for initialization
-        {
-
+        } else if (startupCount>0) {
+            // To use IMU orientation for a while for initialization
             RCLCPP_WARN(this->get_logger(), "localization/startup");
             use_imu_roll_pitch_this_step = true;
             selectposePrediction();
-            if(use_imu_roll_pitch_this_step){
+            if (use_imu_roll_pitch_this_step){
                 q_w_curr = T_w_lidar.rot;
             }else{
                 q_w_curr = last_T_w_lidar.rot;
@@ -556,29 +529,23 @@ namespace arise_slam {
             T_w_lidar.pos = t_w_curr;
             T_w_lidar.rot = q_w_curr;
             startupCount--;
-        }
-        else
-        {   
-          
+        } else {
             if (config_.use_imu_roll_pitch)
                 use_imu_roll_pitch_this_step=true;
             selectposePrediction();
             q_w_curr = T_w_lidar.rot;
             t_w_curr = T_w_lidar.pos;
         }
-
     }
 
-    void laserMapping::selectposePrediction()
-    {
+    void laserMapping::selectposePrediction() {
         prediction_source =PredictionSource::IMU_ODOM; 
         odomAvailable = extractVisualIMUOdometryAndCheck(T_w_lidar);
         if (odomAvailable) {
             return;
         } else {
             // use the incremental imu orientation as the initial guess
-            if (imuorientationAvailable == true)
-            {
+            if (imuorientationAvailable == true) {
                 //RCLCPP_WARN(this->get_logger(), "Using IMU orientation as initial guess");
                 //TODO: Need to use the absoulte orientation as the fist rotation instead of q(1,0,0,0),
                 //therefore, the system didn't support the gravity alligned
@@ -601,13 +568,11 @@ namespace arise_slam {
         double t_b_i = timestamp;
         auto after_ptr = buf.measMap_.upper_bound(t_b_i);
         //TODO: add checker for before_ptr--
-        if (after_ptr->first < 0.001)
-        {
+        if (after_ptr->first < 0.001) {
             after_ptr = buf.measMap_.begin();
         }
 
-        if (after_ptr == buf.measMap_.begin())
-        {
+        if (after_ptr == buf.measMap_.begin()) {
             Q.x()= after_ptr->second->pose.pose.orientation.x;
             Q.y()= after_ptr->second->pose.pose.orientation.y;
             Q.z()= after_ptr->second->pose.pose.orientation.z;
@@ -617,9 +582,7 @@ namespace arise_slam {
             T.y() = after_ptr->second->pose.pose.position.y;
             T.z() = after_ptr->second->pose.pose.position.z;
 
-        }else
-        {
-
+        } else {
             auto before_ptr = after_ptr;
             before_ptr--;
 
@@ -650,21 +613,14 @@ namespace arise_slam {
             t_w_i_after.z() = after_ptr->second->pose.pose.position.z;
 
             T = (1 - ratio_bi) * t_w_i_before + ratio_bi * t_w_i_after;
-
         }
-
     }
 
     void laserMapping::extractRelativeTransform(MapRingBuffer<nav_msgs::msg::Odometry::SharedPtr> &buf, Transformd &T_pre_cur, bool imu_prediction) {
-
-        if (lastOdomAvailable == false)
-        {
+        if (lastOdomAvailable == false) {
             lastOdomAvailable = true;
          //   timeLaserOdometryPrev = timeLaserOdometry;
-        }
-       else
-       {
-
+        } else {
             Eigen::Vector3d t_w_imu_cur;
             Eigen::Quaterniond q_w_imu_cur;
             getOdometryFromTimestamp(buf, timeLaserOdometry, t_w_imu_cur, q_w_imu_cur);
@@ -683,45 +639,42 @@ namespace arise_slam {
 
             T_pre_cur=T_w_imu_pre_cur;  
 
-            if(imu_prediction==false)
-            {
-            // RCLCPP_INFO(this->get_logger(), "\033[1;32m----> VIO prediction delta pos x: %f, y: %f, z: %f.\033[0m",T_w_imu_pre_cur.pos[0],T_w_imu_pre_cur.pos[1],T_w_imu_pre_cur.pos[2]);
-            // RCLCPP_INFO(this->get_logger(), "FE Start roll, pitch, yaw %f, %f, %f", roll, pitch, yaw);
-            nav_msgs::msg::Odometry relativeOdom;
-            relativeOdom.header.frame_id = WORLD_FRAME_ROT;
-            relativeOdom.child_frame_id =  SENSOR_FRAME_ROT;
-            relativeOdom.header.stamp = rclcpp::Time(timeLaserOdometry*1e9);
-            relativeOdom.pose.pose.orientation.x = T_w_imu_pre_cur.rot.x();
-            relativeOdom.pose.pose.orientation.y = T_w_imu_pre_cur.rot.y();
-            relativeOdom.pose.pose.orientation.z = T_w_imu_pre_cur.rot.z();
-            relativeOdom.pose.pose.orientation.w = T_w_imu_pre_cur.rot.w();
-            relativeOdom.pose.pose.position.x = T_w_imu_pre_cur.pos.x();
-            relativeOdom.pose.pose.position.y = T_w_imu_pre_cur.pos.y();
-            relativeOdom.pose.pose.position.z = T_w_imu_pre_cur.pos.z();
-            pubVIOPrediction->publish(relativeOdom);
-            }else
-            {  
-            //RCLCPP_INFO(this->get_logger(), "\033[1;32m----> LIO prediction delta pos x: %f, y: %f, z: %f.\033[0m",T_w_imu_pre_cur.pos[0],T_w_imu_pre_cur.pos[1],T_w_imu_pre_cur.pos[2]);
-            //RCLCPP_INFO(this->get_logger(), "FE Start roll, pitch, yaw %f, %f, %f", roll, pitch, yaw);
-            nav_msgs::msg::Odometry relativeOdom;
-            relativeOdom.header.frame_id = WORLD_FRAME_ROT;
-            relativeOdom.child_frame_id =  SENSOR_FRAME_ROT;
-            relativeOdom.header.stamp = rclcpp::Time(timeLaserOdometry*1e9);
-            relativeOdom.pose.pose.orientation.x = T_w_imu_pre_cur.rot.x();
-            relativeOdom.pose.pose.orientation.y = T_w_imu_pre_cur.rot.y();
-            relativeOdom.pose.pose.orientation.z = T_w_imu_pre_cur.rot.z();
-            relativeOdom.pose.pose.orientation.w = T_w_imu_pre_cur.rot.w();
-            relativeOdom.pose.pose.position.x = T_w_imu_pre_cur.pos.x();
-            relativeOdom.pose.pose.position.y = T_w_imu_pre_cur.pos.y();
-            relativeOdom.pose.pose.position.z = T_w_imu_pre_cur.pos.z();
-            pubLIOPrediction->publish(relativeOdom);
+            if (imu_prediction==false) {
+                // RCLCPP_INFO(this->get_logger(), "\033[1;32m----> VIO prediction delta pos x: %f, y: %f, z: %f.\033[0m",T_w_imu_pre_cur.pos[0],T_w_imu_pre_cur.pos[1],T_w_imu_pre_cur.pos[2]);
+                // RCLCPP_INFO(this->get_logger(), "FE Start roll, pitch, yaw %f, %f, %f", roll, pitch, yaw);
+                nav_msgs::msg::Odometry relativeOdom;
+                relativeOdom.header.frame_id = WORLD_FRAME_ROT;
+                relativeOdom.child_frame_id =  SENSOR_FRAME_ROT;
+                relativeOdom.header.stamp = rclcpp::Time(timeLaserOdometry*1e9);
+                relativeOdom.pose.pose.orientation.x = T_w_imu_pre_cur.rot.x();
+                relativeOdom.pose.pose.orientation.y = T_w_imu_pre_cur.rot.y();
+                relativeOdom.pose.pose.orientation.z = T_w_imu_pre_cur.rot.z();
+                relativeOdom.pose.pose.orientation.w = T_w_imu_pre_cur.rot.w();
+                relativeOdom.pose.pose.position.x = T_w_imu_pre_cur.pos.x();
+                relativeOdom.pose.pose.position.y = T_w_imu_pre_cur.pos.y();
+                relativeOdom.pose.pose.position.z = T_w_imu_pre_cur.pos.z();
+                pubVIOPrediction->publish(relativeOdom);
+            } else {  
+                //RCLCPP_INFO(this->get_logger(), "\033[1;32m----> LIO prediction delta pos x: %f, y: %f, z: %f.\033[0m",T_w_imu_pre_cur.pos[0],T_w_imu_pre_cur.pos[1],T_w_imu_pre_cur.pos[2]);
+                //RCLCPP_INFO(this->get_logger(), "FE Start roll, pitch, yaw %f, %f, %f", roll, pitch, yaw);
+                nav_msgs::msg::Odometry relativeOdom;
+                relativeOdom.header.frame_id = WORLD_FRAME_ROT;
+                relativeOdom.child_frame_id =  SENSOR_FRAME_ROT;
+                relativeOdom.header.stamp = rclcpp::Time(timeLaserOdometry*1e9);
+                relativeOdom.pose.pose.orientation.x = T_w_imu_pre_cur.rot.x();
+                relativeOdom.pose.pose.orientation.y = T_w_imu_pre_cur.rot.y();
+                relativeOdom.pose.pose.orientation.z = T_w_imu_pre_cur.rot.z();
+                relativeOdom.pose.pose.orientation.w = T_w_imu_pre_cur.rot.w();
+                relativeOdom.pose.pose.position.x = T_w_imu_pre_cur.pos.x();
+                relativeOdom.pose.pose.position.y = T_w_imu_pre_cur.pos.y();
+                relativeOdom.pose.pose.position.z = T_w_imu_pre_cur.pos.z();
+                pubLIOPrediction->publish(relativeOdom);
             } 
           // timeLaserOdometryPrev = timeLaserOdometry;
        }
     }
 
-    bool laserMapping::extractVisualIMUOdometryAndCheck(Transformd &T_w_lidar)
-    {
+    bool laserMapping::extractVisualIMUOdometryAndCheck(Transformd &T_w_lidar) {
         // Assuming VIO won't be available if IMU odom is not available
         if (imu_odom_buf.empty()) {
             // RCLCPP_DEBUG_STREAM(this->get_logger(), "IMU Odometry buffer empty! Skip odometry initial guess");
@@ -762,12 +715,10 @@ namespace arise_slam {
                 auto after_ptr = visual_odom_buf.measMap_.upper_bound(t_b_i);
                 //TODO: add checker for before_ptr--
              
-                if (after_ptr->first < 0.001)
-                  {
+                if (after_ptr->first < 0.001) {
                         after_ptr = visual_odom_buf.measMap_.begin();
                         vio_buf_ready = false;
-                   }else
-                    {
+                } else {
                     auto before_ptr = after_ptr;     
                     before_ptr--;
                     auto after_init_stat = int(after_ptr->second->pose.covariance[1]);
@@ -783,12 +734,10 @@ namespace arise_slam {
                     double t_b_prev = timeLaserOdometryPrev;
                     auto after_ptr_prev = visual_odom_buf.measMap_.upper_bound(t_b_prev);
                     
-                    if (after_ptr_prev->first < 0.001)
-                    {
+                    if (after_ptr_prev->first < 0.001) {
                         after_ptr_prev = visual_odom_buf.measMap_.begin();
                         vio_buf_ready = false;
-                    }else
-                    {                   
+                    } else {                   
                         //TODO: add checker for before_ptr--
                         auto before_ptr_prev = after_ptr_prev;
                         before_ptr_prev--;
@@ -814,14 +763,12 @@ namespace arise_slam {
                // extractRelativeTransform(imu_odom_buf, T_pre_cur,true);
                 T_w_lidar = T_w_lidar * T_pre_cur;
 
-               if(use_imu_roll_pitch_this_step)
-               {
-                Eigen::Quaterniond q_w_imu_cur;
-                Eigen::Vector3d t_w_imu_cur;
-                getOdometryFromTimestamp(imu_odom_buf, timeLaserOdometry, t_w_imu_cur, q_w_imu_cur);   
-                T_w_lidar.rot=q_w_imu_cur;
-               }
-
+                if (use_imu_roll_pitch_this_step) {
+                    Eigen::Quaterniond q_w_imu_cur;
+                    Eigen::Vector3d t_w_imu_cur;
+                    getOdometryFromTimestamp(imu_odom_buf, timeLaserOdometry, t_w_imu_cur, q_w_imu_cur);   
+                    T_w_lidar.rot=q_w_imu_cur;
+                }
                 return true;
             }
         }
@@ -831,18 +778,16 @@ namespace arise_slam {
         extractRelativeTransform(imu_odom_buf, T_pre_cur,true);
         T_w_lidar = T_w_lidar * T_pre_cur;
         
-        if(use_imu_roll_pitch_this_step)
-        {
-          Eigen::Quaterniond q_w_imu_cur;
-          Eigen::Vector3d t_w_imu_cur;
-          getOdometryFromTimestamp(imu_odom_buf, timeLaserOdometry, t_w_imu_cur, q_w_imu_cur);   
-          T_w_lidar.rot=q_w_imu_cur;
+        if (use_imu_roll_pitch_this_step) {
+            Eigen::Quaterniond q_w_imu_cur;
+            Eigen::Vector3d t_w_imu_cur;
+            getOdometryFromTimestamp(imu_odom_buf, timeLaserOdometry, t_w_imu_cur, q_w_imu_cur);   
+            T_w_lidar.rot=q_w_imu_cur;
         }
         return true;
     }
 
-    void laserMapping::publishTopic(){
-
+    void laserMapping::publishTopic() {
         TicToc t_pub;
         std_msgs::msg::String prediction_source_msg;
         switch (prediction_source) {
@@ -887,8 +832,7 @@ namespace arise_slam {
         int laserCloudFullResNum = laserCloudFullRes->points.size();
         for (int i = 0; i < laserCloudFullResNum; i++) {
             PointType const *const &pi = &laserCloudFullRes->points[i];
-            if (pi->x* pi->x+ pi->y * pi->y + pi->z* pi->z < 0.01)
-            {
+            if (pi->x* pi->x+ pi->y * pi->y + pi->z* pi->z < 0.01) {
                 continue;
             }
             pointAssociateToMap(&laserCloudFullRes->points[i],
@@ -958,8 +902,7 @@ namespace arise_slam {
 
         nav_msgs::msg::Odometry laserOdomIncremental;
 
-        if (initialization == false)
-        {
+        if (initialization == false) {
             laserOdomIncremental.header.stamp = rclcpp::Time(timeLaserOdometry*1e9);
             laserOdomIncremental.header.frame_id = WORLD_FRAME;
             laserOdomIncremental.child_frame_id =  SENSOR_FRAME;
@@ -970,10 +913,7 @@ namespace arise_slam {
             laserOdomIncremental.pose.pose.orientation.y = q_w_curr.y();
             laserOdomIncremental.pose.pose.orientation.z = q_w_curr.z();
             laserOdomIncremental.pose.pose.orientation.w = q_w_curr.w();
-        }
-        else
-        {
-
+        } else {
             laser_incremental_T = T_w_lidar;
             laser_incremental_T.rot.normalized();
 
@@ -1012,16 +952,14 @@ namespace arise_slam {
 
 
         slam.stats.header = odomAftMapped.header;
-        if (timeLatestImuOdometry.seconds() < 1.0)
-        {
+        if (timeLatestImuOdometry.seconds() < 1.0) {
             timeLatestImuOdometry = pub_time;
         }
         rclcpp::Duration latency = timeLatestImuOdometry - pub_time;  
         slam.stats.latency = latency.seconds() * 1000;
         slam.stats.n_iterations = slam.stats.iterations.size();
         // Avoid breaking rqt_multiplot
-        while (slam.stats.iterations.size() < 4)
-        {
+        while (slam.stats.iterations.size() < 4) {
             slam.stats.iterations.push_back(arise_slam_mid360_msgs::msg::IterationStats());
         }
 
@@ -1048,8 +986,7 @@ namespace arise_slam {
         // br.sendTransform(transform_stamped_);
     }
 
-    void laserMapping::save_debug_statistic (const std::string file_name)
-    {
+    void laserMapping::save_debug_statistic (const std::string file_name) {
 
         slam.kdtree_time_analysis.frameID=frameCount;
         slam.kdtree_time_analysis.timestamp=timeLaserOdometry;
@@ -1079,37 +1016,31 @@ namespace arise_slam {
 
         // Calculate cloud statistics
         bool increase_blind_radius = false;
-        if(config_.auto_voxel_size)
-        {
+        if (config_.auto_voxel_size) {
             Eigen::Vector3f average(0,0,0);
             int count_far_points = 0;
            // RCLCPP_INFO(this->get_logger(), "Asurface size: %zu", laserCloudSurfLast->points.size());
-            for (auto &point : *laserCloudSurfLast)
-            {
+            for (auto &point : *laserCloudSurfLast) {
                 average(0) += fabs(point.x);
                 average(1) += fabs(point.y);
                 average(2) += fabs(point.z);
-                if(point.x*point.x + point.y*point.y + point.z*point.z>9){
+                if (point.x*point.x + point.y*point.y + point.z*point.z>9){
                     count_far_points++;
                 }
             }
            // RCLCPP_INFO(this->get_logger(), "count_far_points: %d", count_far_points);
-            if (count_far_points > 3000)
-            {
+            if (count_far_points > 3000) {
                 increase_blind_radius = true;
             }
 
             average /= laserCloudSurfLast->points.size();
             // RCLCPP_INFO_STREAM(this->get_logger(), "average: " << average);
-            slam.stats.average_distance = average(0)*average(1)*average(2);
-            if (slam.stats.average_distance < 25)
-            {
+            slam.stats.average_distance = average(0) * average(1) * average(2);
+            if (slam.stats.average_distance < 25) {
               //  RCLCPP_DEBUG(this->get_logger(), "tiny area");
                 config_.lineRes = 0.1;
                 config_.planeRes = 0.2;
-            }
-            else if (slam.stats.average_distance > 65)
-            {
+            } else if (slam.stats.average_distance > 65) {
                 //RCLCPP_DEBUG(this->get_logger(), "large area");
                 config_.lineRes = 0.4;
                 config_.planeRes = 0.8;
@@ -1119,8 +1050,7 @@ namespace arise_slam {
         }
 
 #if 0
-        if(increase_blind_radius)
-        {
+        if (increase_blind_radius) {
             RCLCPP_DEBUG(this->get_logger(), "increase blind radius");
             pcl::CropBox<PointType> boxFilter;
             float min = -2.0;
@@ -1180,8 +1110,7 @@ namespace arise_slam {
                 pcl::fromROSMsg(fullResBuf.front(), *laserCloudFullRes);
                 fullResBuf.pop();
 
-                if(!realsenseBuf.empty())
-                {
+                if (!realsenseBuf.empty()) {
                     laserCloudRealsense->clear();
                     pcl::fromROSMsg(realsenseBuf.front(),*laserCloudRealsense);
                     realsenseBuf.pop();
@@ -1204,87 +1133,77 @@ namespace arise_slam {
                 Transformd T_lidar_w = T_w_lidar.inverse();
 
                 if (config_.shift_undistortion) {
-                  int laserCloudCornerLastNum = laserCloudCornerLast->points.size();
-                  for (int i = 0; i < laserCloudCornerLastNum; i++) {
-                    Eigen::Vector3d pt(laserCloudCornerLast->points[i].x, laserCloudCornerLast->points[i].y, laserCloudCornerLast->points[i].z);
-                    Eigen::Vector3d pt2 = T_w_lidar * pt;
+                    int laserCloudCornerLastNum = laserCloudCornerLast->points.size();
+                    for (int i = 0; i < laserCloudCornerLastNum; i++) {
+                        Eigen::Vector3d pt(laserCloudCornerLast->points[i].x, laserCloudCornerLast->points[i].y, laserCloudCornerLast->points[i].z);
+                        Eigen::Vector3d pt2 = T_w_lidar * pt;
 
-                    float x3 = pt2.x() + shiftX * laserCloudCornerLast->points[i].intensity / config_.period;
-                    float y3 = pt2.y() + shiftY * laserCloudCornerLast->points[i].intensity / config_.period;
-                    float z3 = pt2.z() + shiftZ * laserCloudCornerLast->points[i].intensity / config_.period;
+                        float x3 = pt2.x() + shiftX * laserCloudCornerLast->points[i].intensity / config_.period;
+                        float y3 = pt2.y() + shiftY * laserCloudCornerLast->points[i].intensity / config_.period;
+                        float z3 = pt2.z() + shiftZ * laserCloudCornerLast->points[i].intensity / config_.period;
 
-                    Eigen::Vector3d pt3 = T_lidar_w * Eigen::Vector3d(x3, y3, z3);
+                        Eigen::Vector3d pt3 = T_lidar_w * Eigen::Vector3d(x3, y3, z3);
 
-                    laserCloudCornerLast->points[i].x = pt3.x();
-                    laserCloudCornerLast->points[i].y = pt3.y();
-                    laserCloudCornerLast->points[i].z = pt3.z();
-                  }
+                        laserCloudCornerLast->points[i].x = pt3.x();
+                        laserCloudCornerLast->points[i].y = pt3.y();
+                        laserCloudCornerLast->points[i].z = pt3.z();
+                    }
 
-                  int laserCloudSurfLastNum = laserCloudSurfLast->points.size();
-                  for (int i = 0; i < laserCloudSurfLastNum; i++) {
-                    Eigen::Vector3d pt(laserCloudSurfLast->points[i].x, laserCloudSurfLast->points[i].y, laserCloudSurfLast->points[i].z);
-                    Eigen::Vector3d pt2 = T_w_lidar * pt;
+                    int laserCloudSurfLastNum = laserCloudSurfLast->points.size();
+                    for (int i = 0; i < laserCloudSurfLastNum; i++) {
+                        Eigen::Vector3d pt(laserCloudSurfLast->points[i].x, laserCloudSurfLast->points[i].y, laserCloudSurfLast->points[i].z);
+                        Eigen::Vector3d pt2 = T_w_lidar * pt;
 
-                    float x3 = pt2.x() + shiftX * laserCloudSurfLast->points[i].intensity / config_.period;
-                    float y3 = pt2.y() + shiftY * laserCloudSurfLast->points[i].intensity / config_.period;
-                    float z3 = pt2.z() + shiftZ * laserCloudSurfLast->points[i].intensity / config_.period;
+                        float x3 = pt2.x() + shiftX * laserCloudSurfLast->points[i].intensity / config_.period;
+                        float y3 = pt2.y() + shiftY * laserCloudSurfLast->points[i].intensity / config_.period;
+                        float z3 = pt2.z() + shiftZ * laserCloudSurfLast->points[i].intensity / config_.period;
 
-                    Eigen::Vector3d pt3 = T_lidar_w * Eigen::Vector3d(x3, y3, z3);
+                        Eigen::Vector3d pt3 = T_lidar_w * Eigen::Vector3d(x3, y3, z3);
 
-                    laserCloudSurfLast->points[i].x = pt3.x();
-                    laserCloudSurfLast->points[i].y = pt3.y();
-                    laserCloudSurfLast->points[i].z = pt3.z();
-                  }
+                        laserCloudSurfLast->points[i].x = pt3.x();
+                        laserCloudSurfLast->points[i].y = pt3.y();
+                        laserCloudSurfLast->points[i].z = pt3.z();
+                    }
 
-                  int laserCloudFullResNum = laserCloudFullRes->points.size();
-                  for (int i = 0; i < laserCloudFullResNum; i++) {
-                    Eigen::Vector3d pt(laserCloudFullRes->points[i].x, laserCloudFullRes->points[i].y, laserCloudFullRes->points[i].z);
-                    Eigen::Vector3d pt2 = T_w_lidar * pt;
+                    int laserCloudFullResNum = laserCloudFullRes->points.size();
+                    for (int i = 0; i < laserCloudFullResNum; i++) {
+                        Eigen::Vector3d pt(laserCloudFullRes->points[i].x, laserCloudFullRes->points[i].y, laserCloudFullRes->points[i].z);
+                        Eigen::Vector3d pt2 = T_w_lidar * pt;
 
-                    float x3 = pt2.x() + shiftX * float(i) / float(laserCloudFullResNum);
-                    float y3 = pt2.y() + shiftY * float(i) / float(laserCloudFullResNum);
-                    float z3 = pt2.z() + shiftZ * float(i) / float(laserCloudFullResNum);
+                        float x3 = pt2.x() + shiftX * float(i) / float(laserCloudFullResNum);
+                        float y3 = pt2.y() + shiftY * float(i) / float(laserCloudFullResNum);
+                        float z3 = pt2.z() + shiftZ * float(i) / float(laserCloudFullResNum);
 
-                    Eigen::Vector3d pt3 = T_lidar_w * Eigen::Vector3d(x3, y3, z3);
-                  
-                    laserCloudFullRes->points[i].x = pt3.x();
-                    laserCloudFullRes->points[i].y = pt3.y();
-                    laserCloudFullRes->points[i].z = pt3.z();
-                  }
+                        Eigen::Vector3d pt3 = T_lidar_w * Eigen::Vector3d(x3, y3, z3);
+                        
+                        laserCloudFullRes->points[i].x = pt3.x();
+                        laserCloudFullRes->points[i].y = pt3.y();
+                        laserCloudFullRes->points[i].z = pt3.z();
+                    }
                 }
                 
-                while(!cornerLastBuf.empty())
-                {
-
+                while(!cornerLastBuf.empty()) {
                     // RCLCPP_DEBUG_STREAM(this->get_logger(), "cornerLastBuf:" << cornerLastBuf.size());
                     cornerLastBuf.pop();
                 }
 
-                while(!surfLastBuf.empty())
-                {
-
+                while(!surfLastBuf.empty()) {
                     // RCLCPP_DEBUG_STREAM(this->get_logger(), "surfLastBuf:" << surfLastBuf.size());
                     surfLastBuf.pop();
                 }
 
-                while(!fullResBuf.empty())
-                {
-
+                while(!fullResBuf.empty()) {
                     // RCLCPP_DEBUG_STREAM(this->get_logger(), "fullResBuf:" << fullResBuf.size());
                     fullResBuf.pop();
                 }
 
 
-                while(!IMUPredictionBuf.empty())
-                {
-
+                while(!IMUPredictionBuf.empty()) {
                     // RCLCPP_DEBUG_STREAM(this->get_logger(), "IMUPredictionBuf:" << IMUPredictionBuf.size());
                     IMUPredictionBuf.pop();
                 }
 
-                while (!realsenseBuf.empty())
-                {
-
+                while (!realsenseBuf.empty()) {
                     // RCLCPP_DEBUG_STREAM(this->get_logger(), "fullResBuf:" << fullResBuf.size());
                     realsenseBuf.pop();
                 }
@@ -1295,8 +1214,7 @@ namespace arise_slam {
                 int laserCloudSurfStackNum=0;
                 adjustVoxelSize(laserCloudCornerStackNum, laserCloudSurfStackNum);
 
-                if (!laserCloudRealsense->empty())
-                {
+                if (!laserCloudRealsense->empty()) {
                     *laserCloudSurfStack = *laserCloudSurfStack + *laserCloudRealsense;
                     laserCloudSurfStackNum = laserCloudSurfStack->points.size();
                 }
@@ -1304,9 +1222,8 @@ namespace arise_slam {
                 // RCLCPP_DEBUG(this->get_logger(), "extra surface features  size: %zu", laserCloudRealsense->size());
                 // RCLCPP_DEBUG(this->get_logger(), "after surface features  size: %zu", laserCloudSurfStack->size());
 
-                 tf2::Quaternion imu_roll_pitch;
-                if (use_imu_roll_pitch_this_step)
-                {
+                tf2::Quaternion imu_roll_pitch;
+                if (use_imu_roll_pitch_this_step) {
                     double imu_roll, imu_pitch, imu_yaw;
                     tf2::Quaternion orientation(T_w_lidar.rot.x(), T_w_lidar.rot.y(), T_w_lidar.rot.z(), T_w_lidar.rot.w());
                     tf2::Matrix3x3(orientation).getRPY(imu_roll, imu_pitch, imu_yaw);
@@ -1315,15 +1232,13 @@ namespace arise_slam {
                 }
 
 
-                if(prediction_source==PredictionSource::VISUAL_ODOM) {
-                     
+                if (prediction_source==PredictionSource::VISUAL_ODOM) {
                     slam.OptSet.use_imu_roll_pitch=use_imu_roll_pitch_this_step;
                     slam.OptSet.imu_roll_pitch=imu_roll_pitch;
                     slam.Localization(initialization, LidarSLAM::PredictionSource::VISUAL_ODOM, T_w_lidar,
                                     laserCloudCornerStack, laserCloudSurfStack,timeLaserOdometry);
 
-                }else {
-                          
+                } else {    
                     slam.OptSet.use_imu_roll_pitch=use_imu_roll_pitch_this_step;
                     slam.OptSet.imu_roll_pitch=imu_roll_pitch;
                     slam.Localization(initialization, LidarSLAM::PredictionSource::IMU_ODOM, T_w_lidar,
@@ -1367,7 +1282,7 @@ namespace arise_slam {
 
               
                 publishTopic();
-                // if(config_.read_pose_file)
+                // if (config_.read_pose_file)
                 //     saveLocalizationPose(timeLaserOdometry, T_w_lidar, slam.map_dir.c_str());
                 // save_debug_statistic(debug_file);
             }
