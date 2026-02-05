@@ -131,14 +131,18 @@ namespace arise_slam {
         slam.init_roll=config_.init_roll;
         slam.init_pitch=config_.init_pitch;
         slam.init_yaw=config_.init_yaw;
+        
+        slam.LocalizationMatchDistanceScale = config_.localization_match_distance_scale;
+        slam.LocalizationInitMatchDistanceScale = config_.localization_init_match_distance_scale;
+        slam.LocalizationInitFrames = config_.localization_init_frames;
+        slam.LocalizationLineMaxDistInlier = config_.localization_line_max_dist_inlier;
+        // slam.localMap = config_.forget_far_chunks;
 
-       // slam.localMap = config_.forget_far_chunks;
-
-       // if (config_.debug_view_enabled)
-       // {
-       // TODO: It will crush since the debug view is not initialized (just for reduce topic publish)
-       // slam.debug_view = std::make_shared<arise_slam::DebugView>();
-       //   }
+        // if (config_.debug_view_enabled)
+        // {
+        // TODO: It will crush since the debug view is not initialized (just for reduce topic publish)
+        // slam.debug_view = std::make_shared<arise_slam::DebugView>();
+        //   }
 
         prediction_source = PredictionSource::IMU_ORIENTATION;
 
@@ -222,6 +226,10 @@ namespace arise_slam {
         this->declare_parameter<float>("init_pitch", 0.0);
         this->declare_parameter<float>("init_yaw", 0.0);
         this->declare_parameter<bool>("read_pose_file", false);
+        this->declare_parameter<float>("localization_match_distance_scale", 1.0);
+        this->declare_parameter<float>("localization_init_match_distance_scale", 3.0);
+        this->declare_parameter<int>("localization_init_frames", 10);
+        this->declare_parameter<float>("localization_line_max_dist_inlier", 0.2);
 
         config_.period = get_parameter("scanPeriod").as_double();
         config_.lineRes = get_parameter("mapping_line_resolution").as_double();
@@ -243,6 +251,15 @@ namespace arise_slam {
         config_.map_dir = get_parameter("map_dir").as_string(); 
         config_.local_mode = get_parameter("local_mode").as_bool();
         config_.read_pose_file = get_parameter("read_pose_file").as_bool();
+
+        config_.localization_match_distance_scale =
+            get_parameter("localization_match_distance_scale").as_double();
+        config_.localization_init_match_distance_scale =
+            get_parameter("localization_init_match_distance_scale").as_double();
+        config_.localization_init_frames =
+            get_parameter("localization_init_frames").as_int();
+        config_.localization_line_max_dist_inlier =
+            get_parameter("localization_line_max_dist_inlier").as_double();
 
         if (config_.read_pose_file) {   
             readLocalizationPose(config_.map_dir);

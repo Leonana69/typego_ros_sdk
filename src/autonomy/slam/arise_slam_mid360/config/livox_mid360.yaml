@@ -80,8 +80,13 @@ laser_mapping_node:
         ori_degeneracy_threshold: 1.0
         shift_avg_ratio: 0.2
         shift_undistortion: true
-
+        
+        # localization
         local_mode: true
+        localization_match_distance_scale: 1.0
+        localization_init_match_distance_scale: 3.0
+        localization_init_frames: 10
+        localization_line_max_dist_inlier: 0.2
         read_pose_file: false
         init_x: 0.0
         init_y: 0.0

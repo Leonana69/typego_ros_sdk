@@ -28,6 +28,13 @@ namespace arise_slam {
         bInitilization = initialization;
         T_w_lidar = position;
         Transformd T_w_inital_guess(T_w_lidar);
+        if (bInitilization &&
+            LocalizationInitFrames > 0 &&
+            LocalizationFrameCount < LocalizationInitFrames) {
+            LocalizationMatchDistanceScaleCurrent = LocalizationInitMatchDistanceScale;
+        } else {
+            LocalizationMatchDistanceScaleCurrent = LocalizationMatchDistanceScale;
+        }
 
        
 
@@ -438,6 +445,9 @@ namespace arise_slam {
             kdtree_time_analysis.kd_tree_building_time = t_add_feature.toc();
 
         }
+        if (bInitilization) {
+            LocalizationFrameCount++;
+        }
     }
 
     void LidarSLAM::ComputePointInitAndFinalPose(
@@ -480,11 +490,12 @@ namespace arise_slam {
         size_t requiredNearest;
        // double eigen_value_ratio;
         double square_max_dist;
+        double match_distance_scale = LocalizationMatchDistanceScaleCurrent;
 
         min_neighbors = this->LocalizationMinmumLineNeighborRejection;
         requiredNearest = this->LocalizationLineDistanceNbrNeighbors;
        // eigen_value_ratio = this->LocalizationLineDistancefactor;
-        square_max_dist = 3*local_map.lineRes_;
+        square_max_dist = 3 * local_map.lineRes_ * match_distance_scale;
 
         std::vector<Point> nearest_pts;
         std::vector<float> nearest_dist;
@@ -498,7 +509,7 @@ namespace arise_slam {
 
         bool bFind = local_map.nearestKSearchSpecificEdgePoint(
                 pFinal_query, nearest_pts, nearest_dist, requiredNearest,
-                static_cast<float>(this->LocalizationLineMaxDistInlier));
+                static_cast<float>(this->LocalizationLineMaxDistInlier * match_distance_scale));
 
 #endif
 
@@ -633,11 +644,12 @@ namespace arise_slam {
        // double significantlyFactor1;
        // double significantlyFactor2;
         double squredMaxDist;
+        double match_distance_scale = LocalizationMatchDistanceScaleCurrent;
 
         //significantlyFactor1 = this->LocalizationPlaneDistancefactor1;
         //significantlyFactor2 = this->LocalizationPlaneDistancefactor2;
         requiredNearest = this->LocalizationPlaneDistanceNbrNeighbors;
-        squredMaxDist = 3*local_map.planeRes_;
+        squredMaxDist = 3 * local_map.planeRes_ * match_distance_scale;
 
         std::vector<Point> nearest_pts;
         std::vector<float> nearest_dist;

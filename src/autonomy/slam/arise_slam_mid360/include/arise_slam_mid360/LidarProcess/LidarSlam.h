@@ -354,6 +354,12 @@ namespace arise_slam {
         double LocalizationLineMaxDistInlier = 0.2;
         double MinNbrMatchedKeypoints = 20.;
 
+        double LocalizationMatchDistanceScale = 1.0;
+        double LocalizationInitMatchDistanceScale = 3.0;
+        int LocalizationInitFrames = 10;
+        int LocalizationFrameCount = 0;
+        double LocalizationMatchDistanceScaleCurrent = 1.0;
+
         // The max distance allowed between two frames
         // If the distance is over this limit, the ICP
         // matching will not match point and the odometry

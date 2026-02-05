@@ -73,6 +73,10 @@ namespace arise_slam {
         float init_pitch;
         float init_yaw;
         float read_pose_file;
+        float localization_match_distance_scale;
+        float localization_init_match_distance_scale;
+        int localization_init_frames;
+        float localization_line_max_dist_inlier;
     };
     
     struct OdometryData {
