@@ -37,6 +37,7 @@ def generate_launch_description():
       'cameraOffsetZ': cameraOffsetZ,
       'goalX': vehicleX,
       'goalY': vehicleY,
+      'config': 'dog',
     }.items()
   )
 
@@ -90,7 +91,7 @@ def generate_launch_description():
 
   start_tare_planner = IncludeLaunchDescription(
     PythonLaunchDescriptionSource(
-      [get_package_share_directory('tare_planner'), '/explore_world.launch']),
+      [get_package_share_directory('tare_planner'), '/explore_world.launch.py']),
     launch_arguments={
       'scenario': exploration_planner_config,
     }.items()

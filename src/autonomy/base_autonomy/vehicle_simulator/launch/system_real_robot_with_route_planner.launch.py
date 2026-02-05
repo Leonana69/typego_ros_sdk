@@ -37,6 +37,7 @@ def generate_launch_description():
       'cameraOffsetZ': cameraOffsetZ,
       'goalX': vehicleX,
       'goalY': vehicleY,
+      'config': 'dog',
     }.items()
   )
 
