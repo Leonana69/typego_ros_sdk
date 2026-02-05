@@ -15,9 +15,11 @@ def generate_launch_description():
     print(f'Go2🤖 Using robot namespace: {robot_ns if robot_ns else "<none>"}')
 
     if autonomy_type == 'base':
-        xfer_format = 'None'
+        # nav2 use Twist
         cmd_vel_type = 'Twist'
+        xfer_format = 'None'
     else:
+        # full autonomy use TwistStamped
         cmd_vel_type = 'TwistStamped'
         xfer_format = 'CustomMsg'
     
