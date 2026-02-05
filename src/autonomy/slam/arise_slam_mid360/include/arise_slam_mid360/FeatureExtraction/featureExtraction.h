@@ -47,7 +47,7 @@
 #include <message_filters/subscriber.h>
 #include <message_filters/time_synchronizer.h>
 
-#include <livox_ros_driver2/msg/custom_msg.hpp>
+#include <typego_interface/msg/custom_msg.hpp>
 #include <omp.h>
 
 namespace arise_slam {
@@ -159,9 +159,9 @@ namespace arise_slam {
 
         void laserCloudHandler(const sensor_msgs::msg::PointCloud2::SharedPtr laserCloudMsg);
 
-        void livoxHandler(const livox_ros_driver2::msg::CustomMsg::UniquePtr msg);
+        void livoxHandler(const typego_interface::msg::CustomMsg::UniquePtr msg);
 
-        void uniformFeatureExtraction(int pl_size, const livox_ros_driver2::msg::CustomMsg::UniquePtr msg);
+        void uniformFeatureExtraction(int pl_size, const typego_interface::msg::CustomMsg::UniquePtr msg);
 
         void assignTimeforPointCloud(pcl::PointCloud<PointType>::Ptr laserCloudIn_ptr_);
         
@@ -214,7 +214,7 @@ namespace arise_slam {
         rclcpp::Subscription<sensor_msgs::msg::PointCloud2>::SharedPtr sub_depth_up;
         rclcpp::Subscription<sensor_msgs::msg::PointCloud2>::SharedPtr sub_depth_down;
 
-        rclcpp::Subscription<livox_ros_driver2::msg::CustomMsg>::SharedPtr subLivoxCloud;
+        rclcpp::Subscription<typego_interface::msg::CustomMsg>::SharedPtr subLivoxCloud;
 
         // Publishers
         rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pubLaserCloud;

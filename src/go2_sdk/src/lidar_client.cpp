@@ -21,8 +21,8 @@
 
 #include "tf2_ros/static_transform_broadcaster.h"
 #include "typego_sdk/namespace_utils.hpp"
-#include "livox_ros_driver2/msg/custom_msg.hpp"
-#include "livox_ros_driver2/msg/custom_point.hpp"
+#include "typego_interface/msg/custom_msg.hpp"
+#include "typego_interface/msg/custom_point.hpp"
 
 // Optimized point structure (xyz only, int16 in millimeters)
 #pragma pack(push, 1)
@@ -124,7 +124,7 @@ public:
         // Point cloud publishers are only created if publish_point_cloud_ is true
         if (publish_point_cloud_) {
             if (use_custom_msg_) {
-                custom_publisher_ = this->create_publisher<livox_ros_driver2::msg::CustomMsg>("livox/lidar", 10);
+                custom_publisher_ = this->create_publisher<typego_interface::msg::CustomMsg>("livox/lidar", 10);
             } else {
                 publisher_ = this->create_publisher<sensor_msgs::msg::PointCloud2>("livox/lidar", 10);
             }
@@ -380,7 +380,7 @@ private:
             if (use_custom_msg_) {
                 // Store points with additional info for CustomMsg format
                 for (uint16_t i = 0; i < point_count; ++i) {
-                    livox_ros_driver2::msg::CustomPoint pt;
+                    typego_interface::msg::CustomPoint pt;
                     pt.x = opt_points[i].x * MM_TO_M;
                     pt.y = opt_points[i].y * MM_TO_M;
                     pt.z = opt_points[i].z * MM_TO_M;
@@ -413,7 +413,7 @@ private:
 
     void publish_aggregated_cloud() {
         std::vector<float> local_buffer;
-        std::vector<livox_ros_driver2::msg::CustomPoint> local_custom_points;
+        std::vector<typego_interface::msg::CustomPoint> local_custom_points;
         uint64_t local_base_time_ns = 0;
         
         {
@@ -463,7 +463,7 @@ private:
                 num_points = local_custom_points.size();
                 if (num_points == 0) return;
                 
-                livox_ros_driver2::msg::CustomMsg custom_msg;
+                typego_interface::msg::CustomMsg custom_msg;
                 custom_msg.header.stamp = timestamp;
                 custom_msg.header.frame_id = "lidar_link";
                 custom_msg.timebase = local_base_time_ns;
@@ -594,7 +594,7 @@ private:
         laserscan_publisher_->publish(scan_msg);
     }
     
-    void publish_laser_scan_from_custom(const std::vector<livox_ros_driver2::msg::CustomPoint>& points, 
+    void publish_laser_scan_from_custom(const std::vector<typego_interface::msg::CustomPoint>& points, 
                                         const rclcpp::Time& timestamp) {
         sensor_msgs::msg::LaserScan scan_msg;
         scan_msg.header.stamp = timestamp;
@@ -637,10 +637,10 @@ private:
     rclcpp::TimerBase::SharedPtr pub_timer_;
     std::mutex buffer_mutex_;
     std::vector<float> point_buffer_;
-    std::vector<livox_ros_driver2::msg::CustomPoint> custom_points_;
+    std::vector<typego_interface::msg::CustomPoint> custom_points_;
     std::vector<sensor_msgs::msg::PointField> fields_;
     rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr publisher_;
-    rclcpp::Publisher<livox_ros_driver2::msg::CustomMsg>::SharedPtr custom_publisher_;
+    rclcpp::Publisher<typego_interface::msg::CustomMsg>::SharedPtr custom_publisher_;
     rclcpp::Publisher<sensor_msgs::msg::LaserScan>::SharedPtr laserscan_publisher_;
     rclcpp::Publisher<sensor_msgs::msg::Imu>::SharedPtr imu_publisher_;
     std::unique_ptr<tf2_ros::StaticTransformBroadcaster> static_tf_broadcaster_;

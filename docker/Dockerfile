@@ -43,6 +43,8 @@ RUN apt-get update && apt-get install -y ros-humble-rmw-cyclonedds-cpp ros-humbl
 ENV RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
 ENV CYCLONEDDS_URI=/workspace/src/typego_sdk/config/cyclonedds_shm.xml
 
+# install qt5
+RUN apt-get update && apt-get install -y qtdeclarative5-dev libpcl-dev ros-humble-rviz2 ros-humble-pcl-conversions ros-humble-pcl-ros
 # install pip packages
 # RUN apt-get update && apt-get install -y python3-pip
 # RUN pip3 install flask pillow numpy opencv-python openai groq requests aiohttp overrides

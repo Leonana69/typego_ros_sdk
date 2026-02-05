@@ -23,7 +23,7 @@ find_package(tf2 REQUIRED)
 find_package(OpenCV REQUIRED)
 find_package(CURL REQUIRED)
 find_package(typego_sdk REQUIRED)
-find_package(livox_ros_driver2 REQUIRED)
+find_package(typego_interface REQUIRED)
 
 # Add include directory
 include_directories(include)
@@ -47,7 +47,7 @@ ament_target_dependencies(lidar_client_node PUBLIC
   sensor_msgs
   tf2_ros
   typego_sdk
-  livox_ros_driver2
+  typego_interface
 )
 target_link_libraries(lidar_client_node PUBLIC
   ${sensor_msgs_TARGETS}

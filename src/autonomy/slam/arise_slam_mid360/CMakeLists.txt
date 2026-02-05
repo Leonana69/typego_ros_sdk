@@ -49,7 +49,7 @@ find_package(pcl_conversions REQUIRED)
 find_package(Ceres REQUIRED)
 find_package(GTSAM REQUIRED QUIET)
 find_package(TBB REQUIRED)
-find_package(livox_ros_driver2 REQUIRED)
+find_package(typego_interface REQUIRED)
 
 # Include directories
 include_directories(
@@ -61,7 +61,7 @@ include_directories(
   ${TBB_INCLUDE_DIR}
   ${Sophus_INCLUDE_DIRS}
   ${pcl_conversions_INCLUDE_DIRS}
-  ${livox_ros_driver2_INCLUDE_DIRS}
+  ${typego_interface_INCLUDE_DIRS}
 )
 
 # Link directories
@@ -111,7 +111,7 @@ ament_target_dependencies(AriseSlamLib
   arise_slam_mid360_msgs
   visualization_msgs
   pcl_conversions
-  livox_ros_driver2
+  typego_interface
 )
 target_link_libraries(AriseSlamLib
   ${PCL_LIBRARIES}
@@ -132,7 +132,7 @@ target_link_libraries(imu_preintegration_node
 
 # Feature Extraction node
 add_executable(feature_extraction_node src/featureExtraction_node.cpp)
-ament_target_dependencies(feature_extraction_node rclcpp nav_msgs sensor_msgs arise_slam_mid360_msgs livox_ros_driver2)
+ament_target_dependencies(feature_extraction_node rclcpp nav_msgs sensor_msgs arise_slam_mid360_msgs typego_interface)
 target_link_libraries(feature_extraction_node 
   ${PCL_LIBRARIES}
   ${TBB_LIBRARIES}

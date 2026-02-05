@@ -5,7 +5,7 @@ from launch_ros.actions import Node
 def generate_launch_description():
     # Get robot namespace from ROBOT_ID environment variable
     robot_id = os.environ.get('ROBOT_ID', '')
-    autonomy_type = os.environ.get('AUTONOMY_TYPE', 'base_autonomy')
+    autonomy_type = os.environ.get('AUTONOMY_TYPE', 'base')
     if robot_id:
         robot_name = f'robot{robot_id}'
         robot_ns = f'/{robot_name}'
@@ -13,6 +13,13 @@ def generate_launch_description():
         robot_ns = ''
     
     print(f'Go2🤖 Using robot namespace: {robot_ns if robot_ns else "<none>"}')
+
+    if autonomy_type == 'base':
+        xfer_format = 'None'
+        cmd_vel_type = 'Twist'
+    else:
+        cmd_vel_type = 'TwistStamped'
+        xfer_format = 'CustomMsg'
     
     # Create remapping list for tf topics
     tf_remappings = []
@@ -36,7 +43,7 @@ def generate_launch_description():
         executable='lidar_client_node',
         name='lidar_client_node',
         parameters=[{
-            'xfer_format': 'CustomMsg',  # Use 'CustomMsg' or 'PointCloud2'
+            'xfer_format': xfer_format,  # Use 'CustomMsg' or 'PointCloud2' or 'None'
             'publish_rate': 10.0,        # Hz
             'scan_timeout_ms': 200       # milliseconds
         }],
@@ -56,7 +63,7 @@ def generate_launch_description():
         name='cmd_vel_controller_node',
         parameters=[{
             'accept_cmd_vel': True,
-            'cmd_vel_type': 'TwistStamped'  # Use 'Twist' or 'TwistStamped'
+            'cmd_vel_type': cmd_vel_type  # Use 'Twist' or 'TwistStamped'
         }],
         output='screen'
     )

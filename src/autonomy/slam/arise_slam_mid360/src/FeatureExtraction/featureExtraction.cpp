@@ -71,7 +71,7 @@ namespace arise_slam {
                     std::bind(&featureExtraction::laserCloudHandler, this,
                     std::placeholders::_1), sub_options);
         } else if (config_.sensor == SensorType::LIVOX) {
-            subLivoxCloud = this->create_subscription<livox_ros_driver2::msg::CustomMsg>(LASER_TOPIC, 20, 
+            subLivoxCloud = this->create_subscription<typego_interface::msg::CustomMsg>(LASER_TOPIC, 20, 
                     std::bind(&featureExtraction::livoxHandler, this,
                     std::placeholders::_1), sub_options);
         } //TODO: add this to config
@@ -1538,7 +1538,7 @@ namespace arise_slam {
     }
 
     //TODO: add livox mid360 handler
-    void featureExtraction::livoxHandler(const livox_ros_driver2::msg::CustomMsg::UniquePtr msg)
+    void featureExtraction::livoxHandler(const typego_interface::msg::CustomMsg::UniquePtr msg)
     {     
 
         if (imuBuf.empty())
