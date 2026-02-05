@@ -7,6 +7,7 @@
 #include "rclcpp/rclcpp.hpp"
 #include "rclcpp/time.hpp"
 #include "builtin_interfaces/msg/time.hpp"
+#include "std_srvs/srv/trigger.hpp"
 
 #include "nav_msgs/msg/odometry.hpp"
 #include "sensor_msgs/msg/point_cloud2.hpp"
@@ -39,6 +40,7 @@ string metricFile;
 string trajFile;
 string pcdFile;
 string mapFile;
+string exploredAreaFile;
 double overallMapVoxelSize = 0.5;
 double exploredAreaVoxelSize = 0.3;
 double exploredVolumeVoxelSize = 0.5;
@@ -91,6 +93,41 @@ shared_ptr<rclcpp::Publisher<std_msgs::msg::Float32>> pubTimeDurationPtr;
 FILE *metricFilePtr = NULL;
 FILE *trajFilePtr = NULL;
 FILE *pcdFilePtr = NULL;
+
+string getTimeString()
+{
+  time_t logTime = time(0);
+  tm *ltm = localtime(&logTime);
+  return to_string(1900 + ltm->tm_year) + "-" + to_string(1 + ltm->tm_mon) + "-" +
+         to_string(ltm->tm_mday) + "-" + to_string(ltm->tm_hour) + "-" +
+         to_string(ltm->tm_min) + "-" + to_string(ltm->tm_sec);
+}
+
+void saveExploredAreasHandler(
+  const std::shared_ptr<std_srvs::srv::Trigger::Request> request,
+  std::shared_ptr<std_srvs::srv::Trigger::Response> response)
+{
+  (void)request;
+
+  if (exploredAreaCloud->empty()) {
+    response->success = false;
+    response->message = "explored_areas is empty.";
+    return;
+  }
+
+  pcl::PointCloud<pcl::PointXYZI>::Ptr exploredSnapshot(new pcl::PointCloud<pcl::PointXYZI>());
+  *exploredSnapshot = *exploredAreaCloud;
+  string exploredAreaFilePath = exploredAreaFile + "_" + getTimeString() + ".pcd";
+
+  if (pcl::io::savePCDFileBinary(exploredAreaFilePath, *exploredSnapshot) == -1) {
+    response->success = false;
+    response->message = "Failed to save explored_areas to " + exploredAreaFilePath;
+    return;
+  }
+
+  response->success = true;
+  response->message = "Saved explored_areas to " + exploredAreaFilePath;
+}
 
 void odometryHandler(const nav_msgs::msg::Odometry::ConstSharedPtr odom)
 {
@@ -246,6 +283,7 @@ int main(int argc, char** argv)
   nh->declare_parameter<std::string>("trajFile", trajFile);
   nh->declare_parameter<std::string>("pcdFile", pcdFile);
   nh->declare_parameter<std::string>("mapFile", mapFile);
+  nh->declare_parameter<std::string>("exploredAreaFile", exploredAreaFile);
   nh->declare_parameter<double>("overallMapVoxelSize", overallMapVoxelSize);
   nh->declare_parameter<double>("exploredAreaVoxelSize", exploredAreaVoxelSize);
   nh->declare_parameter<double>("exploredVolumeVoxelSize", exploredVolumeVoxelSize);
@@ -261,6 +299,7 @@ int main(int argc, char** argv)
   nh->get_parameter("trajFile", trajFile);
   nh->get_parameter("pcdFile", pcdFile);
   nh->get_parameter("mapFile", mapFile);
+  nh->get_parameter("exploredAreaFile", exploredAreaFile);
   nh->get_parameter("overallMapVoxelSize", overallMapVoxelSize);
   nh->get_parameter("exploredAreaVoxelSize", exploredAreaVoxelSize);
   nh->get_parameter("exploredVolumeVoxelSize", exploredVolumeVoxelSize);
@@ -273,10 +312,11 @@ int main(int argc, char** argv)
   nh->get_parameter("savePcd", savePcd);
 
   // No direct replacement present for $(find pkg) in ROS2. Edit file path.
-  mapFile.replace(mapFile.find("/install/"), 8, "/src/base_autonomy");
-  metricFile.replace(metricFile.find("/install/"), 8, "/src/base_autonomy");
-  trajFile.replace(trajFile.find("/install/"), 8, "/src/base_autonomy");
-  pcdFile.replace(pcdFile.find("/install/"), 8, "/src/base_autonomy");
+  mapFile.replace(mapFile.find("/install/"), 8, "/src/autonomy/base_autonomy");
+  metricFile.replace(metricFile.find("/install/"), 8, "/src/autonomy/base_autonomy");
+  trajFile.replace(trajFile.find("/install/"), 8, "/src/autonomy/base_autonomy");
+  pcdFile.replace(pcdFile.find("/install/"), 8, "/src/autonomy/base_autonomy");
+  exploredAreaFile.replace(exploredAreaFile.find("/install/"), 8, "/src/autonomy/base_autonomy");
 
   auto subOdometry = nh->create_subscription<nav_msgs::msg::Odometry>("/state_estimation", 5, odometryHandler);
 
@@ -296,6 +336,10 @@ int main(int argc, char** argv)
 
   pubTimeDurationPtr = nh->create_publisher<std_msgs::msg::Float32>("/time_duration", 5);
 
+  auto saveExploredAreasService =
+    nh->create_service<std_srvs::srv::Trigger>("/save_explored_areas", saveExploredAreasHandler);
+  (void)saveExploredAreasService;
+
   overallMapDwzFilter.setLeafSize(overallMapVoxelSize, overallMapVoxelSize, overallMapVoxelSize);
   exploredAreaDwzFilter.setLeafSize(exploredAreaVoxelSize, exploredAreaVoxelSize, exploredAreaVoxelSize);
   exploredVolumeDwzFilter.setLeafSize(exploredVolumeVoxelSize, exploredVolumeVoxelSize, exploredVolumeVoxelSize);
@@ -313,10 +357,7 @@ int main(int argc, char** argv)
   int overallMapCloudDwzSize = overallMapCloudDwz->points.size();
   pcl::toROSMsg(*overallMapCloudDwz, overallMap2);
 
-  time_t logTime = time(0);
-  tm *ltm = localtime(&logTime);
-  string timeString = to_string(1900 + ltm->tm_year) + "-" + to_string(1 + ltm->tm_mon) + "-" + to_string(ltm->tm_mday) + "-" +
-                      to_string(ltm->tm_hour) + "-" + to_string(ltm->tm_min) + "-" + to_string(ltm->tm_sec);
+  string timeString = getTimeString();
 
   metricFile += "_" + timeString + ".txt";
   trajFile += "_" + timeString + ".txt";
