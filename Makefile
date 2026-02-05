@@ -60,7 +60,9 @@ docker_build:
 	@make docker_stop
 	@make docker_remove
 	@echo -n "=>"
-	docker build -t $(IMAGE) -f $(DOCKERFILE) .
+	docker build \
+		--build-arg AUTONOMY_TYPE=$(AUTONOMY_TYPE) \
+		-t $(IMAGE) -f $(DOCKERFILE) .
 	@echo -n "=>"
 	@make docker_start
 

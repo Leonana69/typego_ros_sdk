@@ -53,8 +53,11 @@ RUN apt-get update && apt-get install -y qtdeclarative5-dev libpcl-dev ros-humbl
 RUN echo "source /opt/ros/$ROS_DISTRO/setup.bash" >> /root/.bashrc
 
 COPY ../src /workspace/src
+COPY ../Makefile /workspace/Makefile
 WORKDIR /workspace
 
-RUN /bin/bash -c "source /opt/ros/$ROS_DISTRO/setup.bash && cd /workspace && colcon build"
+ARG AUTONOMY_TYPE
+ENV AUTONOMY_TYPE=${AUTONOMY_TYPE}
+RUN /bin/bash -c "source /opt/ros/$ROS_DISTRO/setup.bash && cd /workspace && make build"
 RUN chmod +x /workspace/src/typego_sdk/scripts/*.sh
 CMD ["bash", "-c", "source /workspace/install/setup.bash && /workspace/src/typego_sdk/scripts/run.sh"]

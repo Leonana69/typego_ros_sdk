@@ -47,6 +47,7 @@ def generate_launch_description():
             'publish_rate': 10.0,        # Hz
             'scan_timeout_ms': 200       # milliseconds
         }],
+        remappings=tf_remappings,
         output='screen'
     )
     
