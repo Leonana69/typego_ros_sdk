@@ -1,0 +1,12 @@
+localPlanner:
+  ros__parameters:
+    omniDirGoalThre: -1.0
+
+pathFollower:
+  ros__parameters:
+    omniDirGoalThre: -1.0
+    yawRateGain: 3.0
+    stopYawRateGain: 4.0
+    maxYawRate: 60.0
+    dirDiffThre: 0.35
+    stopDisThre: 0.25
