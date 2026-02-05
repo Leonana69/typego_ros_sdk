@@ -4,6 +4,7 @@
 
 
 #include "arise_slam_mid360/LaserMapping/laserMapping.h"
+#include <pcl/io/pcd_io.h>
 
 double parameters[7] = {0, 0, 0, 0, 0, 0, 1};
 Eigen::Map<Eigen::Vector3d> t_w_curr(parameters);
@@ -274,6 +275,24 @@ namespace arise_slam {
     
     bool laserMapping::readPointCloud()
     {
+        // Load PCD file
+        if (slam.map_dir.size() >= 4 &&
+            slam.map_dir.substr(slam.map_dir.size() - 4) == ".pcd") {
+            if (pcl::io::loadPCDFile<PointType>(slam.map_dir, *laserCloudPriorOrg) == -1) {
+                return false;
+            }
+
+            downSizeFilterSurf.setInputCloud(laserCloudPriorOrg);
+            downSizeFilterSurf.filter(*laserCloudPrior);
+            laserCloudPriorOrg->clear();
+
+            pcl::toROSMsg(*laserCloudPrior, priorCloudMsg);
+            priorCloudMsg.header.frame_id = WORLD_FRAME;
+
+            return true;
+        }
+
+        // Load TXT file: x y z intensity time
         FILE *map_file = fopen(slam.map_dir.c_str(), "r");
         if (map_file == NULL) {
             return false;
@@ -323,8 +342,8 @@ namespace arise_slam {
         std::string line;
         while (std::getline(file, line)) {
             if (line.empty()) {
-            continue;
-    }
+                continue;
+            }
             std::istringstream iss(line);
             arise_slam::OdometryData odom;
             if (iss >> odom.x >> odom.y >> odom.z >> odom.roll >> odom.pitch >> odom.yaw >> odom.duration) {

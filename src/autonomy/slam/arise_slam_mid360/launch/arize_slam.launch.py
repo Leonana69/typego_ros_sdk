@@ -3,7 +3,7 @@ import os
 from ament_index_python import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
-from launch.substitutions import LaunchConfiguration, PythonExpression
+from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 import launch_ros
 
@@ -18,7 +18,6 @@ def generate_launch_description():
         package_name="arise_slam_mid360",
         file_name="config/livox_mid360_calibration.yaml"
     )
-    home_directory = os.path.expanduser("~")
     
     config_path_arg = DeclareLaunchArgument(
         "config_file",
@@ -28,6 +27,11 @@ def generate_launch_description():
     calib_path_arg = DeclareLaunchArgument(
         "calibration_file",
         default_value=calib_path,
+    )
+    map_dir_arg = DeclareLaunchArgument(
+        "map_dir",
+        default_value="",
+        description="Optional path to map directory"
     )
     odom_topic_arg = DeclareLaunchArgument(
         "odom_topic",
@@ -58,8 +62,10 @@ def generate_launch_description():
             "stderr": "screen",
         },
         parameters=[LaunchConfiguration("config_file"),
-            { "calibration_file": LaunchConfiguration("calibration_file"),
-        }],
+            {
+                "calibration_file": LaunchConfiguration("calibration_file"),
+            },
+        ],
     )
 
     laser_mapping_node = Node(
@@ -70,9 +76,11 @@ def generate_launch_description():
             "stderr": "screen",
         },
         parameters=[LaunchConfiguration("config_file"),
-            { "calibration_file": LaunchConfiguration("calibration_file"),
-             "map_dir": os.path.join(home_directory, "Desktop/pointcloud_local.txt"),
-        }],
+            {
+                "calibration_file": LaunchConfiguration("calibration_file"),
+                "map_dir": LaunchConfiguration("map_dir"),
+            },
+        ],
         remappings=[
             ("laser_odom_to_init", LaunchConfiguration("odom_topic")),
         ]
@@ -86,8 +94,10 @@ def generate_launch_description():
             "stderr": "screen",
         },
         parameters=[LaunchConfiguration("config_file"),
-            { "calibration_file": LaunchConfiguration("calibration_file")
-        }],
+            {
+                "calibration_file": LaunchConfiguration("calibration_file"),
+            },
+        ],
     )
 
     
@@ -95,6 +105,7 @@ def generate_launch_description():
         launch_ros.actions.SetParameter(name='use_sim_time', value='false'),
         config_path_arg,
         calib_path_arg,
+        map_dir_arg,
         odom_topic_arg,
         world_frame_arg,
         world_frame_rot_arg,

@@ -63,7 +63,10 @@ def generate_launch_description():
   start_arise_slam = IncludeLaunchDescription(
     PythonLaunchDescriptionSource(os.path.join(
       get_package_share_directory('arise_slam_mid360'), 'launch', 'arize_slam.launch.py')
-    )
+    ),
+    launch_arguments={
+      'map_dir': '/home/guojun/Documents/typego_ros_sdk/src/autonomy/base_autonomy/vehicle_simulator/log/explored_areas_2026-2-5-16-49-55.pcd',
+    }.items()
   )
 
   start_visualization_tools = IncludeLaunchDescription(

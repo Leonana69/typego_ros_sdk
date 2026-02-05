@@ -81,7 +81,7 @@ laser_mapping_node:
         shift_avg_ratio: 0.2
         shift_undistortion: true
 
-        local_mode: false
+        local_mode: true
         read_pose_file: false
         init_x: 0.0
         init_y: 0.0
