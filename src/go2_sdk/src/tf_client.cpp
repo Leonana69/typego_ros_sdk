@@ -14,6 +14,7 @@
 #include <cmath>
 #include <arpa/inet.h>
 #include <fcntl.h>
+#include <chrono>
 
 #include "typego_sdk/namespace_utils.hpp"
 
@@ -37,31 +38,11 @@ public:
         imu_pub_ = this->create_publisher<sensor_msgs::msg::Imu>("imu/data", 10);
 
         const char* go2_ip = std::getenv("ROBOT_IP");
-        std::string go2_ip_ = go2_ip ? std::string(go2_ip) : "192.168.0.243";
-        const uint16_t go2_livox_port = 8889;
+        robot_ip_ = go2_ip ? std::string(go2_ip) : "192.168.0.243";
+        robot_port_ = 8889;
 
-        // UDP setup
-        socket_ = socket(AF_INET, SOCK_DGRAM, 0);
-
-        // Non-blocking
-        int flags = fcntl(socket_, F_GETFL, 0);
-        fcntl(socket_, F_SETFL, flags | O_NONBLOCK);
-
-        // Bind socket
-        sockaddr_in addr{};
-        addr.sin_family = AF_INET;
-        addr.sin_port = htons(go2_livox_port);
-        addr.sin_addr.s_addr = INADDR_ANY;
-        bind(socket_, (sockaddr*)&addr, sizeof(addr));
-
-        // Send init packet
-        sockaddr_in server_addr{};
-        server_addr.sin_family = AF_INET;
-        server_addr.sin_port = htons(go2_livox_port);
-        inet_pton(AF_INET, go2_ip_.c_str(), &server_addr.sin_addr);
-        uint8_t init_packet[1] = {0};
-        sendto(socket_, init_packet, sizeof(init_packet), 0, 
-               (sockaddr*)&server_addr, sizeof(server_addr));
+        // Initialize connection
+        connect_to_robot();
 
         timer_ = this->create_wall_timer(
             std::chrono::milliseconds(5),
@@ -72,6 +53,12 @@ public:
         RCLCPP_INFO(this->get_logger(), 
                     "Go2 TF Client initialized in namespace: %s, publishing to %s/tf", 
                     ns.c_str(), ns.c_str());
+    }
+
+    ~TFClientNode() {
+        if (socket_ >= 0) {
+            close(socket_);
+        }
     }
 
 private:
@@ -88,10 +75,97 @@ private:
         static_tf_broadcaster_->sendTransform(t);
     }
 
+    void connect_to_robot() {
+        // Close existing socket if any
+        if (socket_ >= 0) {
+            close(socket_);
+        }
+
+        // Create UDP socket
+        socket_ = socket(AF_INET, SOCK_DGRAM, 0);
+        if (socket_ < 0) {
+            RCLCPP_ERROR(this->get_logger(), "Failed to create socket");
+            return;
+        }
+
+        // Set non-blocking
+        int flags = fcntl(socket_, F_GETFL, 0);
+        fcntl(socket_, F_SETFL, flags | O_NONBLOCK);
+
+        // Bind socket
+        sockaddr_in addr{};
+        addr.sin_family = AF_INET;
+        addr.sin_port = htons(robot_port_);
+        addr.sin_addr.s_addr = INADDR_ANY;
+        
+        if (bind(socket_, (sockaddr*)&addr, sizeof(addr)) < 0) {
+            RCLCPP_ERROR(this->get_logger(), "Failed to bind socket");
+            close(socket_);
+            socket_ = -1;
+            return;
+        }
+
+        // Send init packet
+        sockaddr_in server_addr{};
+        server_addr.sin_family = AF_INET;
+        server_addr.sin_port = htons(robot_port_);
+        inet_pton(AF_INET, robot_ip_.c_str(), &server_addr.sin_addr);
+        uint8_t init_packet[1] = {0};
+        
+        ssize_t sent = sendto(socket_, init_packet, sizeof(init_packet), 0, 
+                              (sockaddr*)&server_addr, sizeof(server_addr));
+        
+        if (sent < 0) {
+            RCLCPP_ERROR(this->get_logger(), "Failed to send init packet to %s:%d", 
+                         robot_ip_.c_str(), robot_port_);
+        } else {
+            RCLCPP_INFO(this->get_logger(), "Connected to robot at %s:%d", 
+                        robot_ip_.c_str(), robot_port_);
+            last_data_time_ = std::chrono::steady_clock::now();
+            connection_active_ = true;
+        }
+    }
+
+    void attempt_reconnect() {
+        auto now = std::chrono::steady_clock::now();
+        
+        // Check if we should attempt reconnection (5 seconds since last attempt)
+        if (std::chrono::duration_cast<std::chrono::seconds>(now - last_reconnect_attempt_).count() < 5) {
+            return;
+        }
+
+        RCLCPP_WARN(this->get_logger(), "Attempting to reconnect to robot...");
+        last_reconnect_attempt_ = now;
+        
+        connect_to_robot();
+    }
+
     void poll_socket() {
+        // Check for timeout if connection is active
+        if (connection_active_) {
+            auto now = std::chrono::steady_clock::now();
+            auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(now - last_data_time_).count();
+            
+            if (elapsed >= 5) {
+                RCLCPP_WARN(this->get_logger(), "No data received for %ld seconds, connection lost", elapsed);
+                connection_active_ = false;
+                last_reconnect_attempt_ = std::chrono::steady_clock::now() - std::chrono::seconds(5); // Allow immediate reconnect
+            }
+        }
+
+        // Try to reconnect if not connected
+        if (!connection_active_) {
+            attempt_reconnect();
+            return;
+        }
+
+        // Poll for data
         std::vector<uint8_t> buffer(2048);
         ssize_t rlen = recvfrom(socket_, buffer.data(), buffer.size(), 0, nullptr, nullptr);
         if (rlen < static_cast<ssize_t>(13 * sizeof(float))) return;
+
+        // Data received successfully, update timestamp
+        last_data_time_ = std::chrono::steady_clock::now();
 
         const float* data = reinterpret_cast<float*>(buffer.data());
 
@@ -143,6 +217,13 @@ private:
     std::shared_ptr<tf2_ros::TransformBroadcaster> tf_broadcaster_;
     rclcpp::Publisher<sensor_msgs::msg::Imu>::SharedPtr imu_pub_;
     std::unique_ptr<tf2_ros::StaticTransformBroadcaster> static_tf_broadcaster_;
+    
+    // Connection management
+    std::string robot_ip_;
+    uint16_t robot_port_;
+    std::chrono::steady_clock::time_point last_data_time_;
+    std::chrono::steady_clock::time_point last_reconnect_attempt_;
+    bool connection_active_ = false;
 };
 
 int main(int argc, char** argv) {

@@ -136,42 +136,12 @@ public:
         init_lidar_link_tf();
 
         const char* go2_ip = std::getenv("ROBOT_IP");
-        std::string go2_ip_ = go2_ip ? std::string(go2_ip) : "192.168.0.243";
-        RCLCPP_INFO(this->get_logger(), "Go2 IP: %s", go2_ip_.c_str());
-        const uint16_t go2_livox_port = 8888;
+        robot_ip_ = go2_ip ? std::string(go2_ip) : "192.168.0.243";
+        robot_port_ = 8888;
+        RCLCPP_INFO(this->get_logger(), "Go2 IP: %s", robot_ip_.c_str());
 
-        // UDP setup with non-blocking socket and initial dummy packet
-        socket_ = socket(AF_INET, SOCK_DGRAM, 0);
-
-        // Set socket to non-blocking
-        int flags = fcntl(socket_, F_GETFL, 0);
-        fcntl(socket_, F_SETFL, flags | O_NONBLOCK);
-
-        // Bind socket to any available port (let OS choose)
-        // Don't bind to server's port - we'll receive on whatever port OS assigns
-        sockaddr_in addr{};
-        addr.sin_family = AF_INET;
-        addr.sin_port = 0;  // Let OS choose an available port
-        addr.sin_addr.s_addr = INADDR_ANY;
-        if (bind(socket_, (sockaddr*)&addr, sizeof(addr)) < 0) {
-            RCLCPP_ERROR(this->get_logger(), "Failed to bind UDP socket: %s", strerror(errno));
-            return;
-        }
-        
-        // Get the actual port we're bound to (for logging)
-        socklen_t addr_len = sizeof(addr);
-        getsockname(socket_, (sockaddr*)&addr, &addr_len);
-        RCLCPP_INFO(this->get_logger(), "UDP client bound to port %d", ntohs(addr.sin_port));
-
-        // Send a dummy packet to notify server of this client's address
-        sockaddr_in server_addr{};
-        server_addr.sin_family = AF_INET;
-        server_addr.sin_port = htons(go2_livox_port);
-        inet_pton(AF_INET, go2_ip_.c_str(), &server_addr.sin_addr);
-
-        uint8_t init_packet[1] = {0};
-        sendto(socket_, init_packet, sizeof(init_packet), 0, 
-            (sockaddr*)&server_addr, sizeof(server_addr));
+        // Initialize connection
+        connect_to_robot();
 
         // Start dedicated receive thread for high-frequency UDP reception (2000+ Hz)
         // This is more efficient than timer-based polling and won't miss packets
@@ -226,6 +196,76 @@ private:
         static_tf_broadcaster_->sendTransform(t);
     }
 
+    void connect_to_robot() {
+        // Close existing socket if any
+        if (socket_ >= 0) {
+            close(socket_);
+        }
+
+        // Create UDP socket
+        socket_ = socket(AF_INET, SOCK_DGRAM, 0);
+        if (socket_ < 0) {
+            RCLCPP_ERROR(this->get_logger(), "Failed to create socket");
+            return;
+        }
+
+        // Set socket to non-blocking
+        int flags = fcntl(socket_, F_GETFL, 0);
+        fcntl(socket_, F_SETFL, flags | O_NONBLOCK);
+
+        // Bind socket to any available port (let OS choose)
+        sockaddr_in addr{};
+        addr.sin_family = AF_INET;
+        addr.sin_port = 0;  // Let OS choose an available port
+        addr.sin_addr.s_addr = INADDR_ANY;
+        
+        if (bind(socket_, (sockaddr*)&addr, sizeof(addr)) < 0) {
+            RCLCPP_ERROR(this->get_logger(), "Failed to bind UDP socket: %s", strerror(errno));
+            close(socket_);
+            socket_ = -1;
+            return;
+        }
+        
+        // Get the actual port we're bound to (for logging)
+        socklen_t addr_len = sizeof(addr);
+        getsockname(socket_, (sockaddr*)&addr, &addr_len);
+        RCLCPP_INFO(this->get_logger(), "UDP client bound to port %d", ntohs(addr.sin_port));
+
+        // Send a dummy packet to notify server of this client's address
+        sockaddr_in server_addr{};
+        server_addr.sin_family = AF_INET;
+        server_addr.sin_port = htons(robot_port_);
+        inet_pton(AF_INET, robot_ip_.c_str(), &server_addr.sin_addr);
+
+        uint8_t init_packet[1] = {0};
+        ssize_t sent = sendto(socket_, init_packet, sizeof(init_packet), 0, 
+                              (sockaddr*)&server_addr, sizeof(server_addr));
+        
+        if (sent < 0) {
+            RCLCPP_ERROR(this->get_logger(), "Failed to send init packet to %s:%d", 
+                         robot_ip_.c_str(), robot_port_);
+        } else {
+            RCLCPP_INFO(this->get_logger(), "Connected to robot at %s:%d", 
+                        robot_ip_.c_str(), robot_port_);
+            last_data_time_ = std::chrono::steady_clock::now();
+            connection_active_ = true;
+        }
+    }
+
+    void attempt_reconnect() {
+        auto now = std::chrono::steady_clock::now();
+        
+        // Check if we should attempt reconnection (5 seconds since last attempt)
+        if (std::chrono::duration_cast<std::chrono::seconds>(now - last_reconnect_attempt_).count() < 5) {
+            return;
+        }
+
+        RCLCPP_WARN(this->get_logger(), "Attempting to reconnect to robot...");
+        last_reconnect_attempt_ = now;
+        
+        connect_to_robot();
+    }
+
     void receive_thread_func() {
         // Dedicated thread for high-frequency UDP packet reception
         // Runs in a tight loop to handle 2000+ Hz packet rates without missing packets
@@ -233,6 +273,25 @@ private:
         std::vector<uint8_t> buffer(MAX_UDP_PAYLOAD);
         
         while (recv_thread_running_) {
+            // Check for timeout if connection is active
+            if (connection_active_) {
+                auto now = std::chrono::steady_clock::now();
+                auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(now - last_data_time_).count();
+                
+                if (elapsed >= 5) {
+                    RCLCPP_WARN(this->get_logger(), "No data received for %ld seconds, connection lost", elapsed);
+                    connection_active_ = false;
+                    last_reconnect_attempt_ = std::chrono::steady_clock::now() - std::chrono::seconds(5); // Allow immediate reconnect
+                }
+            }
+
+            // Try to reconnect if not connected
+            if (!connection_active_) {
+                attempt_reconnect();
+                std::this_thread::sleep_for(std::chrono::milliseconds(100));
+                continue;
+            }
+
             ssize_t rlen = recvfrom(socket_, buffer.data(), buffer.size(), 0, nullptr, nullptr);
             if (rlen < static_cast<ssize_t>(IMU_PACKET_HEADER_SIZE)) {
                 // No data available (non-blocking socket) or error
@@ -240,6 +299,9 @@ private:
                 std::this_thread::sleep_for(std::chrono::microseconds(10));
                 continue;
             }
+            
+            // Data received successfully, update timestamp
+            last_data_time_ = std::chrono::steady_clock::now();
             
             // Process the received packet (check if it's IMU or point cloud)
             if (rlen == static_cast<ssize_t>(IMU_PACKET_SIZE_SINGLE)) {
@@ -659,6 +721,13 @@ private:
     uint64_t total_packets_received_{0};
     uint64_t total_points_received_{0};
     uint64_t packets_dropped_{0};
+    
+    // Connection management
+    std::string robot_ip_;
+    uint16_t robot_port_;
+    std::chrono::steady_clock::time_point last_data_time_;
+    std::chrono::steady_clock::time_point last_reconnect_attempt_;
+    bool connection_active_ = false;
 };
 
 int main(int argc, char** argv) {
