@@ -7,9 +7,11 @@
 #include "rclcpp/rclcpp.hpp"
 #include "rclcpp/time.hpp"
 #include "rclcpp/clock.hpp"
+#include "rclcpp_action/rclcpp_action.hpp"
 #include "builtin_interfaces/msg/time.hpp"
 
 #include "nav_msgs/msg/odometry.hpp"
+#include "nav2_msgs/action/navigate_to_pose.hpp"
 #include "sensor_msgs/msg/point_cloud2.hpp"
 #include <sensor_msgs/msg/joy.hpp>
 #include <std_msgs/msg/float32.hpp>
@@ -43,6 +45,17 @@ using namespace std;
 const double PI = 3.1415926;
 
 #define PLOTPATHSET 1
+
+// Action server type definition
+using NavigateToPose = nav2_msgs::action::NavigateToPose;
+using GoalHandleNavigateToPose = rclcpp_action::ServerGoalHandle<NavigateToPose>;
+
+// Action server and goal state variables
+rclcpp_action::Server<NavigateToPose>::SharedPtr action_server_;
+std::shared_ptr<GoalHandleNavigateToPose> current_goal_handle_;
+rclcpp::Publisher<sensor_msgs::msg::Joy>::SharedPtr pubJoy_;
+bool has_active_goal_ = false;
+double goal_tolerance_ = 0.3;  // meters
 
 string pathFolder;
 double vehicleLength = 0.6;
@@ -146,6 +159,16 @@ float vehicleX = 0, vehicleY = 0, vehicleZ = 0;
 pcl::VoxelGrid<pcl::PointXYZI> laserDwzFilter, terrainDwzFilter;
 rclcpp::Node::SharedPtr nh;
 
+void publishJoy(bool autonomy)
+{
+  sensor_msgs::msg::Joy joy;
+  joy.axes = {0, 0, autonomy ? -1.0f : 0.0f, 0, autonomy ? 1.0f : 0.0f, 1.0f, 0, 0};
+  joy.buttons = {0, 0, 0, 0, 0, 0, 0, autonomy ? 1 : 0, 0, 0, 0};
+  joy.header.stamp = nh->now();
+  joy.header.frame_id = "action_server";
+  pubJoy_->publish(joy);
+}
+
 void odometryHandler(const nav_msgs::msg::Odometry::ConstSharedPtr odom)
 {
   odomTime = rclcpp::Time(odom->header.stamp).seconds();
@@ -231,21 +254,40 @@ void joystickHandler(const sensor_msgs::msg::Joy::ConstSharedPtr joy)
 {
   joyTime = nh->now().seconds();
   joySpeedRaw = sqrt(joy->axes[3] * joy->axes[3] + joy->axes[4] * joy->axes[4]);
-  joySpeed = joySpeedRaw;
-  if (joySpeed > 1.0) joySpeed = 1.0;
-  if (joy->axes[4] == 0) joySpeed = 0;
 
-  if (joySpeed > 0) {
-    joyDir = atan2(joy->axes[3], joy->axes[4]) * 180 / PI;
-    if (joy->axes[4] < 0) joyDir *= -1;
-  }
-
-  if (joy->axes[4] < 0 && !twoWayDrive) joySpeed = 0;
-
-  if (joy->axes[2] > -0.1) {
-    autonomyMode = false;
+  if (has_active_goal_) {
+    // When an action goal is active, only allow deliberate manual override
+    if (joy->axes[2] > -0.1 && joySpeedRaw > 0.1) {
+      // User is actively moving the joystick without autonomy trigger - take manual control
+      RCLCPP_INFO(nh->get_logger(), "Joystick manual control - cancelling navigation goal");
+      auto result = std::make_shared<NavigateToPose::Result>();
+      if (current_goal_handle_ && current_goal_handle_->is_active()) {
+        current_goal_handle_->abort(result);
+      }
+      has_active_goal_ = false;
+      current_goal_handle_ = nullptr;
+      autonomyMode = false;
+      joySpeed = joySpeedRaw;
+      if (joySpeed > 1.0) joySpeed = 1.0;
+    }
+    // Otherwise, keep autonomyMode and joySpeed set by the action server
   } else {
-    autonomyMode = true;
+    joySpeed = joySpeedRaw;
+    if (joySpeed > 1.0) joySpeed = 1.0;
+    if (joy->axes[4] == 0) joySpeed = 0;
+
+    if (joySpeed > 0) {
+      joyDir = atan2(joy->axes[3], joy->axes[4]) * 180 / PI;
+      if (joy->axes[4] < 0) joyDir *= -1;
+    }
+
+    if (joy->axes[4] < 0 && !twoWayDrive) joySpeed = 0;
+
+    if (joy->axes[2] > -0.1) {
+      autonomyMode = false;
+    } else {
+      autonomyMode = true;
+    }
   }
 
   if (joy->axes[5] > -0.1) {
@@ -264,7 +306,7 @@ void goalHandler(const geometry_msgs::msg::PointStamped::ConstSharedPtr goal)
 void speedHandler(const std_msgs::msg::Float32::ConstSharedPtr speed)
 {
   double speedTime = nh->now().seconds();
-  if (autonomyMode && speedTime - joyTime > joyToSpeedDelay && joySpeedRaw == 0) {
+  if (autonomyMode && !has_active_goal_ && speedTime - joyTime > joyToSpeedDelay && joySpeedRaw == 0) {
     joySpeed = speed->data / maxSpeed;
 
     if (joySpeed < 0) joySpeed = 0;
@@ -508,6 +550,56 @@ void readCorrespondences()
   fclose(filePtr);
 }
 
+// Action server callbacks
+rclcpp_action::GoalResponse handle_goal(
+  const rclcpp_action::GoalUUID & uuid,
+  std::shared_ptr<const NavigateToPose::Goal> goal)
+{
+  (void)uuid;
+  RCLCPP_INFO(nh->get_logger(), "Received navigation goal request to x: %.2f, y: %.2f",
+              goal->pose.pose.position.x, goal->pose.pose.position.y);
+  
+  // Accept all goals
+  return rclcpp_action::GoalResponse::ACCEPT_AND_EXECUTE;
+}
+
+rclcpp_action::CancelResponse handle_cancel(
+  const std::shared_ptr<GoalHandleNavigateToPose> goal_handle)
+{
+  (void)goal_handle;
+  RCLCPP_INFO(nh->get_logger(), "Received request to cancel navigation goal");
+  has_active_goal_ = false;
+
+  // Stop the robot and disable autonomy mode for the full pipeline
+  publishJoy(false);
+
+  return rclcpp_action::CancelResponse::ACCEPT;
+}
+
+void handle_accepted(const std::shared_ptr<GoalHandleNavigateToPose> goal_handle)
+{
+  // Cancel any existing goal
+  if (current_goal_handle_ && current_goal_handle_->is_active()) {
+    RCLCPP_INFO(nh->get_logger(), "Aborting previous goal");
+    auto result = std::make_shared<NavigateToPose::Result>();
+    current_goal_handle_->abort(result);
+  }
+  
+  // Store the new goal handle
+  current_goal_handle_ = goal_handle;
+  has_active_goal_ = true;
+  
+  // Extract goal position
+  const auto goal = goal_handle->get_goal();
+  goalX = goal->pose.pose.position.x;
+  goalY = goal->pose.pose.position.y;
+  
+  // Publish joy message to activate the full pipeline (pathFollower, etc.)
+  publishJoy(true);
+
+  RCLCPP_INFO(nh->get_logger(), "Accepted new navigation goal to x: %.2f, y: %.2f", goalX, goalY);
+}
+
 int main(int argc, char** argv)
 {
   rclcpp::init(argc, argv);
@@ -558,6 +650,7 @@ int main(int argc, char** argv)
   nh->declare_parameter<double>("goalBehindRange", goalBehindRange);
   nh->declare_parameter<double>("goalX", goalX);
   nh->declare_parameter<double>("goalY", goalY);
+  nh->declare_parameter<double>("goalTolerance", goal_tolerance_);
 
   nh->get_parameter("pathFolder", pathFolder);
   nh->get_parameter("vehicleLength", vehicleLength);
@@ -604,6 +697,7 @@ int main(int argc, char** argv)
   nh->get_parameter("goalBehindRange", goalBehindRange);
   nh->get_parameter("goalX", goalX);
   nh->get_parameter("goalY", goalY);
+  nh->get_parameter("goalTolerance", goal_tolerance_);
 
   auto subOdometry = nh->create_subscription<nav_msgs::msg::Odometry>("/state_estimation", 5, odometryHandler);
 
@@ -622,6 +716,19 @@ int main(int argc, char** argv)
   auto subAddedObstacles = nh->create_subscription<sensor_msgs::msg::PointCloud2>("/added_obstacles", 5, addedObstaclesHandler);
 
   auto subCheckObstacle = nh->create_subscription<std_msgs::msg::Bool>("/check_obstacle", 5, checkObstacleHandler);
+
+  // Create joy publisher for action server to activate the full pipeline
+  pubJoy_ = nh->create_publisher<sensor_msgs::msg::Joy>("/joy", 5);
+
+  // Create action server for NavigateToPose
+  action_server_ = rclcpp_action::create_server<NavigateToPose>(
+    nh,
+    "navigate_to_pose",
+    handle_goal,
+    handle_cancel,
+    handle_accepted);
+
+  RCLCPP_INFO(nh->get_logger(), "NavigateToPose action server created");
 
   auto pubSlowDown = nh->create_publisher<std_msgs::msg::Int8> ("/slow_down", 5);
   std_msgs::msg::Int8 slow;
@@ -965,6 +1072,52 @@ int main(int argc, char** argv)
           path.header.stamp = rclcpp::Time(static_cast<uint64_t>(odomTime * 1e9));
           path.header.frame_id = "vehicle";
           pubPath->publish(path);
+
+          // Publish action feedback if we have an active goal
+          if (has_active_goal_ && current_goal_handle_ && current_goal_handle_->is_active()) {
+            auto feedback = std::make_shared<NavigateToPose::Feedback>();
+            
+            // Calculate distance to goal
+            float distanceToGoal = sqrt((goalX - vehicleX) * (goalX - vehicleX) + 
+                                       (goalY - vehicleY) * (goalY - vehicleY));
+            
+            // Set feedback pose (current robot pose)
+            feedback->current_pose.header.stamp = rclcpp::Time(static_cast<uint64_t>(odomTime * 1e9));
+            feedback->current_pose.header.frame_id = "map";
+            feedback->current_pose.pose.position.x = vehicleX;
+            feedback->current_pose.pose.position.y = vehicleY;
+            feedback->current_pose.pose.position.z = vehicleZ;
+            
+            // Set orientation
+            tf2::Quaternion q;
+            q.setRPY(vehicleRoll, vehiclePitch, vehicleYaw);
+            feedback->current_pose.pose.orientation.x = q.x();
+            feedback->current_pose.pose.orientation.y = q.y();
+            feedback->current_pose.pose.orientation.z = q.z();
+            feedback->current_pose.pose.orientation.w = q.w();
+            
+            feedback->distance_remaining = distanceToGoal;
+            
+            // Set navigation time as Duration message
+            auto duration = rclcpp::Duration::from_seconds(odomTime);
+            feedback->navigation_time.sec = duration.seconds();
+            feedback->navigation_time.nanosec = duration.nanoseconds() % 1000000000;
+            
+            current_goal_handle_->publish_feedback(feedback);
+            
+            // Check if goal is reached
+            if (distanceToGoal < goal_tolerance_) {
+              RCLCPP_INFO(nh->get_logger(), "Goal reached! Distance: %.2f m", distanceToGoal);
+              
+              auto result = std::make_shared<NavigateToPose::Result>();
+              current_goal_handle_->succeed(result);
+              has_active_goal_ = false;
+              current_goal_handle_ = nullptr;
+              
+              // Stop the full pipeline
+              publishJoy(false);
+            }
+          }
 
           #if PLOTPATHSET == 1
           freePaths->clear();
