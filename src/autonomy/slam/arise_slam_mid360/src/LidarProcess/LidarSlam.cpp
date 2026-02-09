@@ -963,7 +963,7 @@ namespace arise_slam {
     }
 
     LidarSLAM::RegistrationError LidarSLAM::EstimateRegistrationError(
-            ceres::Problem &problem, const double eigen_thresh) {
+            ceres::Problem &problem, const double _eigen_thresh) {
         RegistrationError err;
 
         // Covariance computation options

@@ -374,8 +374,8 @@ int main(int argc, char** argv)
       }
 
       float joySpeed3 = joySpeed2;
-      if (odomTime < slowInitTime + slowTime1 && slowInitTime > 0 || slowDown == 1) joySpeed3 *= slowRate1;
-      else if (odomTime < slowInitTime + slowTime1 + slowTime2 && slowInitTime > 0 || slowDown == 2) joySpeed3 *= slowRate2;
+      if ((odomTime < slowInitTime + slowTime1 && slowInitTime > 0) || slowDown == 1) joySpeed3 *= slowRate1;
+      else if ((odomTime < slowInitTime + slowTime1 + slowTime2 && slowInitTime > 0) || slowDown == 2) joySpeed3 *= slowRate2;
       else if (slowDown == 3) joySpeed3 *= slowRate3;
 
       if ((fabs(dirDiff) < dirDiffThre || (dis < omniDirGoalThre && fabs(dirDiff) < omniDirDiffThre)) && dis > stopDisThre) {
