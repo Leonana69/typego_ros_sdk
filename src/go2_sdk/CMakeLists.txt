@@ -81,17 +81,35 @@ target_link_libraries(tf_client_node PUBLIC
 # ----------- video_client_node -----------
 pkg_check_modules(GST REQUIRED gstreamer-1.0 gstreamer-app-1.0)
 
-add_executable(video_client_node src/video_client.cpp)
-ament_target_dependencies(video_client_node PUBLIC
+add_executable(video_client_binocular_node src/video_client_binocular.cpp)
+ament_target_dependencies(video_client_binocular_node PUBLIC
   rclcpp
   sensor_msgs
   typego_sdk
 )
-target_include_directories(video_client_node PRIVATE
+target_include_directories(video_client_binocular_node PRIVATE
   ${GST_INCLUDE_DIRS}
   ${OpenCV_INCLUDE_DIRS}
 )
-target_link_libraries(video_client_node PUBLIC
+target_link_libraries(video_client_binocular_node PUBLIC
+  ${sensor_msgs_TARGETS}
+  rclcpp::rclcpp
+  sensor_msgs::sensor_msgs_library
+  ${GST_LIBRARIES}
+  ${OpenCV_LIBS}
+)
+
+add_executable(video_client_dual_d435i_node src/video_client_dual_d435i.cpp)
+ament_target_dependencies(video_client_dual_d435i_node PUBLIC
+  rclcpp
+  sensor_msgs
+  typego_sdk
+)
+target_include_directories(video_client_dual_d435i_node PRIVATE
+  ${GST_INCLUDE_DIRS}
+  ${OpenCV_INCLUDE_DIRS}
+)
+target_link_libraries(video_client_dual_d435i_node PUBLIC
   ${sensor_msgs_TARGETS}
   rclcpp::rclcpp
   sensor_msgs::sensor_msgs_library
@@ -115,7 +133,8 @@ target_link_libraries(cmd_vel_controller_node PUBLIC
 # ----------- install targets -----------
 install(TARGETS
   lidar_client_node
-  video_client_node
+  video_client_binocular_node
+  video_client_dual_d435i_node
   tf_client_node
   cmd_vel_controller_node
   DESTINATION lib/${PROJECT_NAME})

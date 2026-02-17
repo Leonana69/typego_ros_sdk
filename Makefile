@@ -70,7 +70,11 @@ rviz:
 	@{ \
 		echo "→ Loading $(ENV_FILE)"; \
 		set -a; source $(ENV_FILE); set +a; \
-		ros2 run rviz2 rviz2 --ros-args -r /tf:=/robot$${ROBOT_ID}/tf -r /tf_static:=/robot$${ROBOT_ID}/tf_static -r /goal_pose:=/robot$${ROBOT_ID}/goal_pose; \
+		if [ -n "$${ROBOT_ID}" ]; then \
+			ros2 run rviz2 rviz2 --ros-args -r /tf:=/robot$${ROBOT_ID}/tf -r /tf_static:=/robot$${ROBOT_ID}/tf_static -r /goal_pose:=/robot$${ROBOT_ID}/goal_pose; \
+		else \
+			ros2 run rviz2 rviz2; \
+		fi; \
 	}
 
 save_map:

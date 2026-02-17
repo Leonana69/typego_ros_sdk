@@ -150,8 +150,8 @@ public:
         const char* depth_port_env = std::getenv("GSTREAMER_DEPTH_PORT");
         int depth_port = depth_port_env ? std::atoi(depth_port_env) : 1723;
 
-        const char* robot_id = std::getenv("ROBOT_ID");
-        std::string host_str = robot_id ? "230.1.1." + std::string(robot_id) : "230.1.1.1";
+        const char* ros_domain_id = std::getenv("ROS_DOMAIN_ID");
+        std::string host_str = ros_domain_id ? "230.1.1." + std::string(ros_domain_id) : "230.1.1.1";
 
         color_stream_ = std::make_unique<GStreamerStream>(this,
                         "camera/color/image_raw", "bgr8", interface_str, host_str, rgb_port, frame_prefix_, false);
