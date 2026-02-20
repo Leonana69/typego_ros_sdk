@@ -50,7 +50,7 @@ public:
 
         init_static_tf();
 
-        RCLCPP_INFO(this->get_logger(), 
+        RCLCPP_INFO(this->get_logger(),
                     "Go2 TF Client initialized in namespace: %s, publishing to %s/tf", 
                     ns.c_str(), ns.c_str());
     }

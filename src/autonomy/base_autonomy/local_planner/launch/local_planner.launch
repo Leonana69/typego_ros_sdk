@@ -9,12 +9,14 @@
   <arg name="autonomyMode" default="false"/>
   <arg name="autonomySpeed" default="0.875"/>
   <arg name="joyToSpeedDelay" default="2.0"/>
+  <arg name="vehicleFrame" default="base_link"/>
   <arg name="goalX" default="0.0"/>
   <arg name="goalY" default="0.0"/>
 
   <node pkg="local_planner" exec="localPlanner" name="localPlanner" output="screen">
     <param from="$(find-pkg-share local_planner)/config/$(var config).yaml"/>
     <param name="pathFolder" value="$(find-pkg-share local_planner)/paths" />
+    <param name="vehicleFrame" value="$(var vehicleFrame)" />
     <param name="vehicleLength" value="0.5" />
     <param name="vehicleWidth" value="0.5" />
     <param name="sensorOffsetX" value="$(var sensorOffsetX)" />
@@ -62,6 +64,7 @@
 
   <node pkg="local_planner" exec="pathFollower" name="pathFollower" output="screen">
     <param from="$(find-pkg-share local_planner)/config/$(var config).yaml"/>
+    <param name="vehicleFrame" value="$(var vehicleFrame)" />
     <param name="sensorOffsetX" value="$(var sensorOffsetX)" />
     <param name="sensorOffsetY" value="$(var sensorOffsetY)" />
     <param name="pubSkipNum" value="1" />
@@ -89,7 +92,7 @@
     <param name="joyToSpeedDelay" value="$(var joyToSpeedDelay)" />
   </node>
 
-  <node pkg="tf2_ros" exec="static_transform_publisher" name="vehicleTransPublisher" args="-$(var sensorOffsetX) -$(var sensorOffsetY) 0 0 0 0 /sensor /vehicle"/>
+  <node pkg="tf2_ros" exec="static_transform_publisher" name="vehicleTransPublisher" args="-$(var sensorOffsetX) -$(var sensorOffsetY) 0 0 0 0 /sensor /$(var vehicleFrame)"/>
 
   <node pkg="tf2_ros" exec="static_transform_publisher" name="sensorTransPublisher" args="0 0 $(var cameraOffsetZ) -1.5707963 0 -1.5707963 /sensor /camera"/>
 

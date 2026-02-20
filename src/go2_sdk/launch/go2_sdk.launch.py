@@ -19,7 +19,7 @@ def generate_launch_description():
     autonomy_type_arg = DeclareLaunchArgument(
         'autonomy_type',
         default_value='base',
-        description='Autonomy type: "base" (Twist) or other (TwistStamped + CustomMsg)'
+        description='Autonomy type: "base" (Twist) or "full" (TwistStamped + CustomMsg)'
     )
 
     def launch_setup(context):
@@ -34,15 +34,6 @@ def generate_launch_description():
         
         print(f'Go2🤖 Using robot namespace: {robot_ns if robot_ns else "<none>"}')
 
-        if autonomy_type == 'base':
-            # nav2 use Twist
-            cmd_vel_type = 'Twist'
-            xfer_format = 'None'
-        else:
-            # full autonomy use TwistStamped
-            cmd_vel_type = 'TwistStamped'
-            xfer_format = 'CustomMsg'
-
         # Create remapping list for tf topics
         tf_remappings = []
         if robot_ns:
@@ -52,13 +43,26 @@ def generate_launch_description():
             ]
 
         # Define nodes
-        tf_client_node = Node(
-            package='go2_sdk',
-            executable='tf_client_node',
-            name='tf_client_node',
-            remappings=tf_remappings,
-            output='screen'
-        )
+        nodes = []
+        if autonomy_type == 'base':
+            # nav2 use Twist
+            cmd_vel_type = 'Twist'
+            xfer_format = 'None'
+            tf_client_node = Node(
+                package='go2_sdk',
+                executable='tf_client_node',
+                name='tf_client_node',
+                remappings=tf_remappings,
+                output='screen'
+            )
+            nodes.append(tf_client_node)
+        elif autonomy_type == 'full':
+            # full autonomy use TwistStamped
+            cmd_vel_type = 'TwistStamped'
+            xfer_format = 'CustomMsg'
+        else:
+            raise ValueError(f'Invalid autonomy type: {autonomy_type}')
+        
 
         lidar_client_node = Node(
             package='go2_sdk',
@@ -72,21 +76,18 @@ def generate_launch_description():
             remappings=tf_remappings,
             output='screen'
         )
+        nodes.append(lidar_client_node)
 
-        if video_type == 'binocular':
+        if video_type == 'binocular' or video_type == 'dual_d435i':
             video_client_node = Node(
                 package='go2_sdk',
-                executable='video_client_binocular_node',
-                name='video_client_binocular_node',
+                executable='video_client_' + video_type + '_node',
+                name='video_client_' + video_type + '_node',
                 output='screen'
             )
-        elif video_type == 'dual_d435i':
-            video_client_node = Node(
-                package='go2_sdk',
-                executable='video_client_dual_d435i_node',
-                name='video_client_dual_d435i_node',
-                output='screen'
-            )
+            nodes.append(video_client_node)
+        else:
+            raise ValueError(f'Invalid video type: {video_type}')
 
         cmd_vel_controller_node = Node(
             package='go2_sdk',
@@ -98,13 +99,9 @@ def generate_launch_description():
             }],
             output='screen'
         )
+        nodes.append(cmd_vel_controller_node)
 
-        return [
-            tf_client_node,
-            lidar_client_node,
-            video_client_node,
-            cmd_vel_controller_node,
-        ]
+        return nodes
 
     return LaunchDescription([
         robot_id_arg,

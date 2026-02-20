@@ -7,9 +7,11 @@ from launch.conditions import IfCondition, UnlessCondition
 import os
 import json
 
+"""
+This launch file is used to launch the SLAM toolbox node.
+"""
 
 def generate_launch_description():
-
     # --- Arguments ---
     ARGUMENTS = [
         DeclareLaunchArgument(
