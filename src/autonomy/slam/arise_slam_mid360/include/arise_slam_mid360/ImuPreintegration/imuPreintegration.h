@@ -8,6 +8,7 @@
 #include "rclcpp/rclcpp.hpp"
 #include <sensor_msgs/msg/imu.hpp>
 #include <sensor_msgs/msg/point_cloud2.hpp>
+#include <std_msgs/msg/float64_multi_array.hpp>
 #include <nav_msgs/msg/odometry.hpp>
 #include <tf2/LinearMath/Quaternion.h>
 #include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
@@ -161,6 +162,7 @@ namespace arise_slam {
         rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr pubImuOdometry2;
         rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr pubHealthStatus;
         rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr pubImuPath;
+        rclcpp::Publisher<std_msgs::msg::Float64MultiArray>::SharedPtr pubGravityOffsets;
 
         rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr pubImuOdometrySmooth;
 

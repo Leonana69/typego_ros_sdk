@@ -96,6 +96,7 @@ def generate_launch_description():
         parameters=[LaunchConfiguration("config_file"),
             {
                 "calibration_file": LaunchConfiguration("calibration_file"),
+                "map_dir": LaunchConfiguration("map_dir"),
             },
         ],
     )

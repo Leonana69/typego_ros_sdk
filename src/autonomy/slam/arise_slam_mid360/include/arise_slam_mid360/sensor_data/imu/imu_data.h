@@ -69,15 +69,11 @@ public:
   }
 
   void imuInit(MapRingBuffer<Imu::Ptr> imuBuf) {
-      
-    
       int Num = 0;
       if (first_imu==false){
           return;
       }
-      
-    
-      
+
       // Initialize if the buffer is not empty
       if (!imuBuf.empty()) {
           first_imu = false;
@@ -88,10 +84,9 @@ public:
           acc_mean = acc_first;
           gyr_mean = gyr_first;
           time = time_first;
-        
           Num = 1;
       }
-    
+
       // Iterate through the IMU buffer and update mean and covariance
       for (std::map<double, Imu::Ptr>::iterator itMeas_ = imuBuf.measMap_.begin(); itMeas_ != imuBuf.measMap_.end(); ++itMeas_) {
 
@@ -99,8 +94,7 @@ public:
           // const Eigen::Quaterniond rot_cur = itMeas_->second->q_w_i;
           const Eigen::Vector3d gyr_cur = itMeas_->second->gyr;
           const Eigen::Vector3d acc_cur = itMeas_->second->acc;
-          
-        
+
           // Update means
           acc_mean += (acc_cur - acc_mean) / Num;
           gyr_mean += (gyr_cur - gyr_mean) / Num;
@@ -110,7 +104,6 @@ public:
           gyr_cov = gyr_cov * (Num - 1.0) / Num + (gyr_cur - gyr_mean).cwiseProduct(gyr_cur - gyr_mean) / (Num - 1.0);
           Num++;
       }
-    
 
       //TODO: double check the gravity direction
       gravity= - acc_mean / acc_mean.norm() *Gravity_Norm;
@@ -118,18 +111,38 @@ public:
       acc_bias = acc_mean;
       first_imu = false;
 
-      // //Align with Gravity if the IMU is rotated at the beginning. 
-      Roll_Pitch_Gravity_Matrix=calculatePitchRollMatrix(acc_mean.x(), 
-      acc_mean.y(), acc_mean.z());
+      // Use saved gravity offsets if provided (for localization mode consistency),
+      // otherwise compute from current accelerometer data.
+      if (use_saved_gravity_offsets) {
+          double theta = saved_pitch_offset;
+          double phi = saved_roll_offset;
+          Eigen::Matrix3d R_y;
+          R_y << std::cos(theta), 0, std::sin(theta),
+                0, 1, 0,
+                -std::sin(theta), 0, std::cos(theta);
+          Eigen::Matrix3d R_x;
+          R_x << 1, 0, 0,
+                0, std::cos(phi), -std::sin(phi),
+                0, std::sin(phi), std::cos(phi);
+          Roll_Pitch_Gravity_Matrix = R_x * R_y;
+          pitch_offset_gravity = theta;
+          roll_offset_gravity = phi;
+          std::cout<<"Using SAVED gravity offsets - roll: "<<phi*180/M_PI
+                   <<" pitch: "<<theta*180/M_PI<<std::endl;
+      } else {
+          // Align with Gravity if the IMU is rotated at the beginning.
+          Roll_Pitch_Gravity_Matrix=calculatePitchRollMatrix(acc_mean.x(),
+          acc_mean.y(), acc_mean.z());
+      }
 
 
       std::cout<<"imu_laser_R: "<<imu_laser_R<<std::endl;
       imu_laser_R_Gravity=Roll_Pitch_Gravity_Matrix.inverse()*imu_laser_R;
-      Transformd imu_laser_transform_gravity_(imu_laser_R_Gravity, imu_laser_T); 
+      Transformd imu_laser_transform_gravity_(imu_laser_R_Gravity, imu_laser_T);
       imu_laser_gravity_Transform=imu_laser_transform_gravity_;
-      std::cout<<"imu_laser_extrinsic_gravity: "<<imu_laser_gravity_Transform<<std::endl;    
-        
-    
+      std::cout<<"imu_laser_extrinsic_gravity: "<<imu_laser_gravity_Transform<<std::endl;
+
+
       std::cout<<"IMU Data Summary"<<std::endl;
       std::cout<<"Gravity: "<<gravity.transpose()<<std::endl;
       std::cout<<"Gyroscope Bias: "<<gyr_bias.transpose()<<std::endl;
@@ -138,7 +151,6 @@ public:
       std::cout<<"pitch offset gravity: "<<pitch_offset_gravity*180/M_PI<<std::endl;
       std::cout<<"roll offset gravity: "<<roll_offset_gravity*180/M_PI<<std::endl;
       std::cout<<"Roll Pitch Gravity Matrix: "<<Roll_Pitch_Gravity_Matrix<<std::endl;
-      
   }
 
   // Function to convert a rotation matrix to roll, pitch, and yaw
@@ -183,6 +195,9 @@ public:
   Transformd imu_laser_gravity_Transform;
   double pitch_offset_gravity;
   double roll_offset_gravity;
+  bool use_saved_gravity_offsets = false;
+  double saved_roll_offset = 0.0;
+  double saved_pitch_offset = 0.0;
 };
 
 #endif // IMU_DATA_H

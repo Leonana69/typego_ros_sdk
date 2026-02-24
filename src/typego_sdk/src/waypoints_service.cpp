@@ -99,13 +99,9 @@ public:
         waypoint_marker_pub_ = this->create_publisher<visualization_msgs::msg::MarkerArray>("waypoint_markers", 10);
         
         // Initialize waypoint file path
-        const char* slam_map_name_env = std::getenv("SLAM_MAP_NAME");
-        if (slam_map_name_env) {
-            slam_map_name_ = std::string(slam_map_name_env);
-        } else {
-            slam_map_name_ = "empty_map";
-            RCLCPP_WARN(this->get_logger(), "SLAM_MAP_NAME not set, using default: %s", slam_map_name_.c_str());
-        }
+        this->declare_parameter<std::string>("slam_map_name", "empty_map");
+        slam_map_name_ = this->get_parameter("slam_map_name").as_string();
+        RCLCPP_INFO(this->get_logger(), "Using slam_map_name: %s", slam_map_name_.c_str());
         std::string pkg_typego_sdk = ament_index_cpp::get_package_share_directory("typego_sdk");
         waypoint_file_ = pkg_typego_sdk + "/resource/Map-" + slam_map_name_ + "/waypoints.csv";
         

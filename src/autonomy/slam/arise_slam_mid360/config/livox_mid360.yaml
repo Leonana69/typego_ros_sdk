@@ -127,3 +127,7 @@ imu_preintegration_node:
         imu_acc_x_limit: 0.3
         imu_acc_y_limit: 0.2
         imu_acc_z_limit: 0.1
+        # Gravity offsets are auto-loaded from companion file alongside PCD map.
+        # Set these manually only as an override (in degrees). 0.0 = auto/compute.
+        saved_gravity_roll_offset: 0.0
+        saved_gravity_pitch_offset: 0.0

@@ -7,3 +7,4 @@ build/
 
 ./src/autonomy/base_autonomy/vehicle_simulator/mesh/
 temp/
+src/typego_sdk/resource/Map-*/

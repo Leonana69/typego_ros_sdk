@@ -3,6 +3,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <chrono>
+#include <iomanip>
+
+#include <fstream>
 
 #include "rclcpp/rclcpp.hpp"
 #include "rclcpp/time.hpp"
@@ -12,6 +15,7 @@
 #include "nav_msgs/msg/odometry.hpp"
 #include "sensor_msgs/msg/point_cloud2.hpp"
 #include <std_msgs/msg/float32.hpp>
+#include <std_msgs/msg/float64_multi_array.hpp>
 #include <geometry_msgs/msg/polygon_stamped.h>
 #include <geometry_msgs/msg/point_stamped.h>
 
@@ -90,9 +94,23 @@ shared_ptr<rclcpp::Publisher<std_msgs::msg::Float32>> pubTravelingDisPtr;
 
 shared_ptr<rclcpp::Publisher<std_msgs::msg::Float32>> pubTimeDurationPtr;
 
+// IMU gravity offsets received from imu_preintegration_node
+double gravityRollOffsetDeg = 0.0;
+double gravityPitchOffsetDeg = 0.0;
+bool gravityOffsetsReceived = false;
+
 FILE *metricFilePtr = NULL;
 FILE *trajFilePtr = NULL;
 FILE *pcdFilePtr = NULL;
+
+void gravityOffsetsHandler(const std_msgs::msg::Float64MultiArray::ConstSharedPtr msg)
+{
+  if (msg->data.size() >= 2) {
+    gravityRollOffsetDeg = msg->data[0];
+    gravityPitchOffsetDeg = msg->data[1];
+    gravityOffsetsReceived = true;
+  }
+}
 
 string getTimeString()
 {
@@ -125,8 +143,27 @@ void saveExploredAreasHandler(
     return;
   }
 
-  response->success = true;
-  response->message = "Saved explored_areas to " + exploredAreaFilePath;
+  // Save gravity offsets companion file alongside the PCD
+  if (gravityOffsetsReceived) {
+    string gravityFilePath = exploredAreaFilePath;
+    size_t pcdPos = gravityFilePath.rfind(".pcd");
+    if (pcdPos != string::npos) {
+      gravityFilePath.replace(pcdPos, 4, "_gravity.txt");
+    } else {
+      gravityFilePath += "_gravity.txt";
+    }
+    std::ofstream ofs(gravityFilePath);
+    if (ofs.is_open()) {
+      ofs << std::fixed << std::setprecision(6)
+          << gravityRollOffsetDeg << " " << gravityPitchOffsetDeg << std::endl;
+      ofs.close();
+    }
+    response->success = true;
+    response->message = "Saved explored_areas to " + exploredAreaFilePath + " (with gravity offsets)";
+  } else {
+    response->success = true;
+    response->message = "Saved explored_areas to " + exploredAreaFilePath + " (WARNING: no gravity offsets received)";
+  }
 }
 
 void odometryHandler(const nav_msgs::msg::Odometry::ConstSharedPtr odom)
@@ -323,6 +360,10 @@ int main(int argc, char** argv)
   auto subLaserCloud = nh->create_subscription<sensor_msgs::msg::PointCloud2>("/registered_scan", 5, laserCloudHandler);
 
   auto subRuntime = nh->create_subscription<std_msgs::msg::Float32>("/runtime", 5, runtimeHandler);
+
+  auto gravity_qos = rclcpp::QoS(1).transient_local();
+  auto subGravityOffsets = nh->create_subscription<std_msgs::msg::Float64MultiArray>(
+      "/gravity_offsets", gravity_qos, gravityOffsetsHandler);
 
   auto pubOverallMap = nh->create_publisher<sensor_msgs::msg::PointCloud2>("/overall_map", 5);
 

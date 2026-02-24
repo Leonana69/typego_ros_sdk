@@ -2,6 +2,7 @@
 // Created by shibo zhao on 2020-09-27.
 //
 #include "arise_slam_mid360/ImuPreintegration/imuPreintegration.h"
+#include <fstream>
 
 // For TransformFusion
 // static double lidarOdomTime2=-1;
@@ -37,7 +38,51 @@ namespace arise_slam {
 
         RCLCPP_INFO(this->get_logger(), "[AriseSlam::imuPreintegration] use_imu_roll_pitch:  %d", config_.use_imu_roll_pitch);
         RCLCPP_INFO(this->get_logger(), "[AriseSlam::imuPreintegration] lidar_flip:  %d", config_.lidar_flip);
-        
+
+        // Load saved gravity offsets for localization mode consistency.
+        // Priority: 1) manual params, 2) companion file from map_dir, 3) compute fresh
+        double saved_gravity_roll = this->get_parameter("saved_gravity_roll_offset").as_double();
+        double saved_gravity_pitch = this->get_parameter("saved_gravity_pitch_offset").as_double();
+        if (saved_gravity_roll != 0.0 || saved_gravity_pitch != 0.0) {
+            imu_Init->use_saved_gravity_offsets = true;
+            imu_Init->saved_roll_offset = saved_gravity_roll * M_PI / 180.0;
+            imu_Init->saved_pitch_offset = saved_gravity_pitch * M_PI / 180.0;
+            RCLCPP_WARN(this->get_logger(),
+                "[AriseSlam::imuPreintegration] Using manual gravity offsets - roll: %f deg, pitch: %f deg",
+                saved_gravity_roll, saved_gravity_pitch);
+        } else {
+            // Try auto-loading from companion gravity file alongside the PCD map
+            std::string map_dir = this->get_parameter("map_dir").as_string();
+            if (!map_dir.empty()) {
+                std::string gravity_file = map_dir;
+                size_t pcd_pos = gravity_file.rfind(".pcd");
+                if (pcd_pos != std::string::npos) {
+                    gravity_file.replace(pcd_pos, 4, "_gravity.txt");
+                } else {
+                    gravity_file += "_gravity.txt";
+                }
+                std::ifstream ifs(gravity_file);
+                if (ifs.is_open()) {
+                    double roll_deg, pitch_deg;
+                    if (ifs >> roll_deg >> pitch_deg) {
+                        imu_Init->use_saved_gravity_offsets = true;
+                        imu_Init->saved_roll_offset = roll_deg * M_PI / 180.0;
+                        imu_Init->saved_pitch_offset = pitch_deg * M_PI / 180.0;
+                        RCLCPP_WARN(this->get_logger(),
+                            "[AriseSlam::imuPreintegration] Loaded gravity offsets from %s - roll: %f deg, pitch: %f deg",
+                            gravity_file.c_str(), roll_deg, pitch_deg);
+                    } else {
+                        RCLCPP_WARN(this->get_logger(),
+                            "[AriseSlam::imuPreintegration] Failed to parse gravity file: %s", gravity_file.c_str());
+                    }
+                    ifs.close();
+                } else {
+                    RCLCPP_INFO(this->get_logger(),
+                        "[AriseSlam::imuPreintegration] No gravity file found at %s, will compute from IMU", gravity_file.c_str());
+                }
+            }
+        }
+
         //subscribe and publish relevant topics
         subImu = this->create_subscription<sensor_msgs::msg::Imu>(
             IMU_TOPIC, 10,
@@ -62,6 +107,11 @@ namespace arise_slam {
             ProjectName+"/imuodom_path", 1);
         // pubImuOdometrySmooth = this->create_publisher<nav_msgs::msg::Odometry>(
         //     ProjectName+"/integrated_to_init2", 2000);
+
+        // Gravity offsets publisher with transient_local QoS so late subscribers get the value
+        auto gravity_qos = rclcpp::QoS(1).transient_local();
+        pubGravityOffsets = this->create_publisher<std_msgs::msg::Float64MultiArray>(
+            "/gravity_offsets", gravity_qos);
 
         tfMap2Odom = std::make_shared<tf2_ros::TransformBroadcaster>(this);
         tfOdom2BaseLink = std::make_shared<tf2_ros::TransformBroadcaster>(this);
@@ -130,6 +180,9 @@ namespace arise_slam {
         this->declare_parameter<double>("imu_acc_x_offset", 0.0);
         this->declare_parameter<double>("imu_acc_y_offset", 0.0);
         this->declare_parameter<double>("imu_acc_z_offset", 0.0);
+        this->declare_parameter<double>("saved_gravity_roll_offset", 0.0);
+        this->declare_parameter<double>("saved_gravity_pitch_offset", 0.0);
+        this->declare_parameter<std::string>("map_dir", "");
         this->declare_parameter<double>("imu_acc_x_limit", 1.0);
         this->declare_parameter<double>("imu_acc_y_limit", 1.0);
         this->declare_parameter<double>("imu_acc_z_limit", 1.0);
@@ -885,11 +938,17 @@ namespace arise_slam {
 
           if (imudata->time - first_imu_time > 1.0 and imu_init_success == false)
             {   
-                //TODO: IMUInit might be not necessary since it is only for accleration 
+                //TODO: IMUInit might be not necessary since it is only for accleration
                 imu_Init->imuInit(imuBuf);
                 imu_init_success=true;
                 imuBuf.clean(imudata->time);
                 std::cout<<"IMU Initialization Process Finish! "<<std::endl;
+
+                // Publish gravity offsets so visualization_tools can save them with the map
+                std_msgs::msg::Float64MultiArray gravity_msg;
+                gravity_msg.data.push_back(imu_Init->roll_offset_gravity * 180.0 / M_PI);
+                gravity_msg.data.push_back(imu_Init->pitch_offset_gravity * 180.0 / M_PI);
+                pubGravityOffsets->publish(gravity_msg);
             }
         }
         

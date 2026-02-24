@@ -81,6 +81,9 @@ def generate_launch_description():
             executable='waypoints_service_node',
             output='screen',
             remappings=waypoints_remappings,
+            parameters=[{
+                'slam_map_name': slam_map_name,
+            }],
         )
 
         # --- Base autonomy (SLAM, waypoints service, Nav2) ---
