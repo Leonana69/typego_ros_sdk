@@ -1,0 +1,6 @@
+# Optional output file path (without extension).
+# If empty, the default exploredAreaFile parameter path is used.
+string file_path
+---
+bool success
+string message

@@ -109,7 +109,7 @@ public:
         std::string pkg_typego_sdk = ament_index_cpp::get_package_share_directory("typego_sdk");
         waypoint_file_ = pkg_typego_sdk + "/resource/Map-" + slam_map_name_ + "/waypoints.csv";
         
-        load_waypoints(waypoint_file_);
+        load_waypoints(waypoint_file_, slam_map_name_ == "empty_map");
 
         const char* edge_service_ip = std::getenv("EDGE_SERVICE_IP");
         edge_service_ip_ = edge_service_ip ? std::string(edge_service_ip) : "localhost";
@@ -142,7 +142,14 @@ private:
     int next_id_ = 0;
     std::string slam_map_name_;
 
-    void load_waypoints(const std::string &file) {
+    void load_waypoints(const std::string &file, const bool is_empty_map = false) {
+        if (is_empty_map) {
+            std::ofstream clear(file, std::ios::trunc);
+            if (!clear.is_open()) {
+                RCLCPP_WARN(this->get_logger(), "Could not clear waypoint file: %s", file.c_str());
+            }
+            return;
+        }
         std::ifstream f(file);
         if (!f.is_open()) {
             RCLCPP_WARN(this->get_logger(), "Waypoint file not found: %s", file.c_str());
@@ -198,45 +205,47 @@ private:
     }
 
     void on_timer() {
-        if (!latest_map_) return;
-
         geometry_msgs::msg::TransformStamped tf;
         try {
-            // Use namespaced frame IDs for TF lookup
             tf = tf_buffer_.lookupTransform(
-                "map", 
-                "base_link", 
+                "map",
+                "base_link",
                 tf2::TimePointZero);
         } catch (const tf2::TransformException &e) {
-            RCLCPP_WARN(this->get_logger(), "TF lookup failed: %s", e.what());
             return;
         }
 
         double x = tf.transform.translation.x;
         double y = tf.transform.translation.y;
 
-        auto grid = *latest_map_;
-
-        int robot_cx = (x - grid.info.origin.position.x) / grid.info.resolution;
-        int robot_cy = (y - grid.info.origin.position.y) / grid.info.resolution;
-
         double min_dist = std::numeric_limits<double>::max();
         bool valid_waypoint_found = true;
-        for (auto &wp : waypoints_) {
-            // skip if the absolute distance is greater than threshold
-            if ((x - wp.x) * (x - wp.x) + (y - wp.y) * (y - wp.y) > threshold_distance_meters_ * threshold_distance_meters_) {
-                continue;
+
+        if (latest_map_) {
+            // Grid-based BFS distance (obstacle-aware, requires OccupancyGrid from e.g. SLAM Toolbox)
+            auto grid = *latest_map_;
+            int robot_cx = (x - grid.info.origin.position.x) / grid.info.resolution;
+            int robot_cy = (y - grid.info.origin.position.y) / grid.info.resolution;
+
+            for (auto &wp : waypoints_) {
+                if ((x - wp.x) * (x - wp.x) + (y - wp.y) * (y - wp.y) > threshold_distance_meters_ * threshold_distance_meters_) {
+                    continue;
+                }
+                int wp_cx = (wp.x - grid.info.origin.position.x) / grid.info.resolution;
+                int wp_cy = (wp.y - grid.info.origin.position.y) / grid.info.resolution;
+                int dist = grid_distance(grid, robot_cx, robot_cy, wp_cx, wp_cy);
+                if (dist >= 0) {
+                    double meters = dist * grid.info.resolution;
+                    min_dist = std::min(min_dist, meters);
+                } else {
+                    valid_waypoint_found = false;
+                }
             }
-
-            int wp_cx = (wp.x - grid.info.origin.position.x) / grid.info.resolution;
-            int wp_cy = (wp.y - grid.info.origin.position.y) / grid.info.resolution;
-
-            int dist = grid_distance(grid, robot_cx, robot_cy, wp_cx, wp_cy);
-            if (dist >= 0) {
-                double meters = dist * grid.info.resolution;
-                min_dist = std::min(min_dist, meters);
-            } else {
-                valid_waypoint_found = false;  // No valid path to this waypoint
+        } else {
+            // Euclidean distance fallback (no OccupancyGrid, e.g. arise_slam)
+            for (auto &wp : waypoints_) {
+                double dist = std::hypot(x - wp.x, y - wp.y);
+                min_dist = std::min(min_dist, dist);
             }
         }
 

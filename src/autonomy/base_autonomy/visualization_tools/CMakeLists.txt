@@ -30,9 +30,16 @@ find_package(tf2 REQUIRED)
 find_package(message_filters REQUIRED)
 find_package(pcl_conversions REQUIRED)
 find_package(pcl_ros REQUIRED)
+find_package(rosidl_default_generators REQUIRED)
+
+rosidl_generate_interfaces(${PROJECT_NAME}
+  "srv/SaveExploredAreas.srv"
+)
+rosidl_get_typesupport_target(cpp_typesupport_target ${PROJECT_NAME} "rosidl_typesupport_cpp")
 
 add_executable(visualizationTools src/visualizationTools.cpp)
 ament_target_dependencies(visualizationTools rclcpp rclpy std_msgs std_srvs sensor_msgs nav_msgs geometry_msgs tf2 tf2_ros tf2_geometry_msgs message_filters pcl_ros pcl_conversions)
+target_link_libraries(visualizationTools "${cpp_typesupport_target}")
 
 install(TARGETS
   visualizationTools
@@ -43,8 +50,6 @@ install(
   launch
   DESTINATION share/${PROJECT_NAME}
 )
-
-ament_python_install_package(${PROJECT_NAME})
 
 install(PROGRAMS
   scripts/realTimePlot.py

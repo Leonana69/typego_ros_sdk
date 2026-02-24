@@ -11,7 +11,7 @@ from launch.actions import (
 )
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
-
+from launch_ros.actions import Node
 
 ARGUMENTS = [
     DeclareLaunchArgument(
@@ -45,9 +45,11 @@ def generate_launch_description():
         slam_map_name = context.perform_substitution(LaunchConfiguration('slam_map_name'))
 
         robot_index = f'robot{robot_id}' if robot_id else ''
+        tf_prefix = f'/{robot_index}' if robot_index else ''
 
         typego_sdk_pkg = get_package_share_directory('typego_sdk')
         robot_sdk_pkg = get_package_share_directory(f'{robot_type}_sdk')
+        autonomy_pkg = get_package_share_directory('vehicle_simulator')
 
         # --- iceoryx router daemon ---
         iox_roudi = ExecuteProcess(
@@ -66,6 +68,21 @@ def generate_launch_description():
             }.items(),
         )
 
+        # --- waypoints_service_node ---
+        waypoints_remappings = []
+        if robot_index:
+            waypoints_remappings = [
+                ('/tf', f'{tf_prefix}/tf'),
+                ('/tf_static', f'{tf_prefix}/tf_static'),
+            ]
+
+        waypoints_node = Node(
+            package='typego_sdk',
+            executable='waypoints_service_node',
+            output='screen',
+            remappings=waypoints_remappings,
+        )
+
         # --- Base autonomy (SLAM, waypoints service, Nav2) ---
         base_autonomy_launch = IncludeLaunchDescription(
             PythonLaunchDescriptionSource(
@@ -77,11 +94,24 @@ def generate_launch_description():
             }.items(),
         )
 
+        # --- Full autonomy (vehicle simulator) ---
+        full_autonomy_launch = IncludeLaunchDescription(
+            PythonLaunchDescriptionSource(
+                os.path.join(autonomy_pkg, 'launch', 'system_real_robot.launch.py')
+            ),
+            launch_arguments={
+                'map_dir': os.path.join(typego_sdk_pkg, 'resource', f'Map-{slam_map_name}', f'{slam_map_name}.pcd') if slam_map_name != 'empty_map' else '',
+            }.items(),
+        )
+
+        autonomy_launch = base_autonomy_launch if autonomy_type == 'base' else full_autonomy_launch
+
         return [
             LogInfo(msg=f'Robot namespace: "{robot_index or "<none>"}", SLAM map: "{slam_map_name}"'),
             iox_roudi,
             robot_sdk_launch,
-            base_autonomy_launch,
+            autonomy_launch,
+            waypoints_node,
         ]
 
     return LaunchDescription(ARGUMENTS + [OpaqueFunction(function=launch_setup)])

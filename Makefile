@@ -77,7 +77,7 @@ rviz:
 		fi; \
 	}
 
-save_map:
+save_map_base_autonomy:
 	@echo "=> Saving map..."
 	@{ \
         if [ -z "$(FILE)" ]; then \
@@ -86,12 +86,31 @@ save_map:
         fi; \
         echo '$(FILE)'; \
     }
+	mkdir -p $(CURDIR)/src/typego_sdk/resource/Map-$(FILE)
+	ros2 run typego_sdk get_position_node $(CURDIR)/src/typego_sdk/resource/Map-$(FILE) --ros-args -r /tf:=/robot$(ROBOT_ID)/tf
+
 	docker exec $(CONTAINER_NAME) \
 		bash -c "source /opt/ros/humble/setup.bash && \
 		/opt/ros/humble/bin/ros2 service call $(if $(ROBOT_ID),/robot$(ROBOT_ID),)/slam_toolbox/serialize_map slam_toolbox/SerializePoseGraph \"{filename: '/workspace/$(FILE)'}\""
-	
-	mkdir -p $(CURDIR)/src/typego_sdk/resource/Map-$(FILE)
 	docker cp $(CONTAINER_NAME):/workspace/$(FILE).posegraph $(CURDIR)/src/typego_sdk/resource/Map-$(FILE)/$(FILE).posegraph
 	docker cp $(CONTAINER_NAME):/workspace/$(FILE).data $(CURDIR)/src/typego_sdk/resource/Map-$(FILE)/$(FILE).data
 	docker cp $(CONTAINER_NAME):/workspace/install/typego_sdk/share/typego_sdk/resource/Map-empty_map/waypoints.csv $(CURDIR)/src/typego_sdk/resource/Map-$(FILE)/waypoints.csv
-	ros2 run typego_sdk get_position_node ./src/typego_sdk/resource/Map-$(FILE) --ros-args -r /tf:=/robot$(ROBOT_ID)/tf	
+
+save_map_full_autonomy:
+	@echo "=> Saving map..."
+	@{ \
+        if [ -z "$(FILE)" ]; then \
+            echo "Error: FILE variable is not set. Please set FILE to the desired filename."; \
+            exit 1; \
+        fi; \
+        echo '$(FILE)'; \
+    }
+	mkdir -p $(CURDIR)/src/typego_sdk/resource/Map-$(FILE)
+	ros2 run typego_sdk get_position_node $(CURDIR)/src/typego_sdk/resource/Map-$(FILE) --ros-args -r /tf:=$(if $(ROBOT_ID),/robot$(ROBOT_ID),)/tf -r /tf_static:=$(if $(ROBOT_ID),/robot$(ROBOT_ID),)/tf_static
+
+	ros2 service call /save_explored_areas visualization_tools/srv/SaveExploredAreas "{file_path: '$(CURDIR)/src/typego_sdk/resource/Map-$(FILE)/$(FILE)'}"
+	cp $(CURDIR)/install/typego_sdk/share/typego_sdk/resource/Map-empty_map/waypoints.csv $(CURDIR)/src/typego_sdk/resource/Map-$(FILE)/waypoints.csv
+
+iox_reset:
+	sudo rm -rf /dev/shm/iceoryx*
+	sudo rm -rf /dev/shm/iox_*

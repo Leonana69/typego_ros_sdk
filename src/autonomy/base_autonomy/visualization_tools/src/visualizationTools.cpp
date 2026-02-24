@@ -7,7 +7,7 @@
 #include "rclcpp/rclcpp.hpp"
 #include "rclcpp/time.hpp"
 #include "builtin_interfaces/msg/time.hpp"
-#include "std_srvs/srv/trigger.hpp"
+#include "visualization_tools/srv/save_explored_areas.hpp"
 
 #include "nav_msgs/msg/odometry.hpp"
 #include "sensor_msgs/msg/point_cloud2.hpp"
@@ -104,20 +104,20 @@ string getTimeString()
 }
 
 void saveExploredAreasHandler(
-  const std::shared_ptr<std_srvs::srv::Trigger::Request> request,
-  std::shared_ptr<std_srvs::srv::Trigger::Response> response)
+  const std::shared_ptr<visualization_tools::srv::SaveExploredAreas::Request> request,
+  std::shared_ptr<visualization_tools::srv::SaveExploredAreas::Response> response)
 {
-  (void)request;
-
   if (exploredAreaCloud->empty()) {
     response->success = false;
     response->message = "explored_areas is empty.";
     return;
   }
 
+  // Use caller-supplied path if provided, otherwise fall back to the default.
+  string exploredAreaFilePath = request->file_path.empty() ? exploredAreaFile + "_" + getTimeString() + ".pcd" : request->file_path + ".pcd";
+
   pcl::PointCloud<pcl::PointXYZI>::Ptr exploredSnapshot(new pcl::PointCloud<pcl::PointXYZI>());
   *exploredSnapshot = *exploredAreaCloud;
-  string exploredAreaFilePath = exploredAreaFile + "_" + getTimeString() + ".pcd";
 
   if (pcl::io::savePCDFileBinary(exploredAreaFilePath, *exploredSnapshot) == -1) {
     response->success = false;
@@ -337,7 +337,7 @@ int main(int argc, char** argv)
   pubTimeDurationPtr = nh->create_publisher<std_msgs::msg::Float32>("/time_duration", 5);
 
   auto saveExploredAreasService =
-    nh->create_service<std_srvs::srv::Trigger>("/save_explored_areas", saveExploredAreasHandler);
+    nh->create_service<visualization_tools::srv::SaveExploredAreas>("/save_explored_areas", saveExploredAreasHandler);
   (void)saveExploredAreasService;
 
   overallMapDwzFilter.setLeafSize(overallMapVoxelSize, overallMapVoxelSize, overallMapVoxelSize);

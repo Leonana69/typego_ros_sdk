@@ -13,7 +13,6 @@ from launch.actions import (
 from launch.event_handlers import OnProcessExit
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
-from launch_ros.actions import Node
 
 
 ARGUMENTS = [
@@ -38,11 +37,9 @@ def generate_launch_description():
         if robot_id:
             robot_index = f'robot{robot_id}'
             map_topic = f'/{robot_index}/map'
-            tf_prefix = f'/{robot_index}'
         else:
             robot_index = ''
             map_topic = '/map'
-            tf_prefix = ''
 
         typego_sdk_pkg = get_package_share_directory('typego_sdk')
 
@@ -69,21 +66,6 @@ def generate_launch_description():
             name='wait_for_map',
         )
 
-        # --- waypoints_service_node ---
-        waypoints_remappings = []
-        if robot_index:
-            waypoints_remappings = [
-                ('/tf', f'{tf_prefix}/tf'),
-                ('/tf_static', f'{tf_prefix}/tf_static'),
-            ]
-
-        waypoints_node = Node(
-            package='typego_sdk',
-            executable='waypoints_service_node',
-            output='screen',
-            remappings=waypoints_remappings,
-        )
-
         # --- Nav2 ---
         nav2_args = {}
         if robot_index:
@@ -101,8 +83,7 @@ def generate_launch_description():
             OnProcessExit(
                 target_action=wait_for_map,
                 on_exit=[
-                    LogInfo(msg=f'Map topic {map_topic} is available — starting waypoints service and Nav2.'),
-                    waypoints_node,
+                    LogInfo(msg=f'Map topic {map_topic} is available — starting Nav2.'),
                     nav2_launch,
                 ],
             )
