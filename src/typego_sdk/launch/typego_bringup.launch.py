@@ -49,7 +49,6 @@ def generate_launch_description():
 
         typego_sdk_pkg = get_package_share_directory('typego_sdk')
         robot_sdk_pkg = get_package_share_directory(f'{robot_type}_sdk')
-        autonomy_pkg = get_package_share_directory('vehicle_simulator')
 
         # --- iceoryx router daemon ---
         iox_roudi = ExecuteProcess(
@@ -86,28 +85,28 @@ def generate_launch_description():
             }],
         )
 
-        # --- Base autonomy (SLAM, waypoints service, Nav2) ---
-        base_autonomy_launch = IncludeLaunchDescription(
-            PythonLaunchDescriptionSource(
-                os.path.join(typego_sdk_pkg, 'launch', 'base_autonomy.launch.py')
-            ),
-            launch_arguments={
-                'robot_id': robot_id,
-                'slam_map_name': slam_map_name,
-            }.items(),
-        )
-
-        # --- Full autonomy (vehicle simulator) ---
-        full_autonomy_launch = IncludeLaunchDescription(
-            PythonLaunchDescriptionSource(
-                os.path.join(autonomy_pkg, 'launch', 'system_real_robot.launch.py')
-            ),
-            launch_arguments={
-                'map_dir': os.path.join(typego_sdk_pkg, 'resource', f'Map-{slam_map_name}', f'{slam_map_name}.pcd') if slam_map_name != 'empty_map' else '',
-            }.items(),
-        )
-
-        autonomy_launch = base_autonomy_launch if autonomy_type == 'base' else full_autonomy_launch
+        if autonomy_type == 'full':
+            # --- Full autonomy (vehicle simulator) ---
+            autonomy_pkg = get_package_share_directory('vehicle_simulator')
+            autonomy_launch = IncludeLaunchDescription(
+                PythonLaunchDescriptionSource(
+                    os.path.join(autonomy_pkg, 'launch', 'system_real_robot.launch.py')
+                ),
+                launch_arguments={
+                    'map_dir': os.path.join(typego_sdk_pkg, 'resource', f'Map-{slam_map_name}', f'{slam_map_name}.pcd') if slam_map_name != 'empty_map' else '',
+                }.items(),
+            )
+        else:
+            # --- Base autonomy (SLAM, waypoints service, Nav2) ---
+            autonomy_launch = IncludeLaunchDescription(
+                PythonLaunchDescriptionSource(
+                    os.path.join(typego_sdk_pkg, 'launch', 'base_autonomy.launch.py')
+                ),
+                launch_arguments={
+                    'robot_id': robot_id,
+                    'slam_map_name': slam_map_name,
+                }.items(),
+            )
 
         return [
             LogInfo(msg=f'Robot namespace: "{robot_index or "<none>"}", SLAM map: "{slam_map_name}"'),

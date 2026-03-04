@@ -60,4 +60,4 @@ ARG AUTONOMY_TYPE
 ENV AUTONOMY_TYPE=${AUTONOMY_TYPE}
 RUN /bin/bash -c "source /opt/ros/$ROS_DISTRO/setup.bash && cd /workspace && make build"
 RUN chmod +x /workspace/src/typego_sdk/scripts/*.sh
-CMD ["bash", "-c", "source /workspace/install/setup.bash && /workspace/src/typego_sdk/scripts/run.sh"]
+CMD ["bash", "-c", "source /workspace/install/setup.bash && /workspace/src/typego_sdk/scripts/launch.sh"]
