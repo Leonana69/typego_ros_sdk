@@ -58,6 +58,23 @@ WORKDIR /workspace
 
 ARG AUTONOMY_TYPE
 ENV AUTONOMY_TYPE=${AUTONOMY_TYPE}
+
+# Build SLAM dependencies when AUTONOMY_TYPE=full
+RUN if [ "$AUTONOMY_TYPE" = "full" ]; then \
+    cd /workspace/src/autonomy/slam/dependency/Sophus && \
+    rm -rf build && mkdir build && cd build && \
+    cmake .. -DBUILD_TESTS=OFF && \
+    make && make install && \
+    cd /workspace/src/autonomy/slam/dependency/gtsam && \
+    rm -rf build && mkdir build && cd build && \
+    cmake .. -DGTSAM_USE_SYSTEM_EIGEN=ON -DGTSAM_BUILD_WITH_MARCH_NATIVE=OFF && \
+    make -j6 && make install && \
+    /sbin/ldconfig -v; \
+fi
+RUN if [ "$AUTONOMY_TYPE" = "full" ]; then \
+    apt-get update && apt-get install -y ros-humble-joy; \
+fi
+
 RUN /bin/bash -c "source /opt/ros/$ROS_DISTRO/setup.bash && cd /workspace && make build"
 RUN chmod +x /workspace/src/typego_sdk/scripts/*.sh
 CMD ["bash", "-c", "source /workspace/install/setup.bash && /workspace/src/typego_sdk/scripts/launch.sh"]
