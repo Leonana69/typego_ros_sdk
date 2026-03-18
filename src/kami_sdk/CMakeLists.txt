@@ -17,6 +17,7 @@ find_package(tf2 REQUIRED)
 find_package(OpenCV REQUIRED)
 find_package(CURL REQUIRED)
 find_package(typego_sdk REQUIRED)
+find_package(typego_interface REQUIRED)
 
 # Add include directory
 include_directories(include)
@@ -33,15 +34,16 @@ if(BUILD_TESTING)
   ament_lint_auto_find_test_dependencies()
 endif()
 
-# ----------- lidar_service_node -----------
-add_executable(lidar_service_node src/lidar_client.cpp)
-ament_target_dependencies(lidar_service_node PUBLIC
+# ----------- lidar_client_node -----------
+add_executable(lidar_client_node src/lidar_client.cpp)
+ament_target_dependencies(lidar_client_node PUBLIC
   rclcpp
   sensor_msgs
   tf2_ros
   typego_sdk
+  typego_interface
 )
-target_link_libraries(lidar_service_node PUBLIC
+target_link_libraries(lidar_client_node PUBLIC
   ${sensor_msgs_TARGETS}
   rclcpp::rclcpp
   sensor_msgs::sensor_msgs_library
@@ -77,7 +79,7 @@ target_link_libraries(cmd_vel_controller_node PUBLIC
 
 # ----------- install targets -----------
 install(TARGETS
-  lidar_service_node
+  lidar_client_node
   tf_client_node
   cmd_vel_controller_node
   DESTINATION lib/${PROJECT_NAME})
