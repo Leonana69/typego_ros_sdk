@@ -12,8 +12,6 @@ else
 fi
 
 ROBOT_TYPE="${ROBOT_TYPE:-go2}"
-SLAM_MAP_NAME="${SLAM_MAP_NAME:-empty_map}"
-echo "🤖 Using robot namespace: ${ROBOT_NS:-<none>}, SLAM map name: ${SLAM_MAP_NAME:-<none>}"
 
 # Start the IOX router
 iox-roudi &
