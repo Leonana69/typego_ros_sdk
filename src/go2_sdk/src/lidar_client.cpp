@@ -124,7 +124,7 @@ public:
         // Point cloud publishers are only created if publish_point_cloud_ is true
         if (publish_point_cloud_) {
             if (use_custom_msg_) {
-                custom_publisher_ = this->create_publisher<typego_interface::msg::CustomMsg>("livox/lidar", 10);
+                custom_publisher_ = this->create_publisher<typego_interface::msg::CustomMsg>("livox/lidar_custom", 10);
             } else {
                 publisher_ = this->create_publisher<sensor_msgs::msg::PointCloud2>("livox/lidar", 10);
             }
