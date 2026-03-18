@@ -71,9 +71,9 @@ rviz:
 		echo "→ Loading $(ENV_FILE)"; \
 		set -a; source $(ENV_FILE); set +a; \
 		if [ -n "$${ROBOT_ID}" ]; then \
-			ros2 run rviz2 rviz2 --ros-args -r /tf:=/robot$${ROBOT_ID}/tf -r /tf_static:=/robot$${ROBOT_ID}/tf_static -r /goal_pose:=/robot$${ROBOT_ID}/goal_pose; \
+			ros2 run rviz2 rviz2 $(if $(filter full,$(AUTONOMY_TYPE)),-d $(CURDIR)/src/autonomy/base_autonomy/vehicle_simulator/rviz/vehicle_simulator.rviz) --ros-args -r /tf:=/robot$${ROBOT_ID}/tf -r /tf_static:=/robot$${ROBOT_ID}/tf_static -r /goal_pose:=/robot$${ROBOT_ID}/goal_pose; \
 		else \
-			ros2 run rviz2 rviz2; \
+			ros2 run rviz2 rviz2 $(if $(filter full,$(AUTONOMY_TYPE)),-d $(CURDIR)/src/autonomy/base_autonomy/vehicle_simulator/rviz/vehicle_simulator.rviz); \
 		fi; \
 	}
 
