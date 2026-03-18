@@ -7,7 +7,7 @@ feature_extraction_node:
         PROJECT_NAME: ""
 
         imu_topic: "/livox/imu"
-        laser_topic: "/livox/lidar"  #velodyne_points  #/livox/lidar /livox/lidar
+        laser_topic: "/livox/lidar_custom"  #velodyne_points
         odom_topic: "/dummy"
         depthup_topic: "/rs_up/depth/cloud_filtered"
         depthdown_topic: "/rs_down/depth/cloud_filtered"
@@ -102,7 +102,7 @@ imu_preintegration_node:
         PROJECT_NAME: ""
         sensor: "livox"
         imu_topic: "/livox/imu"
-        laser_topic: "/livox/lidar"
+        laser_topic: "/livox/lidar_custom"
         odom_topic:  "integrated_to_init"
         depthup_topic: "/rs_up/depth/cloud_filtered"
         depthdown_topic: "/rs_down/depth/cloud_filtered"
