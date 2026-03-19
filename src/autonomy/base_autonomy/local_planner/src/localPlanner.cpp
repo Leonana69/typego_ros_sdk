@@ -300,6 +300,7 @@ void joystickHandler(const sensor_msgs::msg::Joy::ConstSharedPtr joy)
 
 void goalHandler(const geometry_msgs::msg::PointStamped::ConstSharedPtr goal)
 {
+  if (has_active_goal_) return;  // Don't override navigate_to_pose goals
   goalX = goal->point.x;
   goalY = goal->point.y;
 }
@@ -585,16 +586,24 @@ void handle_accepted(const std::shared_ptr<GoalHandleNavigateToPose> goal_handle
     auto result = std::make_shared<NavigateToPose::Result>();
     current_goal_handle_->abort(result);
   }
-  
+
   // Store the new goal handle
   current_goal_handle_ = goal_handle;
   has_active_goal_ = true;
-  
+
   // Extract goal position
   const auto goal = goal_handle->get_goal();
   goalX = goal->pose.pose.position.x;
   goalY = goal->pose.pose.position.y;
-  
+
+  // Directly enable autonomy mode and set speed.
+  // publishJoy alone is insufficient because joystickHandler skips
+  // setting these when has_active_goal_ is true.
+  autonomyMode = true;
+  joySpeed = autonomySpeed / maxSpeed;
+  if (joySpeed < 0) joySpeed = 0;
+  else if (joySpeed > 1.0) joySpeed = 1.0;
+
   // Publish joy message to activate the full pipeline (pathFollower, etc.)
   publishJoy(true);
 
