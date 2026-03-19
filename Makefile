@@ -11,7 +11,7 @@ ENV_FILE := ./docker/.env
 # Strip whitespace from AUTONOMY_TYPE if it exists
 AUTONOMY_TYPE := $(strip $(AUTONOMY_TYPE))
 
-.PHONY: docker_stop docker_start docker_remove docker_open docker_build build
+.PHONY: docker_stop docker_start docker_remove docker_open docker_build build setup or-tools
 
 build:
 	@if [ "$(AUTONOMY_TYPE)" = "base" ]; then \
@@ -30,6 +30,46 @@ build:
 	else \
 		echo "=> AUTONOMY_TYPE=$(AUTONOMY_TYPE:-unset), building all packages..."; \
 		colcon build; \
+	fi
+
+setup:
+	@echo "=> Setting up TypeGo SDK..."
+	@if [ "$(AUTONOMY_TYPE)" = "full" ]; then \
+		echo "=> Building SLAM dependencies (Sophus + gtsam)..."; \
+		cd $(CURDIR)/src/autonomy/slam/dependency/Sophus && \
+		rm -rf build && mkdir build && cd build && \
+		cmake .. -DBUILD_TESTS=OFF && \
+		make && sudo make install; \
+		# cd $(CURDIR)/src/autonomy/slam/dependency/gtsam && \
+		# rm -rf build && mkdir build && cd build && \
+		# cmake .. -DGTSAM_USE_SYSTEM_EIGEN=ON -DGTSAM_BUILD_WITH_MARCH_NATIVE=OFF && \
+		# make -j6 && sudo make install && \
+		# sudo /sbin/ldconfig -v; \
+		$(MAKE) -C $(CURDIR) or-tools; \
+	else \
+		echo "=> AUTONOMY_TYPE=$(or $(AUTONOMY_TYPE),unset), skipping SLAM dependency build."; \
+	fi
+
+OR_TOOLS_DIR := $(CURDIR)/src/autonomy/exploration_planner/tare_planner/or-tools
+OR_TOOLS_URL := https://github.com/google/or-tools/releases/download/v9.8/or-tools_arm64_debian-11_cpp_v9.8.3296.tar.gz
+OR_TOOLS_ARCHIVE := /tmp/or-tools_arm64.tar.gz
+or-tools:
+	@echo "=> Setting up OR-Tools..."
+	@ARCH=$$(uname -m); \
+	if [ "$$ARCH" = "aarch64" ]; then \
+		echo "=> Detected aarch64, downloading arm64 OR-Tools..."; \
+		wget -q --show-progress -O $(OR_TOOLS_ARCHIVE) $(OR_TOOLS_URL) && \
+		echo "=> Extracting archive..." && \
+		TMPDIR=$$(mktemp -d) && \
+		tar -xzf $(OR_TOOLS_ARCHIVE) -C $$TMPDIR --strip-components=1 && \
+		echo "=> Replacing include and lib directories..." && \
+		rm -rf $(OR_TOOLS_DIR)/include $(OR_TOOLS_DIR)/lib && \
+		cp -r $$TMPDIR/include $(OR_TOOLS_DIR)/include && \
+		cp -r $$TMPDIR/lib $(OR_TOOLS_DIR)/lib && \
+		rm -rf $$TMPDIR $(OR_TOOLS_ARCHIVE) && \
+		echo "=> OR-Tools arm64 setup complete."; \
+	else \
+		echo "=> Detected $$ARCH, using default OR-Tools (amd64)."; \
 	fi
 
 docker_stop:
