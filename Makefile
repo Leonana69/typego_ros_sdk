@@ -13,6 +13,7 @@ AUTONOMY_TYPE := $(strip $(AUTONOMY_TYPE))
 
 .PHONY: docker_stop docker_start docker_remove docker_open docker_build build setup or-tools
 
+# Build the project
 build:
 	@if [ "$(AUTONOMY_TYPE)" = "base" ]; then \
 		echo "=> AUTONOMY_TYPE=base, excluding autonomy packages..."; \
@@ -32,6 +33,9 @@ build:
 		colcon build; \
 	fi
 
+# Setup dependencies for full autonomy
+# 1. SLAM dependencies (Sophus + gtsam)
+# 2. OR-Tools
 setup:
 	@echo "=> Setting up TypeGo SDK..."
 	@if [ "$(AUTONOMY_TYPE)" = "full" ]; then \
@@ -50,6 +54,7 @@ setup:
 		echo "=> AUTONOMY_TYPE=$(or $(AUTONOMY_TYPE),unset), skipping SLAM dependency build."; \
 	fi
 
+# OR-Tools setup, download a different version for arm64
 OR_TOOLS_DIR := $(CURDIR)/src/autonomy/exploration_planner/tare_planner/or-tools
 OR_TOOLS_URL := https://github.com/google/or-tools/releases/download/v9.8/or-tools_arm64_debian-11_cpp_v9.8.3296.tar.gz
 OR_TOOLS_ARCHIVE := /tmp/or-tools_arm64.tar.gz
@@ -72,6 +77,7 @@ or-tools:
 		echo "=> Detected $$ARCH, using default OR-Tools (amd64)."; \
 	fi
 
+# Docker commands
 docker_stop:
 	@echo "=> Stopping TypeGo SDK..."
 	@-docker stop -t 0 $(CONTAINER_NAME) > /dev/null 2>&1
@@ -106,6 +112,7 @@ docker_build:
 	@echo -n "=>"
 	@make docker_start
 
+# Run rviz
 rviz:
 	@{ \
 		echo "→ Loading $(ENV_FILE)"; \
@@ -117,6 +124,7 @@ rviz:
 		fi; \
 	}
 
+# Save map for base autonomy
 save_map_base_autonomy:
 	@echo "=> Saving map..."
 	@{ \
@@ -136,6 +144,7 @@ save_map_base_autonomy:
 	docker cp $(CONTAINER_NAME):/workspace/$(FILE).data $(CURDIR)/src/typego_sdk/resource/Map-$(FILE)/$(FILE).data
 	docker cp $(CONTAINER_NAME):/workspace/install/typego_sdk/share/typego_sdk/resource/Map-empty_map/waypoints.csv $(CURDIR)/src/typego_sdk/resource/Map-$(FILE)/waypoints.csv
 
+# Save map for full autonomy
 save_map_full_autonomy:
 	@echo "=> Saving map..."
 	@{ \
@@ -151,6 +160,7 @@ save_map_full_autonomy:
 	ros2 service call /save_explored_areas visualization_tools/srv/SaveExploredAreas "{file_path: '$(CURDIR)/src/typego_sdk/resource/Map-$(FILE)/$(FILE)'}"
 	cp $(CURDIR)/install/typego_sdk/share/typego_sdk/resource/Map-empty_map/waypoints.csv $(CURDIR)/src/typego_sdk/resource/Map-$(FILE)/waypoints.csv
 
+# Reset iox
 iox_reset:
 	sudo rm -rf /dev/shm/iceoryx*
 	sudo rm -rf /dev/shm/iox_*
