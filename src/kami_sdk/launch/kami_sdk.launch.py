@@ -62,6 +62,7 @@ def generate_launch_description():
             name='lidar_client_node',
             parameters=[{
                 'xfer_format': xfer_format,  # Use 'CustomMsg' or 'PointCloud2' or 'None'
+                'publish_scan': False,
             }],
             remappings=tf_remappings,
             output='screen'

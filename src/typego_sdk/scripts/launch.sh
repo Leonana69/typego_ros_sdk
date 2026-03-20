@@ -1,1 +1,2 @@
-ros2 launch typego_sdk typego_bringup.launch.py robot_type:=go2 slam_map_name:=4th-partial autonomy_type:=base
+# ros2 launch typego_sdk typego_bringup.launch.py robot_type:=go2 slam_map_name:=4th-partial autonomy_type:=base
+ros2 launch typego_sdk typego_bringup.launch.py robot_type:=go2 slam_map_name:=full-map autonomy_type:=full

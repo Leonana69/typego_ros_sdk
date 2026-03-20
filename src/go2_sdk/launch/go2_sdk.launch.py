@@ -58,7 +58,7 @@ def generate_launch_description():
             nodes.append(tf_client_node)
         elif autonomy_type == 'full':
             # full autonomy use TwistStamped
-            cmd_vel_type = 'TwistStamped'
+            cmd_vel_type = 'Twist'
             xfer_format = 'CustomMsg'
         else:
             raise ValueError(f'Invalid autonomy type: {autonomy_type}')

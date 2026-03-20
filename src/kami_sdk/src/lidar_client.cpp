@@ -17,8 +17,10 @@ public:
     LidarClientNode() : Node("lidar_client", typego_sdk::get_namespace_from_env()) {
         // Declare parameters
         this->declare_parameter<std::string>("xfer_format", "PointCloud2");  // "PointCloud2", "CustomMsg", or "None"
+        this->declare_parameter<bool>("publish_scan", true);
 
         std::string xfer_format = this->get_parameter("xfer_format").as_string();
+        publish_scan_ = this->get_parameter("publish_scan").as_bool();
 
         // Set transfer format
         if (xfer_format == "CustomMsg") {
@@ -42,8 +44,9 @@ public:
             custom_publisher_ = this->create_publisher<typego_interface::msg::CustomMsg>("livox/lidar_custom", 10);
         }
 
-        // Publish LaserScan (always enabled)
-        laserscan_publisher_ = this->create_publisher<sensor_msgs::msg::LaserScan>("scan", 10);
+        if (publish_scan_) {
+            laserscan_publisher_ = this->create_publisher<sensor_msgs::msg::LaserScan>("scan", 10);
+        }
 
         init_lidar_link_tf();
 
@@ -64,7 +67,13 @@ private:
         t.transform.translation.z = 0.0;
         t.transform.rotation.w = 1.0;
 
-        static_tf_broadcaster_->sendTransform(t);
+        geometry_msgs::msg::TransformStamped t2;
+        t2.header.stamp = now();
+        t2.header.frame_id = "lidar_link";
+        t2.child_frame_id = "livox_frame";
+        t2.transform.rotation.w = 1.0;
+
+        static_tf_broadcaster_->sendTransform({t, t2});
     }
 
     void pointcloud_callback(const sensor_msgs::msg::PointCloud2::SharedPtr msg) {
@@ -86,8 +95,9 @@ private:
             publish_custom_msg(msg, x_offset, y_offset, z_offset);
         }
 
-        // Always publish LaserScan
-        publish_laser_scan(msg, x_offset, y_offset, z_offset);
+        if (publish_scan_) {
+            publish_laser_scan(msg, x_offset, y_offset, z_offset);
+        }
     }
 
     void publish_custom_msg(const sensor_msgs::msg::PointCloud2::SharedPtr& msg,
@@ -177,8 +187,8 @@ private:
     rclcpp::Publisher<typego_interface::msg::CustomMsg>::SharedPtr custom_publisher_;
     std::unique_ptr<tf2_ros::StaticTransformBroadcaster> static_tf_broadcaster_;
 
-    // Transfer format flag
     bool use_custom_msg_{false};
+    bool publish_scan_{true};
 };
 
 int main(int argc, char** argv) {
