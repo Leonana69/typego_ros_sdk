@@ -100,7 +100,7 @@ private:
         // joystick: [vy, -vx, vyaw, 0]
         nlohmann::json control = {
             {"type", "remote"},
-            {"joystick", {vy, -vx, vyaw, 0}},
+            {"joystick", {vy, -vx, -vyaw, 0}},
             {"button", {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}}
         };
 
