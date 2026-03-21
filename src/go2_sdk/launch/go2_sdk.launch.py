@@ -45,8 +45,6 @@ def generate_launch_description():
         # Define nodes
         nodes = []
         if autonomy_type == 'base':
-            # nav2 use Twist
-            cmd_vel_type = 'Twist'
             xfer_format = 'None'
             tf_client_node = Node(
                 package='go2_sdk',
@@ -57,8 +55,6 @@ def generate_launch_description():
             )
             nodes.append(tf_client_node)
         elif autonomy_type == 'full':
-            # full autonomy use TwistStamped
-            cmd_vel_type = 'Twist'
             xfer_format = 'CustomMsg'
         else:
             raise ValueError(f'Invalid autonomy type: {autonomy_type}')
@@ -95,7 +91,7 @@ def generate_launch_description():
             name='cmd_vel_controller_node',
             parameters=[{
                 'accept_cmd_vel': True,
-                'cmd_vel_type': cmd_vel_type  # Use 'Twist' or 'TwistStamped'
+                'cmd_vel_type': 'Twist'  # Use 'Twist' or 'TwistStamped'
             }],
             output='screen'
         )
