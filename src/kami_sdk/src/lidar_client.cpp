@@ -112,13 +112,14 @@ private:
         custom_msg.point_num = num_points;
         custom_msg.lidar_id = 0;
 
-        custom_msg.points.reserve(num_points);
+        custom_msg.points.resize(num_points);
 
         const uint8_t* data_ptr = msg->data.data();
+        const uint32_t point_step = msg->point_step;
         for (uint32_t i = 0; i < num_points; ++i) {
-            const uint8_t* point_ptr = data_ptr + i * msg->point_step;
+            const uint8_t* point_ptr = data_ptr + i * point_step;
 
-            typego_interface::msg::CustomPoint pt;
+            auto& pt = custom_msg.points[i];
             pt.x = *reinterpret_cast<const float*>(point_ptr + x_offset);
             pt.y = *reinterpret_cast<const float*>(point_ptr + y_offset);
             pt.z = *reinterpret_cast<const float*>(point_ptr + z_offset);
@@ -129,11 +130,9 @@ private:
             pt.tag = 0;
             pt.line = 0;
             pt.offset_time = 0;
-
-            custom_msg.points.push_back(pt);
         }
 
-        custom_publisher_->publish(custom_msg);
+        custom_publisher_->publish(std::move(custom_msg));
     }
 
     void publish_laser_scan(const sensor_msgs::msg::PointCloud2::SharedPtr& msg,
