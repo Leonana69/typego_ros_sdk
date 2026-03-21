@@ -40,19 +40,8 @@ namespace arise_slam {
 
         int Good_Planner_Feature_Num = 0;
 
-        this->EdgesPoints->clear();
-        this->PlanarsPoints->clear();
-
-        this->EdgesPoints->reserve(edge_point->size());
-        this->PlanarsPoints->reserve(planner_point->size());
-
-        for (const Point &p : *edge_point) {
-            this->EdgesPoints->push_back(p);
-        }
-
-        for (const Point &p : *planner_point) {
-            this->PlanarsPoints->push_back(p);
-        }
+        *this->EdgesPoints = *edge_point;
+        *this->PlanarsPoints = *planner_point;
 
         if (not bInitilization) {
             localMap.setOrigin(T_w_lidar.pos);
@@ -60,8 +49,6 @@ namespace arise_slam {
             this->WorldEdgesPoints->clear();
             this->WorldEdgesPoints->points.reserve(this->EdgesPoints->size());
             this->WorldEdgesPoints->header = this->EdgesPoints->header;
-
-
             for (const Point &p : *this->EdgesPoints) {
                 WorldEdgesPoints->push_back(TransformPointd(p, this->T_w_lidar));
             }
@@ -70,8 +57,6 @@ namespace arise_slam {
             this->WorldPlanarsPoints->clear();
             this->WorldPlanarsPoints->points.reserve(this->PlanarsPoints->size());
             this->WorldPlanarsPoints->header = this->PlanarsPoints->header;
-
-
             for (const Point &p : *this->PlanarsPoints) {
                 WorldPlanarsPoints->push_back(TransformPointd(p, this->T_w_lidar));
             }
@@ -109,28 +94,23 @@ namespace arise_slam {
                     ResetDistanceParameters();
                     Good_Planner_Feature_Num = 0;
              
-                     //TODO: Achieve the TBB to acclerate the process
                     if (not this->EdgesPoints->empty()) {
-                    //     auto compute_func = [this](const tbb::blocked_range<size_t> &range) {
-                        for (size_t edge_index = 0;
-                             edge_index != this->EdgesPoints->points.size(); edge_index++) {
-                             const Point &currentPoint = this->EdgesPoints->points[edge_index];
-                             auto optimize_data = this->ComputeLineDistanceParameters(
-                                    this->localMap, currentPoint);
+                        auto edge_compute_func = [this](const tbb::blocked_range<size_t> &range) {
+                            for (size_t edge_index = range.begin(); edge_index != range.end(); ++edge_index) {
+                                const Point &currentPoint = this->EdgesPoints->points[edge_index];
+                                auto optimize_data = this->ComputeLineDistanceParameters(
+                                        this->localMap, currentPoint);
 
-                            MatchingResult rejection_index = optimize_data.match_result;
-                            if (rejection_index == MatchingResult::SUCCESS) {
-                                OptimizationData.push_back(optimize_data);
+                                MatchingResult rejection_index = optimize_data.match_result;
+                                if (rejection_index == MatchingResult::SUCCESS) {
+                                    OptimizationData.push_back(optimize_data);
+                                }
+                                this->MatchRejectionHistogramLine[rejection_index]++;
                             }
-                            // statistic match result
-                            this->MatchRejectionHistogramLine[rejection_index]++;
-                        }
-                        //   };
-
-                         //tbb::blocked_range<size_t> range(0,this->EdgesPoints->points.size());
-                       //  compute_func(range);
-                        // tbb::parallel_for(range, compute_func);
-                    }  // loop edge edge feature end
+                        };
+                        tbb::blocked_range<size_t> edge_range(0, this->EdgesPoints->points.size());
+                        tbb::parallel_for(edge_range, edge_compute_func);
+                    }  // loop edge feature end
 
                     double sampling_rate = -1.0;
                     int laserCloudSurfStackNum=this->PlanarsPoints->points.size();
@@ -139,39 +119,33 @@ namespace arise_slam {
                         sampling_rate = 1.0*OptSet.max_surface_features/laserCloudSurfStackNum;
 
                     if (not this->PlanarsPoints->empty()) {
-                            // auto compute_func = [this](const tbb::blocked_range<size_t>&range) {
-                        for (size_t planar_index = 0;
-                             planar_index != this->PlanarsPoints->points.size();
-                             planar_index++) {
-                            if(sampling_rate>0.0)
-                            {
-                                double remainder = fmod(planar_index*sampling_rate, 1.0);
-                                if (remainder + 0.001 > sampling_rate)
-                                    continue;
-                            }
+                        auto planar_compute_func = [this, sampling_rate](const tbb::blocked_range<size_t> &range) {
+                            for (size_t planar_index = range.begin(); planar_index != range.end(); ++planar_index) {
+                                if (sampling_rate > 0.0) {
+                                    double remainder = fmod(planar_index * sampling_rate, 1.0);
+                                    if (remainder + 0.001 > sampling_rate)
+                                        continue;
+                                }
 
-                            const Point &currentPoint =
-                                    this->PlanarsPoints->points[planar_index];
-                            auto optimize_data = this->ComputePlaneDistanceParameters(
-                                    this->localMap, currentPoint);
+                                const Point &currentPoint =
+                                        this->PlanarsPoints->points[planar_index];
+                                auto optimize_data = this->ComputePlaneDistanceParameters(
+                                        this->localMap, currentPoint);
 
-                            MatchingResult rejection_index = optimize_data.match_result;
-                            if (rejection_index == MatchingResult::SUCCESS) {
-                                OptimizationData.push_back(optimize_data);
-                                std::array<int, 4> obs = optimize_data.feature.observability;
-                                this->PlaneFeatureHistogramObs[obs.at(0)]++;
-                                this->PlaneFeatureHistogramObs[obs.at(1)]++;
-                                this->PlaneFeatureHistogramObs[obs.at(2)]++;
-                                // this->PlaneFeatureHistogramObs[obs.at(3)]++;
+                                MatchingResult rejection_index = optimize_data.match_result;
+                                if (rejection_index == MatchingResult::SUCCESS) {
+                                    OptimizationData.push_back(optimize_data);
+                                    std::array<int, 4> obs = optimize_data.feature.observability;
+                                    this->PlaneFeatureHistogramObs[obs.at(0)]++;
+                                    this->PlaneFeatureHistogramObs[obs.at(1)]++;
+                                    this->PlaneFeatureHistogramObs[obs.at(2)]++;
+                                }
+                                this->MatchRejectionHistogramPlane[rejection_index]++;
                             }
-                            // statistic match result
-                            this->MatchRejectionHistogramPlane[rejection_index]++;
-                        }
-                       //   };
-                         //  tbb::blocked_range<size_t> range(0,this->PlanarsPoints->points.size());
-                          // compute_func(range);
-                       // tbb::parallel_for(range, compute_func);
-                    }  // loop  planar feature end
+                        };
+                        tbb::blocked_range<size_t> planar_range(0, this->PlanarsPoints->points.size());
+                        tbb::parallel_for(planar_range, planar_compute_func);
+                    }  // loop planar feature end
 
                    
                    if(icpIter==0)
@@ -295,6 +269,8 @@ namespace arise_slam {
                     ceres::Solver::Options options;
                     options.max_num_iterations = 4;
                     options.linear_solver_type = ceres::DENSE_QR;
+                    options.num_threads = 4;
+                    options.function_tolerance = 1e-4;
                     options.minimizer_progress_to_stdout = false;
                     options.check_gradients = false;
                     options.gradient_check_relative_precision = 1e-4;
@@ -357,7 +333,8 @@ namespace arise_slam {
                     }
 
                     if ((summary.num_successful_steps == 1) ||
-                        (icpIter == this->LocalizationICPMaxIter - 1)) {
+                        (icpIter == this->LocalizationICPMaxIter - 1) ||
+                        (iter_stats.translation_norm < 0.001 && iter_stats.rotation_norm < 0.001)) {
 
                         this->LocalizationUncertainty =
                                 EstimateRegistrationError(problem, 100);
@@ -419,10 +396,8 @@ namespace arise_slam {
 
             TicToc t_add_feature;
             this->WorldEdgesPoints->clear();
-
             this->WorldEdgesPoints->points.reserve(this->EdgesPoints->size());
             this->WorldEdgesPoints->header = this->EdgesPoints->header;
-
             for (const Point &p : *this->EdgesPoints) {
                 WorldEdgesPoints->push_back(TransformPointd(p, this->T_w_lidar));
             }
@@ -431,11 +406,8 @@ namespace arise_slam {
             localMap.addEdgePointCloud(*this->WorldEdgesPoints);
 
             this->WorldPlanarsPoints->clear();
-
             this->WorldPlanarsPoints->points.reserve(this->PlanarsPoints->size());
             this->WorldPlanarsPoints->header = this->PlanarsPoints->header;
-
-
             for (const Point &p : *this->PlanarsPoints) {
                 WorldPlanarsPoints->push_back(TransformPointd(p, this->T_w_lidar));
             }
@@ -659,10 +631,8 @@ namespace arise_slam {
         pFinal_query.y = pFinal.y();
         pFinal_query.z = pFinal.z();
 
-        TicToc kdtree_query_feature_time;
         auto bFind = local_map.nearestKSearchSurf(pFinal_query, nearest_pts,
                                                   nearest_dist, requiredNearest);
-        kdtree_time_analysis.kd_tree_query_time = kdtree_query_feature_time.toc();
 
         OptimizationParameter result;
         // if not find near neighborhood

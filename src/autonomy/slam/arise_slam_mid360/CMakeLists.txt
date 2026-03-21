@@ -3,9 +3,18 @@ project(arise_slam_mid360)
 
 set(CMAKE_BUILD_TYPE "Release")
 set(CMAKE_CXX_FLAGS "-std=c++1z")
-set(CMAKE_CXX_FLAGS_RELEASE "-O4 -Wall -g")
 set(CMAKE_MODULE_PATH ${PROJECT_SOURCE_DIR}/cmake)
 SET(TBB_INCLUDE_DIR "/usr/include/tbb")
+
+# Platform-specific optimization flags
+if(CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64|ARM")
+    # Jetson Orin: ARM Cortex-A78AE with NEON SIMD
+    set(CMAKE_CXX_FLAGS_RELEASE "-O3 -Wall -DNDEBUG -march=armv8.2-a+fp16+dotprod -mtune=cortex-a78ae")
+elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64")
+    set(CMAKE_CXX_FLAGS_RELEASE "-O3 -Wall -DNDEBUG")
+else()
+    set(CMAKE_CXX_FLAGS_RELEASE "-O3 -Wall -DNDEBUG")
+endif()
 
 
 
@@ -117,7 +126,8 @@ target_link_libraries(AriseSlamLib
   ${PCL_LIBRARIES}
   ${OpenCV_LIBRARIES}
   gtsam
- ${CERES_LIBRARIES}
+  ${CERES_LIBRARIES}
+  ${TBB_LIBRARIES}
 )
 
 # IMU PreIntegration node
@@ -147,6 +157,7 @@ ament_target_dependencies(laser_mapping_node rclcpp std_msgs nav_msgs sensor_msg
 target_link_libraries(laser_mapping_node
     ${PCL_LIBRARIES}
     ${CERES_LIBRARIES}
+    ${TBB_LIBRARIES}
     AriseSlamLib
 )
 

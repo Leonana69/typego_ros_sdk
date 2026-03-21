@@ -839,7 +839,7 @@ namespace arise_slam {
             laserCloudMsg.header.stamp = rclcpp::Time(timeLaserOdometry*1e9);
             laserCloudMsg.header.frame_id = WORLD_FRAME;
             pubLaserCloudMap->publish(laserCloudMsg);
-            
+
             if (slam.local_mode) {
                 priorCloudMsg.header.stamp = rclcpp::Time(timeLaserOdometry*1e9);
                 pubLaserCloudPrior->publish(priorCloudMsg);
@@ -862,21 +862,7 @@ namespace arise_slam {
         laserCloudFullRes3.header.frame_id = WORLD_FRAME;
         pubLaserCloudFullRes->publish(laserCloudFullRes3);
 
-        laserCloudFullRes_rot->clear();
-        laserCloudFullRes_rot->resize(laserCloudFullResNum);
-
-        for (int i = 0; i < laserCloudFullResNum; i++) {
-            laserCloudFullRes_rot->points[i].x = laserCloudFullRes->points[i].y;
-            laserCloudFullRes_rot->points[i].y = laserCloudFullRes->points[i].z;
-            laserCloudFullRes_rot->points[i].z = laserCloudFullRes->points[i].x;
-            laserCloudFullRes_rot->points[i].intensity = laserCloudFullRes->points[i].intensity;
-        }
-
-        // sensor_msgs::msg::PointCloud2 laserCloudFullRes4;
-        // pcl::toROSMsg(*laserCloudFullRes_rot, laserCloudFullRes4);
-        // laserCloudFullRes4.header.stamp = rclcpp::Time(timeLaserOdometry*1e9);
-        // laserCloudFullRes4.header.frame_id = WORLD_FRAME_ROT;
-        // pubLaserCloudFullRes_rot->publish(laserCloudFullRes4);
+        // laserCloudFullRes_rot computation removed — publisher is disabled
 
 
         // covert to loam axis
