@@ -225,7 +225,11 @@ namespace arise_slam {
         bool health_status = true;
         bool imu_init_success = false;
 
-       
+        // Correction spreading: gradually apply SLAM corrections to avoid discontinuities
+        Eigen::Vector3d correction_pos_ = Eigen::Vector3d::Zero();
+        Eigen::Quaterniond correction_rot_ = Eigen::Quaterniond::Identity();
+
+
         Eigen::Quaterniond firstImu;
         Eigen::Vector3d gyr_pre;
 

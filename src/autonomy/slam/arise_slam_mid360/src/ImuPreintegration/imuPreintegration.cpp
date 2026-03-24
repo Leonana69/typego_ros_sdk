@@ -513,7 +513,12 @@ namespace arise_slam {
     }
 
     void imuPreintegration::repropagate_imuodometry(double currentCorrectionTime) {
-        // 2. after optiization, re-propagate imu odometry preintegration
+        // 2. after optimization, re-propagate imu odometry preintegration
+
+        // Capture pre-correction predicted lidar pose (for correction spreading)
+        gtsam::NavState preState = imuIntegratorImu_->predict(prevStateOdom, prevBiasOdom);
+        gtsam::Pose3 preLidar = gtsam::Pose3(gtsam::Rot3(preState.quaternion()), preState.position()).compose(imu2Lidar);
+
         prevStateOdom = prevState_;
         prevBiasOdom = prevBias_;
 
@@ -537,7 +542,7 @@ namespace arise_slam {
                 double dt = (lastImuQT < 0) ? (1.0 / 200.0) :(imuTime - lastImuQT);
                 lastImuQT = imuTime;
 
-                if(dt < 0.001 || dt > 0.5) 
+                if(dt < 0.001 || dt > 0.5)
                     dt = 0.005;
 
                 imuIntegratorImu_->integrateMeasurement(gtsam::Vector3(thisImu->linear_acceleration.x, thisImu->linear_acceleration.y, thisImu->linear_acceleration.z),
@@ -545,6 +550,19 @@ namespace arise_slam {
                 lastImuQT = imuTime;
             }
         }
+
+        // Capture post-correction predicted lidar pose and accumulate the correction delta.
+        // The IMU callback will gradually apply this correction instead of jumping instantly.
+        gtsam::NavState postState = imuIntegratorImu_->predict(prevStateOdom, prevBiasOdom);
+        gtsam::Pose3 postLidar = gtsam::Pose3(gtsam::Rot3(postState.quaternion()), postState.position()).compose(imu2Lidar);
+
+        correction_pos_ += (postLidar.translation() - preLidar.translation());
+        Eigen::Quaterniond preQ(preLidar.rotation().toQuaternion().w(), preLidar.rotation().toQuaternion().x(),
+                                preLidar.rotation().toQuaternion().y(), preLidar.rotation().toQuaternion().z());
+        Eigen::Quaterniond postQ(postLidar.rotation().toQuaternion().w(), postLidar.rotation().toQuaternion().x(),
+                                 postLidar.rotation().toQuaternion().y(), postLidar.rotation().toQuaternion().z());
+        correction_rot_ = correction_rot_ * (preQ.inverse() * postQ);
+        correction_rot_.normalize();
 
     }
 
@@ -1089,26 +1107,40 @@ namespace arise_slam {
         // pubImuOdometry->publish(odometry);
 
 
+        Eigen::Quaterniond q_w_lidar(lidarPoseOpt.rotation().toQuaternion().w(), lidarPoseOpt.rotation().toQuaternion().x(),
+                                     lidarPoseOpt.rotation().toQuaternion().y(), lidarPoseOpt.rotation().toQuaternion().z());
+        q_w_lidar.normalize();
+
+        // Gradually apply SLAM corrections to avoid discontinuities.
+        // correction_pos_/rot_ hold the portion of the latest correction not yet applied.
+        // Decay them toward zero each frame; subtract from raw pose so the output
+        // transitions smoothly from pre-correction to post-correction trajectory.
+        // Zero lag during smooth IMU integration (correction_ stays at zero).
+        constexpr double correction_decay = 0.06;  // ~17 frames to reach 95% at 200Hz (~85ms)
+        correction_pos_ *= (1.0 - correction_decay);
+        correction_rot_ = correction_rot_.slerp(correction_decay, Eigen::Quaterniond::Identity());
+        correction_rot_.normalize();
+
+        Eigen::Vector3d pub_pos = lidarPoseOpt.translation() - correction_pos_;
+        Eigen::Quaterniond pub_rot = q_w_lidar * correction_rot_.inverse();
+        pub_rot.normalize();
+
         nav_msgs::msg::Odometry odometry2;
         odometry2.header.stamp = thisImu.header.stamp;
         odometry2.header.frame_id = WORLD_FRAME;
         odometry2.child_frame_id = SENSOR_FRAME;
-        
-        Eigen::Quaterniond q_w_lidar(lidarPoseOpt.rotation().toQuaternion().w(), lidarPoseOpt.rotation().toQuaternion().x(),
-                                     lidarPoseOpt.rotation().toQuaternion().y(), lidarPoseOpt.rotation().toQuaternion().z());
-        q_w_lidar.normalized();
 
-        odometry2.pose.pose.position.x = lidarPoseOpt.translation().x();
-        odometry2.pose.pose.position.y = lidarPoseOpt.translation().y();
-        odometry2.pose.pose.position.z = lidarPoseOpt.translation().z();
-        odometry2.pose.pose.orientation.x = q_w_lidar.x();
-        odometry2.pose.pose.orientation.y = q_w_lidar.y();
-        odometry2.pose.pose.orientation.z = q_w_lidar.z();
-        odometry2.pose.pose.orientation.w = q_w_lidar.w();
+        odometry2.pose.pose.position.x = pub_pos.x();
+        odometry2.pose.pose.position.y = pub_pos.y();
+        odometry2.pose.pose.position.z = pub_pos.z();
+        odometry2.pose.pose.orientation.x = pub_rot.x();
+        odometry2.pose.pose.orientation.y = pub_rot.y();
+        odometry2.pose.pose.orientation.z = pub_rot.z();
+        odometry2.pose.pose.orientation.w = pub_rot.w();
 
         odometry2.twist.twist.linear.x = velocity_curr.x();
-        odometry2.twist.twist.linear.y = velocity_curr.y();;
-        odometry2.twist.twist.linear.z = velocity_curr.z();;
+        odometry2.twist.twist.linear.y = velocity_curr.y();
+        odometry2.twist.twist.linear.z = velocity_curr.z();
         odometry2.twist.twist.angular.x =
                 thisImu.angular_velocity.x + prevBiasOdom.gyroscope().x();
         odometry2.twist.twist.angular.y =
@@ -1124,7 +1156,7 @@ namespace arise_slam {
         odometry2.pose.covariance[5] = prevBiasOdom.gyroscope().y();
         odometry2.pose.covariance[6] = prevBiasOdom.gyroscope().z();
         odometry2.pose.covariance[7] = config_.imuGravity;
-        
+
         frame_count++;
         if(frame_count%4==0)
             pubImuOdometry2->publish(odometry2);
@@ -1132,27 +1164,25 @@ namespace arise_slam {
         std_msgs::msg::Bool health_status_msg;
         health_status_msg.data = health_status;
         pubHealthStatus->publish(health_status_msg);
-       
-        tf2_ros::TransformBroadcaster br(this);
-        // tf2::Transform transform;
+
         geometry_msgs::msg::TransformStamped transform_stamped_;
         tf2::Transform transform;
         transform_stamped_.header.stamp  = thisImu.header.stamp;
         transform_stamped_.header.frame_id = WORLD_FRAME;
         transform_stamped_.child_frame_id = SENSOR_FRAME;
-        
-        tf2::Quaternion q;
-        transform.setOrigin(tf2::Vector3(odometry2.pose.pose.position.x, 
-        odometry2.pose.pose.position.y, odometry2.pose.pose.position.z));
 
-        q.setW(q_w_lidar.w());
-        q.setX(q_w_lidar.x());
-        q.setY(q_w_lidar.y());
-        q.setZ(q_w_lidar.z());
+        tf2::Quaternion q;
+        transform.setOrigin(tf2::Vector3(pub_pos.x(),
+            pub_pos.y(), pub_pos.z()));
+
+        q.setW(pub_rot.w());
+        q.setX(pub_rot.x());
+        q.setY(pub_rot.y());
+        q.setZ(pub_rot.z());
         transform.setRotation(q);
         transform_stamped_.transform = tf2::toMsg(transform);
         if(frame_count%4==0)
-            br.sendTransform(transform_stamped_);
+            tfOdom2BaseLink->sendTransform(transform_stamped_);
 
         // publish IMU path
         static nav_msgs::msg::Path imuPath;
