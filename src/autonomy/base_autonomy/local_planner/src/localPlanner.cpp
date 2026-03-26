@@ -207,18 +207,19 @@ void laserCloudHandler(const sensor_msgs::msg::PointCloud2::ConstSharedPtr laser
     pcl::PointXYZI point;
     laserCloudCrop->clear();
     size_t laserCloudSize = laserCloud->points.size();
+    laserCloudCrop->reserve(laserCloudSize);
+    float adjacentRangeSq = adjacentRange * adjacentRange;
     for (size_t i = 0; i < laserCloudSize; i++) {
-      point = laserCloud->points[i];
+      const auto& srcPt = laserCloud->points[i];
 
-      float pointX = point.x;
-      float pointY = point.y;
-      float pointZ = point.z;
-
-      float dis = sqrt((pointX - snapVX) * (pointX - snapVX) + (pointY - snapVY) * (pointY - snapVY));
-      if (dis < adjacentRange) {
-        point.x = pointX;
-        point.y = pointY;
-        point.z = pointZ;
+      float dX = srcPt.x - snapVX;
+      float dY = srcPt.y - snapVY;
+      float disSq = dX * dX + dY * dY;
+      if (disSq < adjacentRangeSq) {
+        point.x = srcPt.x;
+        point.y = srcPt.y;
+        point.z = srcPt.z;
+        point.intensity = srcPt.intensity;
         laserCloudCrop->push_back(point);
       }
     }
@@ -247,19 +248,20 @@ void terrainCloudHandler(const sensor_msgs::msg::PointCloud2::ConstSharedPtr ter
 
     pcl::PointXYZI point;
     terrainCloudCrop->clear();
+    float adjacentRangeSq = adjacentRange * adjacentRange;
     size_t terrainCloudSize = terrainCloud->points.size();
+    terrainCloudCrop->reserve(terrainCloudSize);
     for (size_t i = 0; i < terrainCloudSize; i++) {
-      point = terrainCloud->points[i];
+      const auto& srcPt = terrainCloud->points[i];
 
-      float pointX = point.x;
-      float pointY = point.y;
-      float pointZ = point.z;
-
-      float dis = sqrt((pointX - snapVX) * (pointX - snapVX) + (pointY - snapVY) * (pointY - snapVY));
-      if (dis < adjacentRange && (point.intensity > obstacleHeightThre || (point.intensity > groundHeightThre && useCost))) {
-        point.x = pointX;
-        point.y = pointY;
-        point.z = pointZ;
+      float dX = srcPt.x - snapVX;
+      float dY = srcPt.y - snapVY;
+      float disSq = dX * dX + dY * dY;
+      if (disSq < adjacentRangeSq && (srcPt.intensity > obstacleHeightThre || (srcPt.intensity > groundHeightThre && useCost))) {
+        point.x = srcPt.x;
+        point.y = srcPt.y;
+        point.z = srcPt.z;
+        point.intensity = srcPt.intensity;
         terrainCloudCrop->push_back(point);
       }
     }
@@ -893,10 +895,14 @@ int main(int argc, char** argv)
 
       float sinVehicleYaw = sin(vehicleYaw);
       float cosVehicleYaw = cos(vehicleYaw);
+      float adjacentRangeSq = adjacentRange * adjacentRange;
 
       pcl::PointXYZI point;
       plannerCloudCrop->clear();
       size_t plannerCloudSize = plannerCloud->points.size();
+      size_t boundaryCloudSize = boundaryCloud->points.size();
+      size_t addedObstaclesSize = addedObstacles->points.size();
+      plannerCloudCrop->reserve(plannerCloudSize + boundaryCloudSize + addedObstaclesSize);
       for (size_t i = 0; i < plannerCloudSize; i++) {
         float pointX1 = plannerCloud->points[i].x - vehicleX;
         float pointY1 = plannerCloud->points[i].y - vehicleY;
@@ -907,38 +913,36 @@ int main(int argc, char** argv)
         point.z = pointZ1;
         point.intensity = plannerCloud->points[i].intensity;
 
-        float dis = sqrt(point.x * point.x + point.y * point.y);
-        if (dis < adjacentRange && ((point.z > minRelZ && point.z < maxRelZ) || useTerrainAnalysis)) {
+        float disSq = point.x * point.x + point.y * point.y;
+        if (disSq < adjacentRangeSq && ((point.z > minRelZ && point.z < maxRelZ) || useTerrainAnalysis)) {
           plannerCloudCrop->push_back(point);
         }
       }
 
-      size_t boundaryCloudSize = boundaryCloud->points.size();
       for (size_t i = 0; i < boundaryCloudSize; i++) {
-        point.x = ((boundaryCloud->points[i].x - vehicleX) * cosVehicleYaw 
+        point.x = ((boundaryCloud->points[i].x - vehicleX) * cosVehicleYaw
                 + (boundaryCloud->points[i].y - vehicleY) * sinVehicleYaw);
-        point.y = (-(boundaryCloud->points[i].x - vehicleX) * sinVehicleYaw 
+        point.y = (-(boundaryCloud->points[i].x - vehicleX) * sinVehicleYaw
                 + (boundaryCloud->points[i].y - vehicleY) * cosVehicleYaw);
         point.z = boundaryCloud->points[i].z;
         point.intensity = boundaryCloud->points[i].intensity;
 
-        float dis = sqrt(point.x * point.x + point.y * point.y);
-        if (dis < adjacentRange) {
+        float disSq = point.x * point.x + point.y * point.y;
+        if (disSq < adjacentRangeSq) {
           plannerCloudCrop->push_back(point);
         }
       }
 
-      size_t addedObstaclesSize = addedObstacles->points.size();
       for (size_t i = 0; i < addedObstaclesSize; i++) {
-        point.x = ((addedObstacles->points[i].x - vehicleX) * cosVehicleYaw 
+        point.x = ((addedObstacles->points[i].x - vehicleX) * cosVehicleYaw
                 + (addedObstacles->points[i].y - vehicleY) * sinVehicleYaw);
-        point.y = (-(addedObstacles->points[i].x - vehicleX) * sinVehicleYaw 
+        point.y = (-(addedObstacles->points[i].x - vehicleX) * sinVehicleYaw
                 + (addedObstacles->points[i].y - vehicleY) * cosVehicleYaw);
         point.z = addedObstacles->points[i].z;
         point.intensity = addedObstacles->points[i].intensity;
 
-        float dis = sqrt(point.x * point.x + point.y * point.y);
-        if (dis < adjacentRange) {
+        float disSq = point.x * point.x + point.y * point.y;
+        if (disSq < adjacentRangeSq) {
           plannerCloudCrop->push_back(point);
         }
       }
@@ -1008,16 +1012,29 @@ int main(int argc, char** argv)
         float minObsAngCCW = 180.0;
         float diameter = sqrt(vehicleLength / 2.0 * vehicleLength / 2.0 + vehicleWidth / 2.0 * vehicleWidth / 2.0);
         float angOffset = atan2(vehicleWidth, vehicleLength) * 180.0 / M_PI;
+        float pathRangeScaled = pathRange / pathScale;
+        float goalRangeScaled = (relativeGoalDis + goalClearRange) / pathScale;
+        float diameterScaled = diameter / pathScale;
+        float pathRangeScaledSq = pathRangeScaled * pathRangeScaled;
+        float goalRangeScaledSq = goalRangeScaled * goalRangeScaled;
+        float diameterScaledSq = diameterScaled * diameterScaled;
+        // Pre-compute sin/cos lookup table for 36 rotation directions
+        float rotCosTable[36], rotSinTable[36];
+        for (int rotDir = 0; rotDir < 36; rotDir++) {
+          float rotAng = (10.0 * rotDir - 180.0) * M_PI / 180;
+          rotCosTable[rotDir] = cos(rotAng);
+          rotSinTable[rotDir] = sin(rotAng);
+        }
+
         size_t plannerCloudCropSize = plannerCloudCrop->points.size();
         for (size_t i = 0; i < plannerCloudCropSize; i++) {
           float x = plannerCloudCrop->points[i].x / pathScale;
           float y = plannerCloudCrop->points[i].y / pathScale;
           float h = plannerCloudCrop->points[i].intensity;
-          float dis = sqrt(x * x + y * y);
+          float disSq = x * x + y * y;
 
-          if (dis < pathRange / pathScale && (dis <= (relativeGoalDis + goalClearRange) / pathScale || !pathCropByGoal) && checkObstacle) {
+          if (disSq < pathRangeScaledSq && (disSq <= goalRangeScaledSq || !pathCropByGoal) && checkObstacle) {
             for (int rotDir = 0; rotDir < 36; rotDir++) {
-              float rotAng = (10.0 * rotDir - 180.0) * M_PI / 180;
               float angDiff = fabs(joyDir - (10.0 * rotDir - 180.0));
               if (angDiff > 180.0) {
                 angDiff = 360.0 - angDiff;
@@ -1027,8 +1044,10 @@ int main(int argc, char** argv)
                 continue;
               }
 
-              float x2 = cos(rotAng) * x + sin(rotAng) * y;
-              float y2 = -sin(rotAng) * x + cos(rotAng) * y;
+              float cosRot = rotCosTable[rotDir];
+              float sinRot = rotSinTable[rotDir];
+              float x2 = cosRot * x + sinRot * y;
+              float y2 = -sinRot * x + cosRot * y;
 
               float scaleY = x2 / gridVoxelOffsetX + searchRadius / gridVoxelOffsetY 
                              * (gridVoxelOffsetX - x2) / gridVoxelOffsetX;
@@ -1051,7 +1070,7 @@ int main(int argc, char** argv)
             }
           }
 
-          if (dis < diameter / pathScale && (fabs(x) > vehicleLength / pathScale / 2.0 || fabs(y) > vehicleWidth / pathScale / 2.0) && 
+          if (disSq < diameterScaledSq && (fabs(x) > vehicleLength / pathScale / 2.0 || fabs(y) > vehicleWidth / pathScale / 2.0) &&
               (h > obstacleHeightThre || !useTerrainAnalysis) && checkRotObstacle) {
             float angObs = atan2(y, x) * 180.0 / M_PI;
             if (angObs > 0) {
