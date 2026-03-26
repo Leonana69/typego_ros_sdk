@@ -1,0 +1,9 @@
+# Set speed parameters at runtime.
+# Set a field to negative value to leave that parameter unchanged.
+float64 max_speed
+float64 autonomy_speed
+---
+bool success
+string message
+float64 current_max_speed
+float64 current_autonomy_speed

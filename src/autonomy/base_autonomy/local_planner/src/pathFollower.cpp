@@ -20,6 +20,7 @@
 #include <nav_msgs/msg/path.hpp>
 #include <geometry_msgs/msg/twist.hpp>
 
+
 #include "tf2/transform_datatypes.h"
 #include "tf2_ros/transform_broadcaster.h"
 #include "tf2_geometry_msgs/tf2_geometry_msgs.hpp"
@@ -161,13 +162,33 @@ void pathHandler(const nav_msgs::msg::Path::ConstSharedPtr pathIn)
   pathInit = true;
 }
 
+static float clampedAutonomySpeed()
+{
+  float s = static_cast<float>(autonomySpeed / maxSpeed);
+  if (s < 0.0f) s = 0.0f;
+  else if (s > 1.0f) s = 1.0f;
+  return s;
+}
+
 void joystickHandler(const sensor_msgs::msg::Joy::ConstSharedPtr joy)
 {
-  joyTime = nh->now().seconds(); 
+  joyTime = nh->now().seconds();
   joySpeedRaw = sqrt(joy->axes[3] * joy->axes[3] + joy->axes[4] * joy->axes[4]);
-  joySpeed = joySpeedRaw;
-  if (joySpeed > 1.0) joySpeed = 1.0;
-  if (joy->axes[4] == 0) joySpeed = 0;
+
+  if (joy->axes[2] > -0.1) {
+    autonomyMode = false;
+  } else {
+    autonomyMode = true;
+  }
+
+  if (autonomyMode) {
+    joySpeed = clampedAutonomySpeed();
+  } else {
+    joySpeed = joySpeedRaw;
+    if (joySpeed > 1.0) joySpeed = 1.0;
+    if (joy->axes[4] == 0) joySpeed = 0;
+  }
+
   joyYaw = joy->axes[3];
   if (joySpeed == 0 && noRotAtStop) joyYaw = 0;
 
@@ -179,12 +200,6 @@ void joystickHandler(const sensor_msgs::msg::Joy::ConstSharedPtr joy)
   joyManualFwd = joy->axes[4];
   joyManualLeft = joy->axes[3];
   joyManualYaw = joy->axes[0];
-
-  if (joy->axes[2] > -0.1) {
-    autonomyMode = false;
-  } else {
-    autonomyMode = true;
-  }
 
   if (joy->axes[5] > -0.1) {
     manualMode = false;
@@ -212,6 +227,22 @@ void stopHandler(const std_msgs::msg::Int8::ConstSharedPtr stop)
 void slowDownHandler(const std_msgs::msg::Int8::ConstSharedPtr slow)
 {
   slowDown = slow->data;
+}
+
+void speedConfigHandler(const std_msgs::msg::Float32MultiArray::ConstSharedPtr msg)
+{
+  if (msg->data.size() < 2) return;
+  double newMax = msg->data[0];
+  double newAutonomy = msg->data[1];
+  if (newMax <= 0 || newAutonomy <= 0) return;
+
+  maxSpeed = newMax;
+  autonomySpeed = newAutonomy;
+  if (autonomyMode) {
+    joySpeed = clampedAutonomySpeed();
+  }
+  RCLCPP_INFO(nh->get_logger(), "Speed config updated: maxSpeed=%.3f, autonomySpeed=%.3f",
+              maxSpeed, autonomySpeed);
 }
 
 int main(int argc, char** argv)
@@ -319,14 +350,14 @@ int main(int argc, char** argv)
 
   auto subSlowDown = nh->create_subscription<std_msgs::msg::Int8>("/slow_down", 5, slowDownHandler);
 
+  auto subSpeedConfig = nh->create_subscription<std_msgs::msg::Float32MultiArray>(
+      "/speed_config", rclcpp::QoS(1).transient_local(), speedConfigHandler);
+
   auto pubSpeed = nh->create_publisher<geometry_msgs::msg::Twist>("/cmd_vel", 5);
   geometry_msgs::msg::Twist cmd_vel;
 
   if (autonomyMode) {
-    joySpeed = autonomySpeed / maxSpeed;
-
-    if (joySpeed < 0) joySpeed = 0;
-    else if (joySpeed > 1.0) joySpeed = 1.0;
+    joySpeed = clampedAutonomySpeed();
   }
 
   rclcpp::Rate rate(100);
