@@ -12,6 +12,7 @@
   <arg name="vehicleFrame" default="base_link"/>
   <arg name="goalX" default="0.0"/>
   <arg name="goalY" default="0.0"/>
+  <arg name="use_sim_time" default="false"/>
 
   <node pkg="local_planner" exec="localPlanner" name="localPlanner" output="screen">
     <param from="$(find-pkg-share local_planner)/config/$(var config).yaml"/>
@@ -60,6 +61,7 @@
     <param name="freezeTime" value="0.0" />
     <param name="goalX" value="$(var goalX)" />
     <param name="goalY" value="$(var goalY)" />
+    <param name="use_sim_time" value="$(var use_sim_time)" />
   </node>
 
   <node pkg="local_planner" exec="pathFollower" name="pathFollower" output="screen">
@@ -90,6 +92,7 @@
     <param name="autonomyMode" value="$(var autonomyMode)" />
     <param name="autonomySpeed" value="$(var autonomySpeed)" />
     <param name="joyToSpeedDelay" value="$(var joyToSpeedDelay)" />
+    <param name="use_sim_time" value="$(var use_sim_time)" />
   </node>
 
   <node pkg="tf2_ros" exec="static_transform_publisher" name="vehicleTransPublisher" args="-$(var sensorOffsetX) -$(var sensorOffsetY) 0 0 0 0 /sensor /$(var vehicleFrame)"/>

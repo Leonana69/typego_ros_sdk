@@ -1,5 +1,9 @@
 <launch>
 
-  <node pkg="sensor_scan_generation" exec="sensorScanGeneration" name="sensorScanGeneration" output="screen"/>
+  <arg name="use_sim_time" default="false"/>
+
+  <node pkg="sensor_scan_generation" exec="sensorScanGeneration" name="sensorScanGeneration" output="screen">
+    <param name="use_sim_time" value="$(var use_sim_time)"/>
+  </node>
 
 </launch>

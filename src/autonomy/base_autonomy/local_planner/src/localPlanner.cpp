@@ -4,6 +4,9 @@
 #include <stdlib.h>
 #include <chrono>
 #include <iostream>
+#include <mutex>
+#include <atomic>
+#include <stdexcept>
 #include "rclcpp/rclcpp.hpp"
 #include "rclcpp/time.hpp"
 #include "rclcpp/clock.hpp"
@@ -147,8 +150,8 @@ int clearPathPerGroupNum[36 * groupNum] = {0};
 float pathPenaltyPerGroupScore[36 * groupNum] = {0};
 std::vector<int> correspondences[gridVoxelNum];
 
-bool newLaserCloud = false;
-bool newTerrainCloud = false;
+std::atomic<bool> newLaserCloud{false};
+std::atomic<bool> newTerrainCloud{false};
 
 double odomTime = 0;
 double joyTime = 0;
@@ -158,6 +161,8 @@ float vehicleX = 0, vehicleY = 0, vehicleZ = 0;
 
 pcl::VoxelGrid<pcl::PointXYZI> laserDwzFilter, terrainDwzFilter;
 rclcpp::Node::SharedPtr nh;
+std::mutex poseMtx;
+std::atomic<double> lastScanReceiveTime{0};
 
 void publishJoy(bool autonomy)
 {
@@ -171,6 +176,7 @@ void publishJoy(bool autonomy)
 
 void odometryHandler(const nav_msgs::msg::Odometry::ConstSharedPtr odom)
 {
+  std::lock_guard<std::mutex> lock(poseMtx);
   odomTime = rclcpp::Time(odom->header.stamp).seconds();
   double roll, pitch, yaw;
   geometry_msgs::msg::Quaternion geoQuat = odom->pose.pose.orientation;
@@ -187,6 +193,14 @@ void odometryHandler(const nav_msgs::msg::Odometry::ConstSharedPtr odom)
 void laserCloudHandler(const sensor_msgs::msg::PointCloud2::ConstSharedPtr laserCloud2)
 {
   if (!useTerrainAnalysis) {
+    float snapVX, snapVY;
+    {
+      std::lock_guard<std::mutex> lock(poseMtx);
+      snapVX = vehicleX;
+      snapVY = vehicleY;
+    }
+    lastScanReceiveTime.store(nh->now().seconds());
+
     laserCloud->clear();
     pcl::fromROSMsg(*laserCloud2, *laserCloud);
 
@@ -200,7 +214,7 @@ void laserCloudHandler(const sensor_msgs::msg::PointCloud2::ConstSharedPtr laser
       float pointY = point.y;
       float pointZ = point.z;
 
-      float dis = sqrt((pointX - vehicleX) * (pointX - vehicleX) + (pointY - vehicleY) * (pointY - vehicleY));
+      float dis = sqrt((pointX - snapVX) * (pointX - snapVX) + (pointY - snapVY) * (pointY - snapVY));
       if (dis < adjacentRange) {
         point.x = pointX;
         point.y = pointY;
@@ -220,6 +234,14 @@ void laserCloudHandler(const sensor_msgs::msg::PointCloud2::ConstSharedPtr laser
 void terrainCloudHandler(const sensor_msgs::msg::PointCloud2::ConstSharedPtr terrainCloud2)
 {
   if (useTerrainAnalysis) {
+    float snapVX, snapVY;
+    {
+      std::lock_guard<std::mutex> lock(poseMtx);
+      snapVX = vehicleX;
+      snapVY = vehicleY;
+    }
+    lastScanReceiveTime.store(nh->now().seconds());
+
     terrainCloud->clear();
     pcl::fromROSMsg(*terrainCloud2, *terrainCloud);
 
@@ -233,7 +255,7 @@ void terrainCloudHandler(const sensor_msgs::msg::PointCloud2::ConstSharedPtr ter
       float pointY = point.y;
       float pointZ = point.z;
 
-      float dis = sqrt((pointX - vehicleX) * (pointX - vehicleX) + (pointY - vehicleY) * (pointY - vehicleY));
+      float dis = sqrt((pointX - snapVX) * (pointX - snapVX) + (pointY - snapVY) * (pointY - snapVY));
       if (dis < adjacentRange && (point.intensity > obstacleHeightThre || (point.intensity > groundHeightThre && useCost))) {
         point.x = pointX;
         point.y = pointY;
@@ -381,8 +403,7 @@ int readPlyHeader(FILE *filePtr)
   while (strCur != "end_header") {
     val = fscanf(filePtr, "%s", str);
     if (val != 1) {
-      RCLCPP_INFO(nh->get_logger(), "Error reading input files, exit.");
-      exit(1);
+      throw std::runtime_error("Error reading PLY header");
     }
 
     strLast = strCur;
@@ -391,8 +412,7 @@ int readPlyHeader(FILE *filePtr)
     if (strCur == "vertex" && strLast == "element") {
       val = fscanf(filePtr, "%d", &pointNum);
       if (val != 1) {
-        RCLCPP_INFO(nh->get_logger(), "Error reading input files, exit.");
-        exit(1);
+        throw std::runtime_error("Error reading PLY header vertex count");
       }
     }
   }
@@ -406,8 +426,7 @@ void readStartPaths()
 
   FILE *filePtr = fopen(fileName.c_str(), "r");
   if (filePtr == NULL) {
-    RCLCPP_INFO(nh->get_logger(), "Cannot read input files, exit.");
-    exit(1);
+    throw std::runtime_error("Cannot open " + fileName);
   }
 
   int pointNum = readPlyHeader(filePtr);
@@ -421,8 +440,8 @@ void readStartPaths()
     val4 = fscanf(filePtr, "%d", &groupID);
 
     if (val1 != 1 || val2 != 1 || val3 != 1 || val4 != 1) {
-      RCLCPP_INFO(nh->get_logger(), "Error reading input files, exit.");
-        exit(1);
+      fclose(filePtr);
+      throw std::runtime_error("Error reading data from " + fileName);
     }
 
     if (groupID >= 0 && groupID < groupNum) {
@@ -440,8 +459,7 @@ void readPaths()
 
   FILE *filePtr = fopen(fileName.c_str(), "r");
   if (filePtr == NULL) {
-    RCLCPP_INFO(nh->get_logger(), "Cannot read input files, exit.");
-    exit(1);
+    throw std::runtime_error("Cannot open " + fileName);
   }
 
   int pointNum = readPlyHeader(filePtr);
@@ -458,8 +476,8 @@ void readPaths()
     val5 = fscanf(filePtr, "%f", &point.intensity);
 
     if (val1 != 1 || val2 != 1 || val3 != 1 || val4 != 1 || val5 != 1) {
-      RCLCPP_INFO(nh->get_logger(), "Error reading input files, exit.");
-        exit(1);
+      fclose(filePtr);
+      throw std::runtime_error("Error reading data from " + fileName);
     }
 
     if (pathID >= 0 && pathID < pathNum) {
@@ -481,13 +499,12 @@ void readPathList()
 
   FILE *filePtr = fopen(fileName.c_str(), "r");
   if (filePtr == NULL) {
-    RCLCPP_INFO(nh->get_logger(), "Cannot read input files, exit.");
-    exit(1);
+    throw std::runtime_error("Cannot open " + fileName);
   }
 
   if (pathNum != readPlyHeader(filePtr)) {
-    RCLCPP_INFO(nh->get_logger(), "Incorrect path number, exit.");
-    exit(1);
+    fclose(filePtr);
+    throw std::runtime_error("Incorrect path number in " + fileName);
   }
 
   int val1, val2, val3, val4, val5, pathID, groupID;
@@ -500,8 +517,8 @@ void readPathList()
     val5 = fscanf(filePtr, "%d", &groupID);
 
     if (val1 != 1 || val2 != 1 || val3 != 1 || val4 != 1 || val5 != 1) {
-      RCLCPP_INFO(nh->get_logger(), "Error reading input files, exit.");
-        exit(1);
+      fclose(filePtr);
+      throw std::runtime_error("Error reading data from " + fileName);
     }
 
     if (pathID >= 0 && pathID < pathNum && groupID >= 0 && groupID < groupNum) {
@@ -519,23 +536,22 @@ void readCorrespondences()
 
   FILE *filePtr = fopen(fileName.c_str(), "r");
   if (filePtr == NULL) {
-    RCLCPP_INFO(nh->get_logger(), "Cannot read input files, exit.");
-    exit(1);
+    throw std::runtime_error("Cannot open " + fileName);
   }
 
   int val1, gridVoxelID, pathID;
   for (int i = 0; i < gridVoxelNum; i++) {
     val1 = fscanf(filePtr, "%d", &gridVoxelID);
     if (val1 != 1) {
-      RCLCPP_INFO(nh->get_logger(), "Error reading input files, exit.");
-        exit(1);
+      fclose(filePtr);
+      throw std::runtime_error("Error reading grid voxel ID from " + fileName);
     }
 
     while (1) {
       val1 = fscanf(filePtr, "%d", &pathID);
       if (val1 != 1) {
-        RCLCPP_INFO(nh->get_logger(), "Error reading input files, exit.");
-          exit(1);
+        fclose(filePtr);
+        throw std::runtime_error("Error reading path ID from " + fileName);
       }
 
       if (pathID != -1) {
@@ -710,9 +726,49 @@ int main(int argc, char** argv)
   nh->get_parameter("goalY", goalY);
   nh->get_parameter("goalTolerance", goal_tolerance_);
 
+  // Validate safety-critical parameters
+  if (maxSpeed <= 0) {
+    RCLCPP_FATAL(nh->get_logger(), "maxSpeed must be > 0, got %f", maxSpeed);
+    rclcpp::shutdown();
+    return 1;
+  }
+  if (adjacentRange <= 0) {
+    RCLCPP_FATAL(nh->get_logger(), "adjacentRange must be > 0, got %f", adjacentRange);
+    rclcpp::shutdown();
+    return 1;
+  }
+  if (vehicleLength <= 0 || vehicleWidth <= 0) {
+    RCLCPP_FATAL(nh->get_logger(), "vehicleLength and vehicleWidth must be > 0, got %f, %f",
+        vehicleLength, vehicleWidth);
+    rclcpp::shutdown();
+    return 1;
+  }
+  if (obstacleHeightThre < 0) {
+    RCLCPP_FATAL(nh->get_logger(), "obstacleHeightThre must be >= 0, got %f", obstacleHeightThre);
+    rclcpp::shutdown();
+    return 1;
+  }
+  if (groundHeightThre < 0) {
+    RCLCPP_FATAL(nh->get_logger(), "groundHeightThre must be >= 0, got %f", groundHeightThre);
+    rclcpp::shutdown();
+    return 1;
+  }
+  if (laserVoxelSize <= 0 || terrainVoxelSize <= 0) {
+    RCLCPP_FATAL(nh->get_logger(), "Voxel sizes must be > 0, got laser=%f terrain=%f",
+        laserVoxelSize, terrainVoxelSize);
+    rclcpp::shutdown();
+    return 1;
+  }
+  if (pathScale <= 0 || minPathScale <= 0 || minPathRange <= 0) {
+    RCLCPP_FATAL(nh->get_logger(), "pathScale, minPathScale, minPathRange must be > 0");
+    rclcpp::shutdown();
+    return 1;
+  }
+
   auto subOdometry = nh->create_subscription<nav_msgs::msg::Odometry>("/state_estimation", 5, odometryHandler);
 
-  auto subLaserCloud = nh->create_subscription<sensor_msgs::msg::PointCloud2>("/registered_scan", 5, laserCloudHandler);
+  auto subLaserCloud = nh->create_subscription<sensor_msgs::msg::PointCloud2>(
+      "/registered_scan", rclcpp::SensorDataQoS(), laserCloudHandler);
 
   auto subTerrainCloud = nh->create_subscription<sensor_msgs::msg::PointCloud2>("/terrain_map", 5, terrainCloudHandler);
 
@@ -780,12 +836,18 @@ int main(int argc, char** argv)
   laserDwzFilter.setLeafSize(laserVoxelSize, laserVoxelSize, laserVoxelSize);
   terrainDwzFilter.setLeafSize(terrainVoxelSize, terrainVoxelSize, terrainVoxelSize);
 
-  readStartPaths();
-  #if PLOTPATHSET == 1
-  readPaths();
-  #endif
-  readPathList();
-  readCorrespondences();
+  try {
+    readStartPaths();
+    #if PLOTPATHSET == 1
+    readPaths();
+    #endif
+    readPathList();
+    readCorrespondences();
+  } catch (const std::runtime_error& e) {
+    RCLCPP_FATAL(nh->get_logger(), "Failed to load path files: %s", e.what());
+    rclcpp::shutdown();
+    return 1;
+  }
 
   RCLCPP_INFO(nh->get_logger(), "Initialization complete.");
 
@@ -795,6 +857,20 @@ int main(int argc, char** argv)
     rclcpp::spin_some(nh);
 
     if (newLaserCloud || newTerrainCloud) {
+      // Snapshot pose state for thread-safety
+      float vehicleX, vehicleY, vehicleZ, vehicleRoll, vehiclePitch, vehicleYaw;
+      double odomTime;
+      {
+        std::lock_guard<std::mutex> lock(poseMtx);
+        vehicleX = ::vehicleX;
+        vehicleY = ::vehicleY;
+        vehicleZ = ::vehicleZ;
+        vehicleRoll = ::vehicleRoll;
+        vehiclePitch = ::vehiclePitch;
+        vehicleYaw = ::vehicleYaw;
+        odomTime = ::odomTime;
+      }
+
       if (newLaserCloud) {
         newLaserCloud = false;
 
@@ -1217,6 +1293,22 @@ int main(int argc, char** argv)
       plannerCloud2.header.stamp = rclcpp::Time(static_cast<uint64_t>(odomTime * 1e9));
       plannerCloud2.header.frame_id = vehicleFrame;
       pubLaserCloud->publish(plannerCloud2);*/
+    }
+
+    // Staleness watchdog: publish stop path if scan data is stale
+    {
+      double lastRecv = lastScanReceiveTime.load();
+      if (lastRecv > 0 && nh->now().seconds() - lastRecv > 0.5) {
+        path.poses.resize(1);
+        path.poses[0].pose.position.x = 0;
+        path.poses[0].pose.position.y = 0;
+        path.poses[0].pose.position.z = 0;
+        path.header.stamp = nh->now();
+        path.header.frame_id = vehicleFrame;
+        pubPath->publish(path);
+        RCLCPP_WARN_THROTTLE(nh->get_logger(), *nh->get_clock(), 2000,
+            "Scan data stale, publishing stop path");
+      }
     }
 
     status = rclcpp::ok();

@@ -31,7 +31,6 @@ def generate_launch_description():
       get_package_share_directory('local_planner'), 'launch', 'local_planner.launch')
     ),
     launch_arguments={
-      'realRobot': 'true',
       'sensorOffsetX': sensorOffsetX,
       'sensorOffsetY': sensorOffsetY,
       'cameraOffsetZ': cameraOffsetZ,

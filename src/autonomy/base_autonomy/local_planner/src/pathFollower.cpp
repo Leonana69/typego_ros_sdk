@@ -3,6 +3,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <chrono>
+#include <mutex>
+#include <atomic>
 
 #include "rclcpp/rclcpp.hpp"
 #include "rclcpp/time.hpp"
@@ -78,8 +80,8 @@ float joyYaw = 0;
 float joyManualFwd = 0;
 float joyManualLeft = 0;
 float joyManualYaw = 0;
-int safetyStop = 0;
-int slowDown = 0;
+std::atomic<int> safetyStop{0};
+std::atomic<int> slowDown{0};
 
 float vehicleX = 0;
 float vehicleY = 0;
@@ -103,15 +105,19 @@ double joyTime = 0;
 double slowInitTime = 0;
 double stopInitTime = 0.0;
 int pathPointID = 0;
-bool pathInit = false;
+std::atomic<bool> pathInit{false};
 bool navFwd = true;
 double switchTime = 0;
 
 nav_msgs::msg::Path path;
 rclcpp::Node::SharedPtr nh;
+std::mutex poseMtx;
+std::atomic<double> lastOdomReceiveTime{0};
 
 void odomHandler(const nav_msgs::msg::Odometry::ConstSharedPtr odomIn)
 {
+  std::lock_guard<std::mutex> lock(poseMtx);
+  lastOdomReceiveTime.store(nh->now().seconds());
   odomTime = rclcpp::Time(odomIn->header.stamp).seconds();
   double roll, pitch, yaw;
   geometry_msgs::msg::Quaternion geoQuat = odomIn->pose.pose.orientation;
@@ -135,6 +141,7 @@ void odomHandler(const nav_msgs::msg::Odometry::ConstSharedPtr odomIn)
 
 void pathHandler(const nav_msgs::msg::Path::ConstSharedPtr pathIn)
 {
+  std::lock_guard<std::mutex> lock(poseMtx);
   size_t pathSize = pathIn->poses.size();
   path.poses.resize(pathSize);
   for (size_t i = 0; i < pathSize; i++) {
@@ -278,6 +285,28 @@ int main(int argc, char** argv)
   nh->get_parameter("autonomySpeed", autonomySpeed);
   nh->get_parameter("joyToSpeedDelay", joyToSpeedDelay);
 
+  // Validate safety-critical parameters
+  if (maxSpeed <= 0) {
+    RCLCPP_FATAL(nh->get_logger(), "maxSpeed must be > 0, got %f", maxSpeed);
+    rclcpp::shutdown();
+    return 1;
+  }
+  if (maxAccel <= 0) {
+    RCLCPP_FATAL(nh->get_logger(), "maxAccel must be > 0, got %f", maxAccel);
+    rclcpp::shutdown();
+    return 1;
+  }
+  if (lookAheadDis <= 0) {
+    RCLCPP_FATAL(nh->get_logger(), "lookAheadDis must be > 0, got %f", lookAheadDis);
+    rclcpp::shutdown();
+    return 1;
+  }
+  if (slowDwnDisThre <= 0) {
+    RCLCPP_FATAL(nh->get_logger(), "slowDwnDisThre must be > 0, got %f", slowDwnDisThre);
+    rclcpp::shutdown();
+    return 1;
+  }
+
   auto subOdom = nh->create_subscription<nav_msgs::msg::Odometry>("/state_estimation", 5, odomHandler);
 
   auto subPath = nh->create_subscription<nav_msgs::msg::Path>("/path", 5, pathHandler);
@@ -305,10 +334,41 @@ int main(int argc, char** argv)
   while (status) {
     rclcpp::spin_some(nh);
 
-    if (pathInit) {
-      float vehicleXRel = cos(vehicleYawRec) * (vehicleX - vehicleXRec) 
+    if (pathInit.load()) {
+      // Snapshot pose state for thread-safety
+      float vehicleX, vehicleY, vehicleYaw;
+      float vehicleXRec, vehicleYRec, vehicleYawRec;
+      double odomTime, slowInitTime, stopInitTime;
+      {
+        std::lock_guard<std::mutex> lock(poseMtx);
+        vehicleX = ::vehicleX;
+        vehicleY = ::vehicleY;
+        vehicleYaw = ::vehicleYaw;
+        vehicleXRec = ::vehicleXRec;
+        vehicleYRec = ::vehicleYRec;
+        vehicleYawRec = ::vehicleYawRec;
+        odomTime = ::odomTime;
+        slowInitTime = ::slowInitTime;
+        stopInitTime = ::stopInitTime;
+      }
+
+      // Staleness watchdog: zero cmd_vel if odometry data is stale
+      if (lastOdomReceiveTime.load() > 0 &&
+          nh->now().seconds() - lastOdomReceiveTime.load() > 0.5) {
+        cmd_vel.linear.x = 0;
+        cmd_vel.linear.y = 0;
+        cmd_vel.angular.z = 0;
+        pubSpeed->publish(cmd_vel);
+        RCLCPP_WARN_THROTTLE(nh->get_logger(), *nh->get_clock(), 2000,
+            "Odometry data stale, zeroing cmd_vel");
+        status = rclcpp::ok();
+        rate.sleep();
+        continue;
+      }
+
+      float vehicleXRel = cos(vehicleYawRec) * (vehicleX - vehicleXRec)
                         + sin(vehicleYawRec) * (vehicleY - vehicleYRec);
-      float vehicleYRel = -sin(vehicleYawRec) * (vehicleX - vehicleXRec) 
+      float vehicleYRel = -sin(vehicleYawRec) * (vehicleX - vehicleXRec)
                         + cos(vehicleYawRec) * (vehicleY - vehicleYRec);
 
       size_t pathSize = path.poses.size();

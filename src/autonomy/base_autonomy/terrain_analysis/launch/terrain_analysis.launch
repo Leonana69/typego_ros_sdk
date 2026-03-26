@@ -1,6 +1,9 @@
 <launch>
 
+  <arg name="use_sim_time" default="false"/>
+
   <node pkg="terrain_analysis" exec="terrainAnalysis" name="terrainAnalysis" output="screen">
+    <param name="use_sim_time" value="$(var use_sim_time)"/>
     <param name="scanVoxelSize" value="0.05" />
     <param name="decayTime" value="1.0" />
     <param name="noDecayDis" value="1.75" />

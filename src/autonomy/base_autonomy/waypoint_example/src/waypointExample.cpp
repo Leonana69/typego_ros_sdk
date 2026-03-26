@@ -2,6 +2,7 @@
 #include <time.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <stdexcept>
 
 #include "rclcpp/rclcpp.hpp"
 
@@ -53,8 +54,7 @@ void readWaypointFile()
 {
   FILE* waypoint_file = fopen(waypoint_file_dir.c_str(), "r");
   if (waypoint_file == NULL) {
-    RCLCPP_INFO(nh->get_logger(), "Cannot read input files, exit.");
-    exit(1);
+    throw std::runtime_error("Cannot open waypoint file: " + waypoint_file_dir);
   }
 
   char str[50];
@@ -63,8 +63,7 @@ void readWaypointFile()
   while (strCur != "end_header") {
     val = fscanf(waypoint_file, "%s", str);
     if (val != 1) {
-      RCLCPP_INFO(nh->get_logger(), "Error reading input files, exit.");
-      exit(1);
+      throw std::runtime_error("Error reading waypoint file header");
     }
 
     strLast = strCur;
@@ -73,8 +72,7 @@ void readWaypointFile()
     if (strCur == "vertex" && strLast == "element") {
       val = fscanf(waypoint_file, "%d", &pointNum);
       if (val != 1) {
-        RCLCPP_INFO(nh->get_logger(), "Error reading input files, exit.");
-        exit(1);
+        throw std::runtime_error("Error reading waypoint file vertex count");
       }
     }
   }
@@ -88,8 +86,8 @@ void readWaypointFile()
     val3 = fscanf(waypoint_file, "%f", &point.z);
 
     if (val1 != 1 || val2 != 1 || val3 != 1) {
-      RCLCPP_INFO(nh->get_logger(), "Error reading input files, exit.");
-      exit(1);
+      fclose(waypoint_file);
+      throw std::runtime_error("Error reading waypoint data");
     }
 
     waypoints->push_back(point);
@@ -103,8 +101,7 @@ void readBoundaryFile()
 {
   FILE* boundary_file = fopen(boundary_file_dir.c_str(), "r");
   if (boundary_file == NULL) {
-    RCLCPP_INFO(nh->get_logger(), "Cannot read input files, exit.");
-    exit(1);
+    throw std::runtime_error("Cannot open boundary file: " + boundary_file_dir);
   }
 
   char str[50];
@@ -113,8 +110,7 @@ void readBoundaryFile()
   while (strCur != "end_header") {
     val = fscanf(boundary_file, "%s", str);
     if (val != 1) {
-      RCLCPP_INFO(nh->get_logger(), "Error reading input files, exit.");
-      exit(1);
+      throw std::runtime_error("Error reading boundary file header");
     }
 
     strLast = strCur;
@@ -123,8 +119,7 @@ void readBoundaryFile()
     if (strCur == "vertex" && strLast == "element") {
       val = fscanf(boundary_file, "%d", &pointNum);
       if (val != 1) {
-        RCLCPP_INFO(nh->get_logger(), "Error reading input files, exit.");
-        exit(1);
+        throw std::runtime_error("Error reading boundary file vertex count");
       }
     }
   }
@@ -138,8 +133,8 @@ void readBoundaryFile()
     val3 = fscanf(boundary_file, "%f", &point.z);
 
     if (val1 != 1 || val2 != 1 || val3 != 1) {
-      RCLCPP_INFO(nh->get_logger(), "Error reading input files, exit.");
-      exit(1);
+      fclose(boundary_file);
+      throw std::runtime_error("Error reading boundary data");
     }
 
     boundary->push_back(point);
@@ -196,11 +191,23 @@ int main(int argc, char** argv)
   boundaryMsgs.header.frame_id = "map";
 
   // read waypoints from file
-  readWaypointFile();
+  try {
+    readWaypointFile();
+  } catch (const std::runtime_error& e) {
+    RCLCPP_FATAL(nh->get_logger(), "%s", e.what());
+    rclcpp::shutdown();
+    return 1;
+  }
 
   // read boundary from file
   if (sendBoundary) {
-    readBoundaryFile();
+    try {
+      readBoundaryFile();
+    } catch (const std::runtime_error& e) {
+      RCLCPP_FATAL(nh->get_logger(), "%s", e.what());
+      rclcpp::shutdown();
+      return 1;
+    }
 
     size_t boundarySize = boundary->points.size();
     boundaryMsgs.polygon.points.resize(boundarySize);
@@ -215,8 +222,9 @@ int main(int argc, char** argv)
   size_t waypointSize = waypoints->points.size();
 
   if (waypointSize == 0) {
-    RCLCPP_INFO(nh->get_logger(), "No waypoint available, exit.");
-    exit(1);
+    RCLCPP_FATAL(nh->get_logger(), "No waypoint available");
+    rclcpp::shutdown();
+    return 1;
   }
 
   rclcpp::Rate rate(100);

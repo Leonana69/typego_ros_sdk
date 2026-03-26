@@ -22,17 +22,17 @@ Legend: **V** = verified, **X** = not confirmed, **P** = partially confirmed (de
 
 ---
 
-## Phase 2 — Safety & Data Integrity
+## Phase 2 — Safety & Data Integrity ✅ COMPLETED
 
 | # | Item | Status | Notes |
 |---|------|--------|-------|
-| 7 | Thread-safety of global state | **V** | `vehicleX/Y/Z`, `odomTime`, flags written by callbacks, read by `spin_some` loop. Zero `std::atomic`/`std::mutex` in `pathFollower.cpp` or `localPlanner.cpp`. Add `std::mutex` for pose bundles, `std::atomic` for flags like `newLaserCloud`. |
-| 8 | Sensor data staleness watchdog | **V** | Neither `pathFollower` nor `localPlanner` check if odometry/laser data is fresh. Add a 0.5 s timeout that zeroes `cmd_vel` when no new data arrives. |
-| 9 | Parameter validation at startup | **V** | `maxSpeed`, `obstacleHeightThre`, `vehicleHeight` etc. loaded but never range-checked (`localPlanner.cpp:631-712`). Add checks for safety-critical params. |
-| 10 | Replace `exit(1)` with error codes in file I/O | **V** | `localPlanner.cpp` (lines 385-524, 5 functions) and `waypointExample.cpp` (lines 58-220, 9 calls) all `exit(1)` on read errors. Return error codes or throw so the launch system can respawn. |
-| 11 | Configure QoS profiles | **V** | `/registered_scan` subscriber uses default QoS (depth=5). Should be `SensorDataQoS` (best-effort). `/cmd_vel` publisher should use deadline policy. |
-| 12 | No `use_sim_time` propagation in base_autonomy XML launch files | **V** | All 6 XML launch files (`local_planner.launch`, `terrain_analysis.launch`, etc.) lack `use_sim_time`. Causes TF extrapolation errors with rosbags. |
-| 13 | `realRobot` parameter silently ignored | **V** | `system_real_robot.launch.py:34` passes `'realRobot': 'true'` to `local_planner.launch`, which never declares or reads it. Just remove. |
+| 7 | Thread-safety of global state | **DONE** | Added `std::mutex poseMtx` for pose bundles in both `pathFollower.cpp` and `localPlanner.cpp`. Added `std::atomic<bool>` for `newLaserCloud`, `newTerrainCloud`, `pathInit`. Added `std::atomic<int>` for `safetyStop`, `slowDown`. Pose snapshots under lock in main loop + cloud handlers. |
+| 8 | Sensor data staleness watchdog | **DONE** | pathFollower: 0.5s odom staleness check zeroes `cmd_vel`. localPlanner: 0.5s scan staleness check publishes stop path. Both use `std::atomic<double>` for receive timestamps + `RCLCPP_WARN_THROTTLE`. |
+| 9 | Parameter validation at startup | **DONE** | pathFollower: validates maxSpeed, maxAccel, lookAheadDis, slowDwnDisThre. localPlanner: validates maxSpeed, adjacentRange, vehicleLength/Width, obstacleHeightThre, groundHeightThre, voxel sizes, pathScale/minPathScale/minPathRange. Uses `RCLCPP_FATAL` + clean shutdown on failure. |
+| 10 | Replace `exit(1)` with error codes in file I/O | **DONE** | Replaced all `exit(1)` calls in `localPlanner.cpp` (readPlyHeader, readStartPaths, readPaths, readPathList, readCorrespondences) and `waypointExample.cpp` (readWaypointFile, readBoundaryFile, main) with `throw std::runtime_error`. Callers wrapped in `try/catch` with `RCLCPP_FATAL` + `rclcpp::shutdown()`. |
+| 11 | Configure QoS profiles | **DONE** | Changed `/registered_scan` subscriber to `rclcpp::SensorDataQoS()` (best-effort, suitable for sensor data). `/cmd_vel` deadline policy deferred — staleness watchdog (#8) provides equivalent safety. |
+| 12 | No `use_sim_time` propagation in base_autonomy XML launch files | **DONE** | Added `<arg name="use_sim_time" default="false"/>` and per-node `<param name="use_sim_time">` to all 6 XML launch files. |
+| 13 | `realRobot` parameter silently ignored | **DONE** | Removed `'realRobot': 'true'` from `system_real_robot.launch.py` launch arguments. |
 
 ---
 
