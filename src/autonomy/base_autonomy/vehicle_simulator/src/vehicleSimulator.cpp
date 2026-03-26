@@ -1,4 +1,4 @@
-#include <math.h>
+#include <cmath>
 #include <time.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -42,7 +42,6 @@
 
 using namespace std;
 
-const double PI = 3.1415926;
 
 double sensorOffsetX = 0;
 double sensorOffsetY = 0;
@@ -95,11 +94,11 @@ void terrainCloudHandler(const sensor_msgs::msg::PointCloud2::ConstSharedPtr ter
 
   pcl::PointXYZI point;
   terrainCloudIncl->clear();
-  int terrainCloudSize = terrainCloud->points.size();
+  size_t terrainCloudSize = terrainCloud->points.size();
   double elevMean = 0;
   int elevCount = 0;
   bool terrainValid = true;
-  for (int i = 0; i < terrainCloudSize; i++)
+  for (size_t i = 0; i < terrainCloudSize; i++)
   {
     point = terrainCloud->points[i];
 
@@ -137,9 +136,9 @@ void terrainCloudHandler(const sensor_msgs::msg::PointCloud2::ConstSharedPtr ter
   terrainCloudDwz->clear();
   terrainDwzFilter.setInputCloud(terrainCloudIncl);
   terrainDwzFilter.filter(*terrainCloudDwz);
-  int terrainCloudDwzSize = terrainCloudDwz->points.size();
+  size_t terrainCloudDwzSize = terrainCloudDwz->points.size();
 
-  if (terrainCloudDwzSize < minTerrainPointNumIncl || !terrainValid)
+  if (static_cast<int>(terrainCloudDwzSize) < minTerrainPointNumIncl || !terrainValid)
   {
     return;
   }
@@ -157,7 +156,7 @@ void terrainCloudHandler(const sensor_msgs::msg::PointCloud2::ConstSharedPtr ter
   for (int iterCount = 0; iterCount < 5; iterCount++)
   {
     int outlierCount = 0;
-    for (int i = 0; i < terrainCloudDwzSize; i++)
+    for (size_t i = 0; i < terrainCloudDwzSize; i++)
     {
       point = terrainCloudDwz->points[i];
 
@@ -181,13 +180,13 @@ void terrainCloudHandler(const sensor_msgs::msg::PointCloud2::ConstSharedPtr ter
     matAtB = matAt * matB;
     cv::solve(matAtA, matAtB, matX, cv::DECOMP_QR);
 
-    if (inlierNum == terrainCloudDwzSize - outlierCount)
+    if (inlierNum == static_cast<int>(terrainCloudDwzSize) - outlierCount)
       break;
-    inlierNum = terrainCloudDwzSize - outlierCount;
+    inlierNum = static_cast<int>(terrainCloudDwzSize) - outlierCount;
   }
 
-  if (inlierNum < minTerrainPointNumIncl || fabs(matX.at<float>(0, 0)) > maxIncl * PI / 180.0 ||
-      fabs(matX.at<float>(1, 0)) > maxIncl * PI / 180.0)
+  if (inlierNum < minTerrainPointNumIncl || fabs(matX.at<float>(0, 0)) > maxIncl * M_PI / 180.0 ||
+      fabs(matX.at<float>(1, 0)) > maxIncl * M_PI / 180.0)
   {
     terrainValid = false;
   }
@@ -287,10 +286,10 @@ int main(int argc, char** argv)
     vehicleRoll = terrainRoll * cos(vehicleYaw) + terrainPitch * sin(vehicleYaw);
     vehiclePitch = -terrainRoll * sin(vehicleYaw) + terrainPitch * cos(vehicleYaw);
     vehicleYaw += 0.005 * vehicleYawRate;
-    if (vehicleYaw > PI)
-      vehicleYaw -= 2 * PI;
-    else if (vehicleYaw < -PI)
-      vehicleYaw += 2 * PI;
+    if (vehicleYaw > M_PI)
+      vehicleYaw -= 2 * M_PI;
+    else if (vehicleYaw < -M_PI)
+      vehicleYaw += 2 * M_PI;
 
     vehicleX += 0.005 * cos(vehicleYaw) * vehicleFwdSpeed - 0.005 * sin(vehicleYaw) * vehicleLeftSpeed +
                 0.005 * vehicleYawRate * (-sin(vehicleYaw) * sensorOffsetX - cos(vehicleYaw) * sensorOffsetY);

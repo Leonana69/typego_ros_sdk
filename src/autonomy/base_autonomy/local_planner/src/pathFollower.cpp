@@ -1,3 +1,4 @@
+#include <cmath>
 #include <time.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -35,7 +36,6 @@
 
 using namespace std;
 
-const double PI = 3.1415926;
 
 string vehicleFrame = "vehicle";
 double sensorOffsetX = 0;
@@ -101,7 +101,7 @@ float vehicleSpeed = 0;
 double odomTime = 0;
 double joyTime = 0;
 double slowInitTime = 0;
-double stopInitTime = false;
+double stopInitTime = 0.0;
 int pathPointID = 0;
 bool pathInit = false;
 bool navFwd = true;
@@ -124,20 +124,20 @@ void odomHandler(const nav_msgs::msg::Odometry::ConstSharedPtr odomIn)
   vehicleY = odomIn->pose.pose.position.y - sin(yaw) * sensorOffsetX - cos(yaw) * sensorOffsetY;
   vehicleZ = odomIn->pose.pose.position.z;
 
-  if ((fabs(roll) > inclThre * PI / 180.0 || fabs(pitch) > inclThre * PI / 180.0) && useInclToStop) {
+  if ((fabs(roll) > inclThre * M_PI / 180.0 || fabs(pitch) > inclThre * M_PI / 180.0) && useInclToStop) {
     stopInitTime = rclcpp::Time(odomIn->header.stamp).seconds();
   }
 
-  if ((fabs(odomIn->twist.twist.angular.x) > inclRateThre * PI / 180.0 || fabs(odomIn->twist.twist.angular.y) > inclRateThre * PI / 180.0) && useInclRateToSlow) {
+  if ((fabs(odomIn->twist.twist.angular.x) > inclRateThre * M_PI / 180.0 || fabs(odomIn->twist.twist.angular.y) > inclRateThre * M_PI / 180.0) && useInclRateToSlow) {
     slowInitTime = rclcpp::Time(odomIn->header.stamp).seconds();
   }
 }
 
 void pathHandler(const nav_msgs::msg::Path::ConstSharedPtr pathIn)
 {
-  int pathSize = pathIn->poses.size();
+  size_t pathSize = pathIn->poses.size();
   path.poses.resize(pathSize);
-  for (int i = 0; i < pathSize; i++) {
+  for (size_t i = 0; i < pathSize; i++) {
     path.poses[i].pose.position.x = pathIn->poses[i].pose.position.x;
     path.poses[i].pose.position.y = pathIn->poses[i].pose.position.y;
     path.poses[i].pose.position.z = pathIn->poses[i].pose.position.z;
@@ -311,13 +311,18 @@ int main(int argc, char** argv)
       float vehicleYRel = -sin(vehicleYawRec) * (vehicleX - vehicleXRec) 
                         + cos(vehicleYawRec) * (vehicleY - vehicleYRec);
 
-      int pathSize = path.poses.size();
+      size_t pathSize = path.poses.size();
+      if (pathSize == 0) {
+        status = rclcpp::ok();
+        rate.sleep();
+        continue;
+      }
       float endDisX = path.poses[pathSize - 1].pose.position.x - vehicleXRel;
       float endDisY = path.poses[pathSize - 1].pose.position.y - vehicleYRel;
       float endDis = sqrt(endDisX * endDisX + endDisY * endDisY);
 
       float disX, disY, dis;
-      while (pathPointID < pathSize - 1) {
+      while (static_cast<size_t>(pathPointID) < pathSize - 1) {
         disX = path.poses[pathPointID].pose.position.x - vehicleXRel;
         disY = path.poses[pathPointID].pose.position.y - vehicleYRel;
         dis = sqrt(disX * disX + disY * disY);
@@ -334,17 +339,17 @@ int main(int argc, char** argv)
       float pathDir = atan2(disY, disX);
 
       float dirDiff = vehicleYaw - vehicleYawRec - pathDir;
-      if (dirDiff > PI) dirDiff -= 2 * PI;
-      else if (dirDiff < -PI) dirDiff += 2 * PI;
-      if (dirDiff > PI) dirDiff -= 2 * PI;
-      else if (dirDiff < -PI) dirDiff += 2 * PI;
+      if (dirDiff > M_PI) dirDiff -= 2 * M_PI;
+      else if (dirDiff < -M_PI) dirDiff += 2 * M_PI;
+      if (dirDiff > M_PI) dirDiff -= 2 * M_PI;
+      else if (dirDiff < -M_PI) dirDiff += 2 * M_PI;
 
       if (twoWayDrive) {
         double time = nh->now().seconds();
-        if (fabs(dirDiff) > PI / 2 && navFwd && time - switchTime > switchTimeThre) {
+        if (fabs(dirDiff) > M_PI / 2 && navFwd && time - switchTime > switchTimeThre) {
           navFwd = false;
           switchTime = time;
-        } else if (fabs(dirDiff) < PI / 2 && !navFwd && time - switchTime > switchTimeThre) {
+        } else if (fabs(dirDiff) < M_PI / 2 && !navFwd && time - switchTime > switchTimeThre) {
           navFwd = true;
           switchTime = time;
         }
@@ -352,19 +357,19 @@ int main(int argc, char** argv)
 
       float joySpeed2 = maxSpeed * joySpeed;
       if (!navFwd) {
-        dirDiff += PI;
-        if (dirDiff > PI) dirDiff -= 2 * PI;
+        dirDiff += M_PI;
+        if (dirDiff > M_PI) dirDiff -= 2 * M_PI;
         joySpeed2 *= -1;
       }
 
       if (fabs(vehicleSpeed) < 2.0 * maxAccel / 100.0) vehicleYawRate = -stopYawRateGain * dirDiff;
       else vehicleYawRate = -yawRateGain * dirDiff;
 
-      if (vehicleYawRate > maxYawRate * PI / 180.0) vehicleYawRate = maxYawRate * PI / 180.0;
-      else if (vehicleYawRate < -maxYawRate * PI / 180.0) vehicleYawRate = -maxYawRate * PI / 180.0;
+      if (vehicleYawRate > maxYawRate * M_PI / 180.0) vehicleYawRate = maxYawRate * M_PI / 180.0;
+      else if (vehicleYawRate < -maxYawRate * M_PI / 180.0) vehicleYawRate = -maxYawRate * M_PI / 180.0;
 
       if (joySpeed2 == 0 && !autonomyMode) {
-        vehicleYawRate = maxYawRate * joyYaw * PI / 180.0;
+        vehicleYawRate = maxYawRate * joyYaw * M_PI / 180.0;
       } else if (pathSize <= 1 || (dis < stopDisThre && noRotAtGoal)) {
         vehicleYawRate = 0;
       }
@@ -414,7 +419,7 @@ int main(int argc, char** argv)
         if (manualMode) {
           cmd_vel.linear.x = maxSpeed * joyManualFwd;
           if (omniDirGoalThre > 0) cmd_vel.linear.y = maxSpeed / 2.0 * joyManualLeft;
-          cmd_vel.angular.z = maxYawRate * PI / 180.0 * joyManualYaw;
+          cmd_vel.angular.z = maxYawRate * M_PI / 180.0 * joyManualYaw;
         }
 
         pubSpeed->publish(cmd_vel);

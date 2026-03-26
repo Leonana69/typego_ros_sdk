@@ -61,7 +61,7 @@ def generate_launch_description():
 
   start_arise_slam = IncludeLaunchDescription(
     PythonLaunchDescriptionSource(os.path.join(
-      get_package_share_directory('arise_slam_mid360'), 'launch', 'arize_slam.launch.py')
+      get_package_share_directory('arise_slam_mid360'), 'launch', 'arise_slam.launch.py')
     )
   )
 

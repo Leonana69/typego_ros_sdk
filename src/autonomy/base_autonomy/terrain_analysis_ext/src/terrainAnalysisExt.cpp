@@ -1,4 +1,4 @@
-#include <math.h>
+#include <cmath>
 #include <time.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -33,7 +33,6 @@
 
 using namespace std;
 
-const double PI = 3.1415926;
 
 double scanVoxelSize = 0.1;
 double decayTime = 10.0;
@@ -126,8 +125,8 @@ void laserCloudHandler(const sensor_msgs::msg::PointCloud2::ConstSharedPtr laser
 
   pcl::PointXYZI point;
   laserCloudCrop->clear();
-  int laserCloudSize = laserCloud->points.size();
-  for (int i = 0; i < laserCloudSize; i++)
+  size_t laserCloudSize = laserCloud->points.size();
+  for (size_t i = 0; i < laserCloudSize; i++)
   {
     point = laserCloud->points[i];
 
@@ -322,8 +321,8 @@ int main(int argc, char** argv)
 
       // stack registered laser scans
       pcl::PointXYZI point;
-      int laserCloudCropSize = laserCloudCrop->points.size();
-      for (int i = 0; i < laserCloudCropSize; i++)
+      size_t laserCloudCropSize = laserCloudCrop->points.size();
+      for (size_t i = 0; i < laserCloudCropSize; i++)
       {
         point = laserCloudCrop->points[i];
 
@@ -354,8 +353,8 @@ int main(int argc, char** argv)
           downSizeFilter.filter(*laserCloudDwz);
 
           terrainVoxelCloudPtr->clear();
-          int laserCloudDwzSize = laserCloudDwz->points.size();
-          for (int i = 0; i < laserCloudDwzSize; i++)
+          size_t laserCloudDwzSize = laserCloudDwz->points.size();
+          for (size_t i = 0; i < laserCloudDwzSize; i++)
           {
             point = laserCloudDwz->points[i];
             float dis = sqrt((point.x - vehicleX) * (point.x - vehicleX) + (point.y - vehicleY) * (point.y - vehicleY));
@@ -390,8 +389,8 @@ int main(int argc, char** argv)
         planarPointElev[i].clear();
       }
 
-      int terrainCloudSize = terrainCloud->points.size();
-      for (int i = 0; i < terrainCloudSize; i++)
+      size_t terrainCloudSize = terrainCloud->points.size();
+      for (size_t i = 0; i < terrainCloudSize; i++)
       {
         point = terrainCloud->points[i];
         float dis = sqrt((point.x - vehicleX) * (point.x - vehicleX) + (point.y - vehicleY) * (point.y - vehicleY));
@@ -422,7 +421,7 @@ int main(int argc, char** argv)
       {
         for (int i = 0; i < planarVoxelNum; i++)
         {
-          int planarPointElevSize = planarPointElev[i].size();
+          size_t planarPointElevSize = planarPointElev[i].size();
           if (planarPointElevSize > 0)
           {
             sort(planarPointElev[i].begin(), planarPointElev[i].end());
@@ -430,7 +429,7 @@ int main(int argc, char** argv)
             int quantileID = int(quantileZ * planarPointElevSize);
             if (quantileID < 0)
               quantileID = 0;
-            else if (quantileID >= planarPointElevSize)
+            else if (static_cast<size_t>(quantileID) >= planarPointElevSize)
               quantileID = planarPointElevSize - 1;
 
             planarVoxelElev[i] = planarPointElev[i][quantileID];
@@ -441,12 +440,12 @@ int main(int argc, char** argv)
       {
         for (int i = 0; i < planarVoxelNum; i++)
         {
-          int planarPointElevSize = planarPointElev[i].size();
+          size_t planarPointElevSize = planarPointElev[i].size();
           if (planarPointElevSize > 0)
           {
             float minZ = 1000.0;
             int minID = -1;
-            for (int j = 0; j < planarPointElevSize; j++)
+            for (size_t j = 0; j < planarPointElevSize; j++)
             {
               if (planarPointElev[i][j] < minZ)
               {
@@ -507,7 +506,7 @@ int main(int argc, char** argv)
       // compute terrain map beyond localTerrainMapRadius
       terrainCloudElev->clear();
       int terrainCloudElevSize = 0;
-      for (int i = 0; i < terrainCloudSize; i++)
+      for (size_t i = 0; i < terrainCloudSize; i++)
       {
         point = terrainCloud->points[i];
         float dis = sqrt((point.x - vehicleX) * (point.x - vehicleX) + (point.y - vehicleY) * (point.y - vehicleY));
@@ -540,8 +539,8 @@ int main(int argc, char** argv)
       }
 
       // merge in local terrain map within localTerrainMapRadius
-      int terrainCloudLocalSize = terrainCloudLocal->points.size();
-      for (int i = 0; i < terrainCloudLocalSize; i++) {
+      size_t terrainCloudLocalSize = terrainCloudLocal->points.size();
+      for (size_t i = 0; i < terrainCloudLocalSize; i++) {
         point = terrainCloudLocal->points[i];
         float dis = sqrt((point.x - vehicleX) * (point.x - vehicleX) + (point.y - vehicleY) * (point.y - vehicleY));
         if (dis <= localTerrainMapRadius)

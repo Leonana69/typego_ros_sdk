@@ -1,4 +1,4 @@
-#include <math.h>
+#include <cmath>
 #include <time.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -31,7 +31,6 @@
 
 using namespace std;
 
-const double PI = 3.1415926;
 
 double scanVoxelSize = 0.05;
 double decayTime = 2.0;
@@ -159,8 +158,8 @@ void laserCloudHandler(const sensor_msgs::msg::PointCloud2::ConstSharedPtr laser
 
   pcl::PointXYZI point;
   laserCloudCrop->clear();
-  int laserCloudSize = laserCloud->points.size();
-  for (int i = 0; i < laserCloudSize; i++) {
+  size_t laserCloudSize = laserCloud->points.size();
+  for (size_t i = 0; i < laserCloudSize; i++) {
     point = laserCloud->points[i];
 
     float pointX = point.x;
@@ -351,8 +350,8 @@ int main(int argc, char **argv) {
 
       // stack registered laser scans
       pcl::PointXYZI point;
-      int laserCloudCropSize = laserCloudCrop->points.size();
-      for (int i = 0; i < laserCloudCropSize; i++) {
+      size_t laserCloudCropSize = laserCloudCrop->points.size();
+      for (size_t i = 0; i < laserCloudCropSize; i++) {
         point = laserCloudCrop->points[i];
 
         int indX = int((point.x - vehicleX + terrainVoxelSize / 2) / terrainVoxelSize) +
@@ -385,8 +384,8 @@ int main(int argc, char **argv) {
           downSizeFilter.filter(*laserCloudDwz);
 
           terrainVoxelCloudPtr->clear();
-          int laserCloudDwzSize = laserCloudDwz->points.size();
-          for (int i = 0; i < laserCloudDwzSize; i++) {
+          size_t laserCloudDwzSize = laserCloudDwz->points.size();
+          for (size_t i = 0; i < laserCloudDwzSize; i++) {
             point = laserCloudDwz->points[i];
             float dis = sqrt((point.x - vehicleX) * (point.x - vehicleX) +
                              (point.y - vehicleY) * (point.y - vehicleY));
@@ -423,8 +422,8 @@ int main(int argc, char **argv) {
         planarPointElev[i].clear();
       }
 
-      int terrainCloudSize = terrainCloud->points.size();
-      for (int i = 0; i < terrainCloudSize; i++) {
+      size_t terrainCloudSize = terrainCloud->points.size();
+      for (size_t i = 0; i < terrainCloudSize; i++) {
         point = terrainCloud->points[i];
 
         int indX =
@@ -454,14 +453,14 @@ int main(int argc, char **argv) {
 
       if (useSorting) {
         for (int i = 0; i < planarVoxelNum; i++) {
-          int planarPointElevSize = planarPointElev[i].size();
+          size_t planarPointElevSize = planarPointElev[i].size();
           if (planarPointElevSize > 0) {
             sort(planarPointElev[i].begin(), planarPointElev[i].end());
 
             int quantileID = int(quantileZ * planarPointElevSize);
             if (quantileID < 0)
               quantileID = 0;
-            else if (quantileID >= planarPointElevSize)
+            else if (static_cast<size_t>(quantileID) >= planarPointElevSize)
               quantileID = planarPointElevSize - 1;
 
             if (planarPointElev[i][quantileID] >
@@ -475,11 +474,11 @@ int main(int argc, char **argv) {
         }
       } else {
         for (int i = 0; i < planarVoxelNum; i++) {
-          int planarPointElevSize = planarPointElev[i].size();
+          size_t planarPointElevSize = planarPointElev[i].size();
           if (planarPointElevSize > 0) {
             float minZ = 1000.0;
             int minID = -1;
-            for (int j = 0; j < planarPointElevSize; j++) {
+            for (size_t j = 0; j < planarPointElevSize; j++) {
               if (planarPointElev[i][j] < minZ) {
                 minZ = planarPointElev[i][j];
                 minID = j;
@@ -494,7 +493,7 @@ int main(int argc, char **argv) {
       }
 
       if (clearDyObs) {
-        for (int i = 0; i < terrainCloudSize; i++) {
+        for (size_t i = 0; i < terrainCloudSize; i++) {
           point = terrainCloud->points[i];
 
           int indX =
@@ -538,7 +537,7 @@ int main(int argc, char **argv) {
                     -pointY3 * sinVehicleRoll + pointZ3 * cosVehicleRoll;
 
                 float dis4 = sqrt(pointX4 * pointX4 + pointY4 * pointY4);
-                float angle4 = atan2(pointZ4, dis4) * 180.0 / PI;
+                float angle4 = atan2(pointZ4, dis4) * 180.0 / M_PI;
                 if ((angle4 > minDyObsVFOV && angle4 < maxDyObsVFOV) || fabs(pointZ4) < absDyObsRelZThre) {
                   planarVoxelDyObs[planarVoxelWidth * indX + indY]++;
                 } else if (angle4 <= minDyObsVFOV) {
@@ -551,7 +550,7 @@ int main(int argc, char **argv) {
           }
         }
 
-        for (int i = 0; i < laserCloudCropSize; i++) {
+        for (size_t i = 0; i < laserCloudCropSize; i++) {
           point = laserCloudCrop->points[i];
 
           int indX = int((point.x - vehicleX + planarVoxelSize / 2) / planarVoxelSize) +
@@ -576,7 +575,7 @@ int main(int argc, char **argv) {
 
       terrainCloudElev->clear();
       int terrainCloudElevSize = 0;
-      for (int i = 0; i < terrainCloudSize; i++) {
+      for (size_t i = 0; i < terrainCloudSize; i++) {
         point = terrainCloud->points[i];
         if (point.z - vehicleZ > minRelZ && point.z - vehicleZ < maxRelZ) {
           int indX = int((point.x - vehicleX + planarVoxelSize / 2) / planarVoxelSize) +
@@ -614,8 +613,8 @@ int main(int argc, char **argv) {
 
       if (noDataObstacle && noDataInited == 2) {
         for (int i = 0; i < planarVoxelNum; i++) {
-          int planarPointElevSize = planarPointElev[i].size();
-          if (planarPointElevSize < minBlockPointNum) {
+          size_t planarPointElevSize = planarPointElev[i].size();
+          if (planarPointElevSize < static_cast<size_t>(minBlockPointNum)) {
             planarVoxelEdge[i] = 1;
           }
         }

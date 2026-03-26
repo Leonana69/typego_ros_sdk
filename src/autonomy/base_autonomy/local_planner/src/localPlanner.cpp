@@ -1,4 +1,4 @@
-#include <math.h>
+#include <cmath>
 #include <time.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -42,7 +42,6 @@
 
 using namespace std;
 
-const double PI = 3.1415926;
 
 #define PLOTPATHSET 1
 
@@ -193,8 +192,8 @@ void laserCloudHandler(const sensor_msgs::msg::PointCloud2::ConstSharedPtr laser
 
     pcl::PointXYZI point;
     laserCloudCrop->clear();
-    int laserCloudSize = laserCloud->points.size();
-    for (int i = 0; i < laserCloudSize; i++) {
+    size_t laserCloudSize = laserCloud->points.size();
+    for (size_t i = 0; i < laserCloudSize; i++) {
       point = laserCloud->points[i];
 
       float pointX = point.x;
@@ -226,8 +225,8 @@ void terrainCloudHandler(const sensor_msgs::msg::PointCloud2::ConstSharedPtr ter
 
     pcl::PointXYZI point;
     terrainCloudCrop->clear();
-    int terrainCloudSize = terrainCloud->points.size();
-    for (int i = 0; i < terrainCloudSize; i++) {
+    size_t terrainCloudSize = terrainCloud->points.size();
+    for (size_t i = 0; i < terrainCloudSize; i++) {
       point = terrainCloud->points[i];
 
       float pointX = point.x;
@@ -278,7 +277,7 @@ void joystickHandler(const sensor_msgs::msg::Joy::ConstSharedPtr joy)
     if (joy->axes[4] == 0) joySpeed = 0;
 
     if (joySpeed > 0) {
-      joyDir = atan2(joy->axes[3], joy->axes[4]) * 180 / PI;
+      joyDir = atan2(joy->axes[3], joy->axes[4]) * 180 / M_PI;
       if (joy->axes[4] < 0) joyDir *= -1;
     }
 
@@ -320,7 +319,7 @@ void boundaryHandler(const geometry_msgs::msg::PolygonStamped::ConstSharedPtr bo
 {
   boundaryCloud->clear();
   pcl::PointXYZI point, point1, point2;
-  int boundarySize = boundary->polygon.points.size();
+  size_t boundarySize = boundary->polygon.points.size();
 
   if (boundarySize >= 1) {
     point2.x = boundary->polygon.points[0].x;
@@ -328,7 +327,7 @@ void boundaryHandler(const geometry_msgs::msg::PolygonStamped::ConstSharedPtr bo
     point2.z = boundary->polygon.points[0].z;
   }
 
-  for (int i = 0; i < boundarySize; i++) {
+  for (size_t i = 0; i < boundarySize; i++) {
     point1 = point2;
 
     point2.x = boundary->polygon.points[i].x;
@@ -360,8 +359,8 @@ void addedObstaclesHandler(const sensor_msgs::msg::PointCloud2::ConstSharedPtr a
   addedObstacles->clear();
   pcl::fromROSMsg(*addedObstacles2, *addedObstacles);
 
-  int addedObstaclesSize = addedObstacles->points.size();
-  for (int i = 0; i < addedObstaclesSize; i++) {
+  size_t addedObstaclesSize = addedObstacles->points.size();
+  for (size_t i = 0; i < addedObstaclesSize; i++) {
     addedObstacles->points[i].intensity = 200.0;
   }
 }
@@ -507,7 +506,7 @@ void readPathList()
 
     if (pathID >= 0 && pathID < pathNum && groupID >= 0 && groupID < groupNum) {
       pathList[pathID] = groupID;
-      endDirPathList[pathID] = 2.0 * atan2(endY, endX) * 180 / PI;
+      endDirPathList[pathID] = 2.0 * atan2(endY, endX) * 180 / M_PI;
     }
   }
 
@@ -821,8 +820,8 @@ int main(int argc, char** argv)
 
       pcl::PointXYZI point;
       plannerCloudCrop->clear();
-      int plannerCloudSize = plannerCloud->points.size();
-      for (int i = 0; i < plannerCloudSize; i++) {
+      size_t plannerCloudSize = plannerCloud->points.size();
+      for (size_t i = 0; i < plannerCloudSize; i++) {
         float pointX1 = plannerCloud->points[i].x - vehicleX;
         float pointY1 = plannerCloud->points[i].y - vehicleY;
         float pointZ1 = plannerCloud->points[i].z - vehicleZ;
@@ -838,8 +837,8 @@ int main(int argc, char** argv)
         }
       }
 
-      int boundaryCloudSize = boundaryCloud->points.size();
-      for (int i = 0; i < boundaryCloudSize; i++) {
+      size_t boundaryCloudSize = boundaryCloud->points.size();
+      for (size_t i = 0; i < boundaryCloudSize; i++) {
         point.x = ((boundaryCloud->points[i].x - vehicleX) * cosVehicleYaw 
                 + (boundaryCloud->points[i].y - vehicleY) * sinVehicleYaw);
         point.y = (-(boundaryCloud->points[i].x - vehicleX) * sinVehicleYaw 
@@ -853,8 +852,8 @@ int main(int argc, char** argv)
         }
       }
 
-      int addedObstaclesSize = addedObstacles->points.size();
-      for (int i = 0; i < addedObstaclesSize; i++) {
+      size_t addedObstaclesSize = addedObstacles->points.size();
+      for (size_t i = 0; i < addedObstaclesSize; i++) {
         point.x = ((addedObstacles->points[i].x - vehicleX) * cosVehicleYaw 
                 + (addedObstacles->points[i].y - vehicleY) * sinVehicleYaw);
         point.y = (-(addedObstacles->points[i].x - vehicleX) * sinVehicleYaw 
@@ -879,7 +878,7 @@ int main(int argc, char** argv)
         float relativeGoalY = (-(goalX - vehicleX) * sinVehicleYaw + (goalY - vehicleY) * cosVehicleYaw);
 
         relativeGoalDis = sqrt(relativeGoalX * relativeGoalX + relativeGoalY * relativeGoalY);
-        joyDir = atan2(relativeGoalY, relativeGoalX) * 180 / PI;
+        joyDir = atan2(relativeGoalY, relativeGoalX) * 180 / M_PI;
         
         if (fabs(joyDir) > freezeAng && relativeGoalDis < goalBehindRange) {
           relativeGoalDis = 0;
@@ -932,9 +931,9 @@ int main(int argc, char** argv)
         float minObsAngCW = -180.0;
         float minObsAngCCW = 180.0;
         float diameter = sqrt(vehicleLength / 2.0 * vehicleLength / 2.0 + vehicleWidth / 2.0 * vehicleWidth / 2.0);
-        float angOffset = atan2(vehicleWidth, vehicleLength) * 180.0 / PI;
-        int plannerCloudCropSize = plannerCloudCrop->points.size();
-        for (int i = 0; i < plannerCloudCropSize; i++) {
+        float angOffset = atan2(vehicleWidth, vehicleLength) * 180.0 / M_PI;
+        size_t plannerCloudCropSize = plannerCloudCrop->points.size();
+        for (size_t i = 0; i < plannerCloudCropSize; i++) {
           float x = plannerCloudCrop->points[i].x / pathScale;
           float y = plannerCloudCrop->points[i].y / pathScale;
           float h = plannerCloudCrop->points[i].intensity;
@@ -942,7 +941,7 @@ int main(int argc, char** argv)
 
           if (dis < pathRange / pathScale && (dis <= (relativeGoalDis + goalClearRange) / pathScale || !pathCropByGoal) && checkObstacle) {
             for (int rotDir = 0; rotDir < 36; rotDir++) {
-              float rotAng = (10.0 * rotDir - 180.0) * PI / 180;
+              float rotAng = (10.0 * rotDir - 180.0) * M_PI / 180;
               float angDiff = fabs(joyDir - (10.0 * rotDir - 180.0));
               if (angDiff > 180.0) {
                 angDiff = 360.0 - angDiff;
@@ -962,8 +961,8 @@ int main(int argc, char** argv)
               int indY = int((gridVoxelOffsetY + gridVoxelSize / 2 - y2 / scaleY) / gridVoxelSize);
               if (indX >= 0 && indX < gridVoxelNumX && indY >= 0 && indY < gridVoxelNumY) {
                 int ind = gridVoxelNumY * indX + indY;
-                int blockedPathByVoxelNum = correspondences[ind].size();
-                for (int j = 0; j < blockedPathByVoxelNum; j++) {
+                size_t blockedPathByVoxelNum = correspondences[ind].size();
+                for (size_t j = 0; j < blockedPathByVoxelNum; j++) {
                   if (h > obstacleHeightThre || !useTerrainAnalysis) {
                     clearPathList[pathNum * rotDir + correspondences[ind][j]]++;
                   } else {
@@ -978,7 +977,7 @@ int main(int argc, char** argv)
 
           if (dis < diameter / pathScale && (fabs(x) > vehicleLength / pathScale / 2.0 || fabs(y) > vehicleWidth / pathScale / 2.0) && 
               (h > obstacleHeightThre || !useTerrainAnalysis) && checkRotObstacle) {
-            float angObs = atan2(y, x) * 180.0 / PI;
+            float angObs = atan2(y, x) * 180.0 / M_PI;
             if (angObs > 0) {
               if (minObsAngCCW > angObs - angOffset) minObsAngCCW = angObs - angOffset;
               if (minObsAngCW < angObs + angOffset - 180.0) minObsAngCW = angObs + angOffset - 180.0;
@@ -1033,10 +1032,10 @@ int main(int argc, char** argv)
           float maxScore = 0;
           for (int i = 0; i < 36 * groupNum; i++) {
             int rotDir = int(i / groupNum);
-            float rotAng = (10.0 * rotDir - 180.0) * PI / 180;
+            float rotAng = (10.0 * rotDir - 180.0) * M_PI / 180;
             float rotDeg = 10.0 * rotDir;
             if (rotDeg > 180.0) rotDeg -= 360.0;
-            if (maxScore < clearPathPerGroupScore[i] && ((rotAng * 180.0 / PI > minObsAngCW && rotAng * 180.0 / PI < minObsAngCCW) || 
+            if (maxScore < clearPathPerGroupScore[i] && ((rotAng * 180.0 / M_PI > minObsAngCW && rotAng * 180.0 / M_PI < minObsAngCCW) || 
                 (rotDeg > minObsAngCW && rotDeg < minObsAngCCW && twoWayDrive) || !checkRotObstacle)) {
               maxScore = clearPathPerGroupScore[i];
               selectedGroupID = i;
@@ -1060,12 +1059,12 @@ int main(int argc, char** argv)
 
         if (selectedGroupID >= 0) {
           int rotDir = int(selectedGroupID / groupNum);
-          float rotAng = (10.0 * rotDir - 180.0) * PI / 180;
+          float rotAng = (10.0 * rotDir - 180.0) * M_PI / 180;
 
           selectedGroupID = selectedGroupID % groupNum;
-          int selectedPathLength = startPaths[selectedGroupID]->points.size();
+          size_t selectedPathLength = startPaths[selectedGroupID]->points.size();
           path.poses.resize(selectedPathLength);
-          for (int i = 0; i < selectedPathLength; i++) {
+          for (size_t i = 0; i < selectedPathLength; i++) {
             float x = startPaths[selectedGroupID]->points[i].x;
             float y = startPaths[selectedGroupID]->points[i].y;
             float z = startPaths[selectedGroupID]->points[i].z;
@@ -1135,7 +1134,7 @@ int main(int argc, char** argv)
           freePaths->clear();
           for (int i = 0; i < 36 * pathNum; i++) {
             int rotDir = int(i / pathNum);
-            float rotAng = (10.0 * rotDir - 180.0) * PI / 180;
+            float rotAng = (10.0 * rotDir - 180.0) * M_PI / 180;
             float rotDeg = 10.0 * rotDir;
             if (rotDeg > 180.0) rotDeg -= 360.0;
             float angDiff = fabs(joyDir - (10.0 * rotDir - 180.0));
@@ -1144,14 +1143,14 @@ int main(int argc, char** argv)
             }
             if ((angDiff > dirThre && !dirToVehicle) || (fabs(10.0 * rotDir - 180.0) > dirThre && fabs(joyDir) <= 90.0 && dirToVehicle) ||
                 ((10.0 * rotDir > dirThre && 360.0 - 10.0 * rotDir > dirThre) && fabs(joyDir) > 90.0 && dirToVehicle) || 
-                !((rotAng * 180.0 / PI > minObsAngCW && rotAng * 180.0 / PI < minObsAngCCW) || 
+                !((rotAng * 180.0 / M_PI > minObsAngCW && rotAng * 180.0 / M_PI < minObsAngCCW) || 
                 (rotDeg > minObsAngCW && rotDeg < minObsAngCCW && twoWayDrive) || !checkRotObstacle)) {
               continue;
             }
 
             if (clearPathList[i] < pointPerPathThre) {
-              int freePathLength = paths[i % pathNum]->points.size();
-              for (int j = 0; j < freePathLength; j++) {
+              size_t freePathLength = paths[i % pathNum]->points.size();
+              for (size_t j = 0; j < freePathLength; j++) {
                 point = paths[i % pathNum]->points[j];
 
                 float x = point.x;

@@ -1,4 +1,4 @@
-#include <math.h>
+#include <cmath>
 #include <time.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -20,7 +20,6 @@
 using namespace std;
 using namespace std::chrono;
 
-const double PI = 3.1415926;
 
 double maxYawRate = 80.0;
 double maxSpeed = 1.0;

@@ -1,4 +1,4 @@
-#include <math.h>
+#include <cmath>
 #include <time.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -13,7 +13,6 @@
 
 using namespace std;
 
-const double PI = 3.1415926;
 
 string boundary_file_dir;
 bool sendBoundary = true;

@@ -1,4 +1,4 @@
-#include <math.h>
+#include <cmath>
 #include <time.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -38,7 +38,6 @@
 
 using namespace std;
 
-const double PI = 3.1415926;
 
 string metricFile;
 string trajFile;
@@ -174,7 +173,7 @@ void odometryHandler(const nav_msgs::msg::Odometry::ConstSharedPtr odom)
   tf2::Matrix3x3(tf2::Quaternion(geoQuat.x, geoQuat.y, geoQuat.z, geoQuat.w)).getRPY(roll, pitch, yaw);
 
   float dYaw = fabs(yaw - vehicleYaw);
-  if (dYaw > PI) dYaw = 2 * PI  - dYaw;
+  if (dYaw > M_PI) dYaw = 2 * M_PI  - dYaw;
 
   float dx = odom->pose.pose.position.x - vehicleX;
   float dy = odom->pose.pose.position.y - vehicleY;
@@ -251,8 +250,8 @@ void laserCloudHandler(const sensor_msgs::msg::PointCloud2::ConstSharedPtr laser
 
   if (savePcd) {
     float timeDuration2 = rclcpp::Time(laserCloudIn->header.stamp).seconds() - systemInitTime;
-    int laserCloudSize = laserCloud->points.size();
-    for (int i = 0; i < laserCloudSize; i++) {
+    size_t laserCloudSize = laserCloud->points.size();
+    for (size_t i = 0; i < laserCloudSize; i++) {
       fprintf(pcdFilePtr, "%f %f %f %f %f\n", laserCloud->points[i].x, laserCloud->points[i].y, laserCloud->points[i].z, laserCloud->points[i].intensity, timeDuration2);
     }
     fflush(pcdFilePtr);
@@ -395,7 +394,7 @@ int main(int argc, char** argv)
   overallMapDwzFilter.filter(*overallMapCloudDwz);
   overallMapCloud->clear();
 
-  int overallMapCloudDwzSize = overallMapCloudDwz->points.size();
+  size_t overallMapCloudDwzSize = overallMapCloudDwz->points.size();
   pcl::toROSMsg(*overallMapCloudDwz, overallMap2);
 
   string timeString = getTimeString();
@@ -403,9 +402,27 @@ int main(int argc, char** argv)
   metricFile += "_" + timeString + ".txt";
   trajFile += "_" + timeString + ".txt";
   pcdFile += "_" + timeString + ".txt";
-  if (saveMetric) metricFilePtr = fopen(metricFile.c_str(), "w");
-  if (saveTraj) trajFilePtr = fopen(trajFile.c_str(), "w");
-  if (savePcd) pcdFilePtr = fopen(pcdFile.c_str(), "w");
+  if (saveMetric) {
+    metricFilePtr = fopen(metricFile.c_str(), "w");
+    if (!metricFilePtr) {
+      RCLCPP_WARN(nh->get_logger(), "Failed to open metric file: %s", metricFile.c_str());
+      saveMetric = false;
+    }
+  }
+  if (saveTraj) {
+    trajFilePtr = fopen(trajFile.c_str(), "w");
+    if (!trajFilePtr) {
+      RCLCPP_WARN(nh->get_logger(), "Failed to open trajectory file: %s", trajFile.c_str());
+      saveTraj = false;
+    }
+  }
+  if (savePcd) {
+    pcdFilePtr = fopen(pcdFile.c_str(), "w");
+    if (!pcdFilePtr) {
+      RCLCPP_WARN(nh->get_logger(), "Failed to open pcd file: %s", pcdFile.c_str());
+      savePcd = false;
+    }
+  }
 
   rclcpp::Rate rate(100);
   bool status = rclcpp::ok();

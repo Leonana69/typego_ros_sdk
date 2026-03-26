@@ -59,12 +59,12 @@ void laserCloudAndOdometryHandler(const nav_msgs::msg::Odometry::ConstSharedPtr 
   transformToMap.setRotation(tf2::Quaternion(odometryIn.pose.pose.orientation.x, odometryIn.pose.pose.orientation.y,
                                             odometryIn.pose.pose.orientation.z, odometryIn.pose.pose.orientation.w));
 
-  int laserCloudInNum = laserCloudIn->points.size();
+  size_t laserCloudInNum = laserCloudIn->points.size();
 
   pcl::PointXYZ p1;
   tf2::Vector3 vec;
 
-  for (int i = 0; i < laserCloudInNum; i++)
+  for (size_t i = 0; i < laserCloudInNum; i++)
   {
     p1 = laserCloudIn->points[i];
     vec.setX(p1.x);

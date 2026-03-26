@@ -1,4 +1,4 @@
-#include <math.h>
+#include <cmath>
 #include <time.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -27,7 +27,6 @@
 
 using namespace std;
 
-const double PI = 3.1415926;
 
 string waypoint_file_dir;
 string boundary_file_dir;
@@ -203,9 +202,9 @@ int main(int argc, char** argv)
   if (sendBoundary) {
     readBoundaryFile();
 
-    int boundarySize = boundary->points.size();
+    size_t boundarySize = boundary->points.size();
     boundaryMsgs.polygon.points.resize(boundarySize);
-    for (int i = 0; i < boundarySize; i++) {
+    for (size_t i = 0; i < boundarySize; i++) {
       boundaryMsgs.polygon.points[i].x = boundary->points[i].x;
       boundaryMsgs.polygon.points[i].y = boundary->points[i].y;
       boundaryMsgs.polygon.points[i].z = boundary->points[i].z;
@@ -213,7 +212,7 @@ int main(int argc, char** argv)
   }
 
   int wayPointID = 0;
-  int waypointSize = waypoints->points.size();
+  size_t waypointSize = waypoints->points.size();
 
   if (waypointSize == 0) {
     RCLCPP_INFO(nh->get_logger(), "No waypoint available, exit.");
@@ -236,7 +235,7 @@ int main(int argc, char** argv)
     }
 
     // move to the next waypoint after waiting is over
-    if (isWaiting && waitTimeStart + waitTime < curTime && wayPointID < waypointSize - 1) {
+    if (isWaiting && waitTimeStart + waitTime < curTime && static_cast<size_t>(wayPointID) < waypointSize - 1) {
       wayPointID++;
       isWaiting = false;
     }
