@@ -356,7 +356,8 @@ int main(int argc, char** argv)
 
   auto subOdometry = nh->create_subscription<nav_msgs::msg::Odometry>("/state_estimation", 5, odometryHandler);
 
-  auto subLaserCloud = nh->create_subscription<sensor_msgs::msg::PointCloud2>("/registered_scan", 5, laserCloudHandler);
+  auto subLaserCloud = nh->create_subscription<sensor_msgs::msg::PointCloud2>(
+      "/registered_scan", rclcpp::SensorDataQoS(), laserCloudHandler);
 
   auto subRuntime = nh->create_subscription<std_msgs::msg::Float32>("/runtime", 5, runtimeHandler);
 
