@@ -102,9 +102,9 @@ void terrainCloudHandler(const sensor_msgs::msg::PointCloud2::ConstSharedPtr ter
   {
     point = terrainCloud->points[i];
 
-    float dis = sqrt((point.x - vehicleX) * (point.x - vehicleX) + (point.y - vehicleY) * (point.y - vehicleY));
+    float disSq = (point.x - vehicleX) * (point.x - vehicleX) + (point.y - vehicleY) * (point.y - vehicleY);
 
-    if (dis < terrainRadiusZ)
+    if (disSq < terrainRadiusZ * terrainRadiusZ)
     {
       if (point.intensity < groundHeightThre)
       {
@@ -117,7 +117,7 @@ void terrainCloudHandler(const sensor_msgs::msg::PointCloud2::ConstSharedPtr ter
       }
     }
 
-    if (dis < terrainRadiusIncl && point.intensity < groundHeightThre)
+    if (disSq < terrainRadiusIncl * terrainRadiusIncl && point.intensity < groundHeightThre)
     {
       terrainCloudIncl->push_back(point);
     }

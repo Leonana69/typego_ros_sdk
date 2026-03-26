@@ -159,23 +159,26 @@ void laserCloudHandler(const sensor_msgs::msg::PointCloud2::ConstSharedPtr laser
   pcl::PointXYZI point;
   laserCloudCrop->clear();
   size_t laserCloudSize = laserCloud->points.size();
+  laserCloudCrop->reserve(laserCloudSize);
+  float disThre = terrainVoxelSize * (terrainVoxelHalfWidth + 1);
+  float disThreSq = disThre * disThre;
   for (size_t i = 0; i < laserCloudSize; i++) {
-    point = laserCloud->points[i];
+    const auto& srcPt = laserCloud->points[i];
 
-    float pointX = point.x;
-    float pointY = point.y;
-    float pointZ = point.z;
-
-    float dis = sqrt((pointX - vehicleX) * (pointX - vehicleX) +
-                     (pointY - vehicleY) * (pointY - vehicleY));
-    if (pointZ - vehicleZ > minRelZ - disRatioZ * dis &&
-        pointZ - vehicleZ < maxRelZ + disRatioZ * dis &&
-        dis < terrainVoxelSize * (terrainVoxelHalfWidth + 1)) {
-      point.x = pointX;
-      point.y = pointY;
-      point.z = pointZ;
-      point.intensity = laserCloudTime - systemInitTime;
-      laserCloudCrop->push_back(point);
+    float dX = srcPt.x - vehicleX;
+    float dY = srcPt.y - vehicleY;
+    float disSq = dX * dX + dY * dY;
+    if (disSq < disThreSq) {
+      float dis = sqrt(disSq);
+      float dZ = srcPt.z - vehicleZ;
+      if (dZ > minRelZ - disRatioZ * dis &&
+          dZ < maxRelZ + disRatioZ * dis) {
+        point.x = srcPt.x;
+        point.y = srcPt.y;
+        point.z = srcPt.z;
+        point.intensity = laserCloudTime - systemInitTime;
+        laserCloudCrop->push_back(point);
+      }
     }
   }
 
@@ -515,8 +518,8 @@ int main(int argc, char **argv) {
             float pointY1 = point.y - vehicleY;
             float pointZ1 = point.z - vehicleZ;
 
-            float dis1 = sqrt(pointX1 * pointX1 + pointY1 * pointY1);
-            if (dis1 > minDyObsDis) {
+            float dis1Sq = pointX1 * pointX1 + pointY1 * pointY1;
+            if (dis1Sq > minDyObsDis * minDyObsDis) {
               float h1 = point.z - planarVoxelElev[planarVoxelWidth * indX + indY];
               if (h1 > obstacleHeightThre) {
                 float pointX2 =
@@ -575,6 +578,7 @@ int main(int argc, char **argv) {
       }
 
       terrainCloudElev->clear();
+      terrainCloudElev->reserve(terrainCloudSize);
       int terrainCloudElevSize = 0;
       for (size_t i = 0; i < terrainCloudSize; i++) {
         point = terrainCloud->points[i];

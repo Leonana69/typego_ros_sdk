@@ -543,8 +543,8 @@ int main(int argc, char** argv)
       size_t terrainCloudLocalSize = terrainCloudLocal->points.size();
       for (size_t i = 0; i < terrainCloudLocalSize; i++) {
         point = terrainCloudLocal->points[i];
-        float dis = sqrt((point.x - vehicleX) * (point.x - vehicleX) + (point.y - vehicleY) * (point.y - vehicleY));
-        if (dis <= localTerrainMapRadius)
+        float disSq = (point.x - vehicleX) * (point.x - vehicleX) + (point.y - vehicleY) * (point.y - vehicleY);
+        if (disSq <= localTerrainMapRadius * localTerrainMapRadius)
         {
           terrainCloudElev->push_back(point);
         }
