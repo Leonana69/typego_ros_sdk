@@ -45,7 +45,7 @@ string pcdFile;
 string mapFile;
 string exploredAreaFile;
 double overallMapVoxelSize = 0.5;
-double exploredAreaVoxelSize = 0.3;
+double exploredAreaVoxelSize = 0.05;
 double exploredVolumeVoxelSize = 0.5;
 double transInterval = 0.2;
 double yawInterval = 10.0;
