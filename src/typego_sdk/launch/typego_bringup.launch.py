@@ -91,6 +91,7 @@ def generate_launch_description():
             autonomy_launch = IncludeLaunchDescription(
                 PythonLaunchDescriptionSource(
                     os.path.join(autonomy_pkg, 'launch', 'system_real_robot.launch.py')
+                    # os.path.join(autonomy_pkg, 'launch', 'system_real_robot_with_route_planner.launch.py')
                 ),
                 launch_arguments={
                     'map_dir': os.path.join(typego_sdk_pkg, 'resource', f'Map-{slam_map_name}', f'{slam_map_name}.pcd') if slam_map_name != 'empty_map' else '',
