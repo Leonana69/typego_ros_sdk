@@ -16,6 +16,7 @@ def generate_launch_description():
   vehicleX = LaunchConfiguration('vehicleX')
   vehicleY = LaunchConfiguration('vehicleY')
   checkTerrainConn = LaunchConfiguration('checkTerrainConn')
+  map_dir = LaunchConfiguration('map_dir')
 
   declare_route_planner_config = DeclareLaunchArgument('route_planner_config', default_value='indoor', description='')
   declare_world_name = DeclareLaunchArgument('world_name', default_value='real_world', description='')
@@ -25,6 +26,7 @@ def generate_launch_description():
   declare_vehicleX = DeclareLaunchArgument('vehicleX', default_value='0.0', description='')
   declare_vehicleY = DeclareLaunchArgument('vehicleY', default_value='0.0', description='')
   declare_checkTerrainConn = DeclareLaunchArgument('checkTerrainConn', default_value='true', description='')
+  declare_map_dir = DeclareLaunchArgument('map_dir', default_value='', description='Path to the map PCD file')
   
   start_local_planner = IncludeLaunchDescription(
     FrontendLaunchDescriptionSource(os.path.join(
@@ -65,7 +67,10 @@ def generate_launch_description():
   start_arise_slam = IncludeLaunchDescription(
     PythonLaunchDescriptionSource(os.path.join(
       get_package_share_directory('arise_slam_mid360'), 'launch', 'arise_slam.launch.py')
-    )
+    ),
+    launch_arguments={
+      'map_dir': map_dir,
+    }.items()
   )
 
   start_visualization_tools = IncludeLaunchDescription(
@@ -108,6 +113,7 @@ def generate_launch_description():
   ld.add_action(declare_vehicleX)
   ld.add_action(declare_vehicleY)
   ld.add_action(declare_checkTerrainConn)
+  ld.add_action(declare_map_dir)
 
   ld.add_action(start_local_planner)
   ld.add_action(start_terrain_analysis)
