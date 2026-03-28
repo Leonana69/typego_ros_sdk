@@ -1,0 +1,9 @@
+# File path prefix for saving SLAM map files.
+# The service will create:
+#   <file_path>_surf.pcd  - surface feature points
+#   <file_path>_edge.pcd  - edge feature points
+#   start_pose.txt        - 6DOF pose in parent directory
+string file_path
+---
+bool success
+string message

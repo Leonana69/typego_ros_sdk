@@ -157,8 +157,12 @@ save_map_full_autonomy:
 	mkdir -p $(CURDIR)/src/typego_sdk/resource/Map-$(FILE)
 	ros2 run typego_sdk get_position_node $(CURDIR)/src/typego_sdk/resource/Map-$(FILE) --ros-args -r /tf:=$(if $(ROBOT_ID),/robot$(ROBOT_ID),)/tf -r /tf_static:=$(if $(ROBOT_ID),/robot$(ROBOT_ID),)/tf_static
 
+	ros2 service call /save_slam_map arise_slam_mid360_msgs/srv/SaveSlamMap "{file_path: '$(CURDIR)/src/typego_sdk/resource/Map-$(FILE)/$(FILE)'}"
 	ros2 service call /save_explored_areas visualization_tools/srv/SaveExploredAreas "{file_path: '$(CURDIR)/src/typego_sdk/resource/Map-$(FILE)/$(FILE)'}"
 	cp $(CURDIR)/install/typego_sdk/share/typego_sdk/resource/Map-empty_map/waypoints.csv $(CURDIR)/src/typego_sdk/resource/Map-$(FILE)/waypoints.csv
+	@echo "=> Syncing map to install directory..."
+	mkdir -p $(CURDIR)/install/typego_sdk/share/typego_sdk/resource/Map-$(FILE)
+	cp -r $(CURDIR)/src/typego_sdk/resource/Map-$(FILE)/ $(CURDIR)/install/typego_sdk/share/typego_sdk/resource/Map-$(FILE)/
 
 # Reset iox
 iox_reset:

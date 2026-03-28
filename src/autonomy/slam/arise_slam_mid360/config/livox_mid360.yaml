@@ -87,7 +87,7 @@ laser_mapping_node:
         localization_init_match_distance_scale: 3.0
         localization_init_frames: 10
         localization_line_max_dist_inlier: 0.2
-        read_pose_file: false
+        read_pose_file: true
         init_x: 0.0
         init_y: 0.0
         init_z: 0.0

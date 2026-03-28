@@ -6,6 +6,7 @@
 #include <iomanip>
 
 #include <fstream>
+#include <filesystem>
 
 #include "rclcpp/rclcpp.hpp"
 #include "rclcpp/time.hpp"
@@ -385,18 +386,22 @@ int main(int argc, char** argv)
   exploredAreaDwzFilter.setLeafSize(exploredAreaVoxelSize, exploredAreaVoxelSize, exploredAreaVoxelSize);
   exploredVolumeDwzFilter.setLeafSize(exploredVolumeVoxelSize, exploredVolumeVoxelSize, exploredVolumeVoxelSize);
 
-  pcl::PLYReader ply_reader;
-  if (ply_reader.read(mapFile, *overallMapCloud) == -1) {
-    RCLCPP_INFO(nh->get_logger(), "Couldn't read pointcloud.ply file.");
+  size_t overallMapCloudDwzSize = 0;
+  if (std::filesystem::exists(mapFile)) {
+    pcl::PLYReader ply_reader;
+    if (ply_reader.read(mapFile, *overallMapCloud) == -1) {
+      RCLCPP_WARN(nh->get_logger(), "Failed to read map PLY file: %s", mapFile.c_str());
+    } else {
+      overallMapCloudDwz->clear();
+      overallMapDwzFilter.setInputCloud(overallMapCloud);
+      overallMapDwzFilter.filter(*overallMapCloudDwz);
+      overallMapCloud->clear();
+      overallMapCloudDwzSize = overallMapCloudDwz->points.size();
+      pcl::toROSMsg(*overallMapCloudDwz, overallMap2);
+    }
+  } else {
+    RCLCPP_INFO(nh->get_logger(), "No map PLY file at %s, skipping /overall_map from visualization_tools.", mapFile.c_str());
   }
-
-  overallMapCloudDwz->clear();
-  overallMapDwzFilter.setInputCloud(overallMapCloud);
-  overallMapDwzFilter.filter(*overallMapCloudDwz);
-  overallMapCloud->clear();
-
-  size_t overallMapCloudDwzSize = overallMapCloudDwz->points.size();
-  pcl::toROSMsg(*overallMapCloudDwz, overallMap2);
 
   string timeString = getTimeString();
 

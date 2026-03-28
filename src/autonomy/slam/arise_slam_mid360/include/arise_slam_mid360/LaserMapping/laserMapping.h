@@ -40,6 +40,7 @@
 #include "arise_slam_mid360/config/parameter.h"
 #include "arise_slam_mid360/LidarProcess/LidarSlam.h"
 #include <std_msgs/msg/string.hpp>
+#include <arise_slam_mid360_msgs/srv/save_slam_map.hpp>
 
 
 namespace arise_slam {
@@ -187,6 +188,11 @@ namespace arise_slam {
         void
         save_debug_statistic(const std::string file_name);
 
+        void
+        saveSlamMapHandler(
+            const std::shared_ptr<arise_slam_mid360_msgs::srv::SaveSlamMap::Request> request,
+            std::shared_ptr<arise_slam_mid360_msgs::srv::SaveSlamMap::Response> response);
+
         template<typename T>
         double secs(T msg) {
             return msg->header.stamp.sec + msg->header.stamp.nanosec*1e-9;
@@ -316,7 +322,9 @@ namespace arise_slam {
         pcl::PointCloud<pcl::PointXYZHSV>::Ptr ousterLaserCloudRawWithFeatures;
 
         pcl::PointCloud<PointType>::Ptr laserCloudPriorOrg;
-        pcl::PointCloud<PointType>::Ptr laserCloudPrior;
+        pcl::PointCloud<PointType>::Ptr laserCloudPrior;      // surface features (or legacy single-PCD)
+        pcl::PointCloud<PointType>::Ptr laserCloudPriorEdge;  // edge features (new format only)
+        bool priorHasEdges_ = false;
         sensor_msgs::msg::PointCloud2 priorCloudMsg;
 
         Transformd T_w_lidar;
@@ -346,7 +354,9 @@ namespace arise_slam {
         enum class PredictionSource {IMU_ORIENTATION, IMU_ODOM, VISUAL_ODOM};
         PredictionSource prediction_source;
         std::vector<arise_slam::OdometryData> odometryResults;
-           
+
+        rclcpp::Service<arise_slam_mid360_msgs::srv::SaveSlamMap>::SharedPtr saveSlamMapService_;
+
     }; // class laserMapping
 
 } // namespace arise_slam

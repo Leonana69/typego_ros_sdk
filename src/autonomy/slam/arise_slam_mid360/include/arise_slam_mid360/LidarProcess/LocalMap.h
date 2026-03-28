@@ -657,6 +657,24 @@ public:
         return laserCloudMap;
     }  // function get_all_localmap
 
+    pcl::PointCloud<Point> getAllEdgeMap() const {
+        pcl::PointCloud<Point> edgeMap;
+        for(const auto &cube : map_) {
+            if(cube.pedge_pc_)
+                edgeMap += *(cube.pedge_pc_);
+        }
+        return edgeMap;
+    }
+
+    pcl::PointCloud<Point> getAllSurfMap() const {
+        pcl::PointCloud<Point> surfMap;
+        for(const auto &cube : map_) {
+            if(cube.psurf_pc_)
+                surfMap += *(cube.psurf_pc_);
+        }
+        return surfMap;
+    }
+
     pcl::PointCloud<Point> get5x5LocalMap(const Eigen::Vector3i &position) const {
         pcl::PointCloud<Point> laserCloudMap;
 

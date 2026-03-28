@@ -5,6 +5,7 @@
 
 #include "arise_slam_mid360/LaserMapping/laserMapping.h"
 #include <pcl/io/pcd_io.h>
+#include <filesystem>
 
 double parameters[7] = {0, 0, 0, 0, 0, 0, 1};
 Eigen::Map<Eigen::Vector3d> t_w_curr(parameters);
@@ -111,6 +112,13 @@ namespace arise_slam {
             std::chrono::milliseconds(static_cast<int>(100.)),
             std::bind(&laserMapping::process, this));
 
+        saveSlamMapService_ = this->create_service<arise_slam_mid360_msgs::srv::SaveSlamMap>(
+            "/save_slam_map",
+            std::bind(&laserMapping::saveSlamMapHandler, this,
+                      std::placeholders::_1, std::placeholders::_2),
+            rmw_qos_profile_services_default,
+            cb_group_);
+
         slam.initROSInterface(shared_from_this());
         slam.localMap.lineRes_ = config_.lineRes;
         slam.localMap.planeRes_ = config_.planeRes;
@@ -136,7 +144,6 @@ namespace arise_slam {
         slam.LocalizationInitMatchDistanceScale = config_.localization_init_match_distance_scale;
         slam.LocalizationInitFrames = config_.localization_init_frames;
         slam.LocalizationLineMaxDistInlier = config_.localization_line_max_dist_inlier;
-        // slam.localMap = config_.forget_far_chunks;
 
         // if (config_.debug_view_enabled)
         // {
@@ -165,6 +172,7 @@ namespace arise_slam {
         laserCloudRealsense.reset(new pcl::PointCloud<PointType>());
         laserCloudPriorOrg.reset(new pcl::PointCloud<PointType>());
         laserCloudPrior.reset(new pcl::PointCloud<PointType>());
+        laserCloudPriorEdge.reset(new pcl::PointCloud<PointType>());
 
         Eigen::Quaterniond q_wmap_wodom_(1, 0, 0, 0);
         Eigen::Vector3d t_wmap_wodom_(0, 0, 0);
@@ -189,7 +197,14 @@ namespace arise_slam {
             RCLCPP_INFO(this->get_logger(), "\033[1;32m Loading map....\033[0m");
             if (readPointCloud()) {
                 slam.localMap.addSurfPointCloud(*laserCloudPrior);
-                RCLCPP_INFO(this->get_logger(), "\033[1;32m Loaded map succesfully, started SLAM in localization mode.\033[0m");
+                if (priorHasEdges_ && !laserCloudPriorEdge->empty()) {
+                    slam.localMap.addEdgePointCloud(*laserCloudPriorEdge);
+                    RCLCPP_INFO(this->get_logger(), "\033[1;32m Loaded map with %zu surf + %zu edge points.\033[0m",
+                                laserCloudPrior->size(), laserCloudPriorEdge->size());
+                } else {
+                    RCLCPP_WARN(this->get_logger(), "Loaded map as surface-only (legacy format, no edge features).");
+                }
+                RCLCPP_INFO(this->get_logger(), "\033[1;32m Loaded map successfully, started SLAM in localization mode.\033[0m");
             } else {
                 slam.local_mode = false;
                 RCLCPP_INFO(this->get_logger(), "\033[1;32mCannot read map file, switched to mapping mode.\033[0m");
@@ -261,15 +276,19 @@ namespace arise_slam {
         config_.localization_line_max_dist_inlier =
             get_parameter("localization_line_max_dist_inlier").as_double();
 
-        if (config_.read_pose_file) {   
+        if (config_.read_pose_file && !config_.map_dir.empty()) {
             readLocalizationPose(config_.map_dir);
-            config_.init_x= odometryResults[0].x;
-            config_.init_y= odometryResults[0].y;
-            config_.init_z= odometryResults[0].z;
-            config_.init_roll= odometryResults[0].roll;
-            config_.init_pitch= odometryResults[0].pitch;
-            config_.init_yaw= odometryResults[0].yaw;
-        } else {  
+            if (!odometryResults.empty()) {
+                config_.init_x= odometryResults[0].x;
+                config_.init_y= odometryResults[0].y;
+                config_.init_z= odometryResults[0].z;
+                config_.init_roll= odometryResults[0].roll;
+                config_.init_pitch= odometryResults[0].pitch;
+                config_.init_yaw= odometryResults[0].yaw;
+            } else {
+                RCLCPP_WARN(this->get_logger(), "read_pose_file enabled but start_pose.txt not found or empty, using default init pose.");
+            }
+        } else {
             config_.init_x = get_parameter("init_x").as_double(); 
             config_.init_y = get_parameter("init_y").as_double(); 
             config_.init_z = get_parameter("init_z").as_double(); 
@@ -282,20 +301,58 @@ namespace arise_slam {
     }
     
     bool laserMapping::readPointCloud() {
-        // Load PCD file
+        priorHasEdges_ = false;
+
+        // Try new format first: <base>_surf.pcd + <base>_edge.pcd
         if (slam.map_dir.size() >= 4 &&
             slam.map_dir.substr(slam.map_dir.size() - 4) == ".pcd") {
+
+            std::string base = slam.map_dir.substr(0, slam.map_dir.size() - 4);
+            std::string surf_path = base + "_surf.pcd";
+            std::string edge_path = base + "_edge.pcd";
+
+            if (std::filesystem::exists(surf_path)) {
+                // New split format
+                if (pcl::io::loadPCDFile<PointType>(surf_path, *laserCloudPriorOrg) == -1) {
+                    return false;
+                }
+                downSizeFilterSurf.setInputCloud(laserCloudPriorOrg);
+                downSizeFilterSurf.filter(*laserCloudPrior);
+                laserCloudPriorOrg->clear();
+                RCLCPP_INFO(this->get_logger(), "Loaded %zu surface points from %s",
+                            laserCloudPrior->size(), surf_path.c_str());
+
+                if (std::filesystem::exists(edge_path)) {
+                    pcl::PointCloud<PointType>::Ptr edgeOrg(new pcl::PointCloud<PointType>());
+                    if (pcl::io::loadPCDFile<PointType>(edge_path, *edgeOrg) != -1) {
+                        downSizeFilterCorner.setInputCloud(edgeOrg);
+                        downSizeFilterCorner.filter(*laserCloudPriorEdge);
+                        priorHasEdges_ = true;
+                        RCLCPP_INFO(this->get_logger(), "Loaded %zu edge points from %s",
+                                    laserCloudPriorEdge->size(), edge_path.c_str());
+                    }
+                }
+
+                // Build combined cloud for /overall_map visualization
+                pcl::PointCloud<PointType> combined = *laserCloudPrior;
+                if (priorHasEdges_) combined += *laserCloudPriorEdge;
+                pcl::toROSMsg(combined, priorCloudMsg);
+                priorCloudMsg.header.frame_id = WORLD_FRAME;
+                return true;
+            }
+
+            // Legacy single PCD format
             if (pcl::io::loadPCDFile<PointType>(slam.map_dir, *laserCloudPriorOrg) == -1) {
                 return false;
             }
-
             downSizeFilterSurf.setInputCloud(laserCloudPriorOrg);
             downSizeFilterSurf.filter(*laserCloudPrior);
             laserCloudPriorOrg->clear();
+            RCLCPP_WARN(this->get_logger(), "Loaded legacy single-PCD map (%zu points as surface-only)",
+                        laserCloudPrior->size());
 
             pcl::toROSMsg(*laserCloudPrior, priorCloudMsg);
             priorCloudMsg.header.frame_id = WORLD_FRAME;
-
             return true;
         }
 
@@ -304,7 +361,7 @@ namespace arise_slam {
         if (map_file == NULL) {
             return false;
         }
-        
+
         PointType pointRead;
         float intensity, time;
         int val1, val2, val3, val4, val5;
@@ -316,17 +373,18 @@ namespace arise_slam {
             val5 = fscanf(map_file, "%f", &time);
 
             if (val1 != 1 || val2 != 1 || val3 != 1 || val4 != 1 || val5 != 1) break;
-        
+
             laserCloudPriorOrg->push_back(pointRead);
         }
-        
+        fclose(map_file);
+
         downSizeFilterSurf.setInputCloud(laserCloudPriorOrg);
         downSizeFilterSurf.filter(*laserCloudPrior);
         laserCloudPriorOrg->clear();
-        
+
         pcl::toROSMsg(*laserCloudPrior, priorCloudMsg);
         priorCloudMsg.header.frame_id = WORLD_FRAME;
-        
+
         return true;
     } 
 
@@ -397,6 +455,80 @@ namespace arise_slam {
         << odom.roll << " " <<odom.pitch << " " << odom.yaw << odom.timestamp-odometryResults[0].timestamp << std::endl;
 
         outFile.close();
+    }
+
+    void laserMapping::saveSlamMapHandler(
+        const std::shared_ptr<arise_slam_mid360_msgs::srv::SaveSlamMap::Request> request,
+        std::shared_ptr<arise_slam_mid360_msgs::srv::SaveSlamMap::Response> response) {
+
+        std::string file_path = request->file_path;
+        if (file_path.empty()) {
+            response->success = false;
+            response->message = "Empty file_path";
+            return;
+        }
+
+        // Create parent directory if needed
+        std::filesystem::path parent_dir = std::filesystem::path(file_path).parent_path();
+        if (!parent_dir.empty()) {
+            std::filesystem::create_directories(parent_dir);
+        }
+
+        try {
+            // Save current 6DOF pose as start_pose.txt (save first — most critical)
+            double roll, pitch, yaw;
+            tf2::Quaternion orientation(T_w_lidar.rot.x(), T_w_lidar.rot.y(),
+                                        T_w_lidar.rot.z(), T_w_lidar.rot.w());
+            tf2::Matrix3x3(orientation).getRPY(roll, pitch, yaw);
+
+            std::string pose_path = parent_dir.string() + "/start_pose.txt";
+            std::ofstream pose_file(pose_path);
+            if (pose_file.is_open()) {
+                pose_file << std::fixed
+                          << T_w_lidar.pos.x() << " "
+                          << T_w_lidar.pos.y() << " "
+                          << T_w_lidar.pos.z() << " "
+                          << roll << " " << pitch << " " << yaw << " "
+                          << 0.0 << std::endl;
+                pose_file.close();
+                RCLCPP_INFO(this->get_logger(), "Saved pose (%.3f, %.3f, %.3f, yaw=%.3f) to %s",
+                            T_w_lidar.pos.x(), T_w_lidar.pos.y(), T_w_lidar.pos.z(),
+                            yaw, pose_path.c_str());
+            } else {
+                RCLCPP_ERROR(this->get_logger(), "Failed to open %s for writing", pose_path.c_str());
+            }
+
+            // Save surface feature points
+            pcl::PointCloud<PointType> surfMap = slam.localMap.getAllSurfMap();
+            std::string surf_path = file_path + "_surf.pcd";
+            if (!surfMap.empty()) {
+                pcl::io::savePCDFileBinary(surf_path, surfMap);
+                RCLCPP_INFO(this->get_logger(), "Saved %zu surface points to %s",
+                            surfMap.points.size(), surf_path.c_str());
+            } else {
+                RCLCPP_WARN(this->get_logger(), "Surface map is empty, skipping %s", surf_path.c_str());
+            }
+
+            // Save edge feature points
+            pcl::PointCloud<PointType> edgeMap = slam.localMap.getAllEdgeMap();
+            std::string edge_path = file_path + "_edge.pcd";
+            if (!edgeMap.empty()) {
+                pcl::io::savePCDFileBinary(edge_path, edgeMap);
+                RCLCPP_INFO(this->get_logger(), "Saved %zu edge points to %s",
+                            edgeMap.points.size(), edge_path.c_str());
+            } else {
+                RCLCPP_WARN(this->get_logger(), "Edge map is empty, skipping %s", edge_path.c_str());
+            }
+
+            response->success = true;
+            response->message = "Saved " + std::to_string(surfMap.points.size()) +
+                                " surf + " + std::to_string(edgeMap.points.size()) +
+                                " edge points";
+        } catch (const std::exception &e) {
+            response->success = false;
+            response->message = std::string("Save failed: ") + e.what();
+            RCLCPP_ERROR(this->get_logger(), "Save SLAM map failed: %s", e.what());
+        }
     }
 
     void laserMapping::transformAssociateToMap(Transformd T_w_pre, Transformd T_wodom_curr, Transformd T_wodom_pre) {
