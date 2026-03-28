@@ -97,6 +97,18 @@ namespace arise_slam {
         //     std::bind(&imuPreingration::visualodometryHandler, this,
         //                 std::palceholders::_1));
 
+        // Loop closure: subscribe to registered scan for keyframe clouds
+        if (lc_enabled_) {
+            subRegisteredScan_ = this->create_subscription<sensor_msgs::msg::PointCloud2>(
+                ProjectName + "/registered_scan", rclcpp::SensorDataQoS(),
+                std::bind(&imuPreintegration::registeredScanHandler, this,
+                          std::placeholders::_1), sub_options);
+
+            latest_cloud_.reset(new pcl::PointCloud<PointType>());
+            kf_position_tree_.reset(new pcl::KdTreeFLANN<PointType>());
+            kf_positions_.reset(new pcl::PointCloud<PointType>());
+        }
+
         // pubImuOdometry = this->create_publisher<nav_msgs::msg::Odometry>(
         //     ProjectName+"/integrated_to_init_incremental", 10);
         pubImuOdometry2 = this->create_publisher<nav_msgs::msg::Odometry>(
@@ -151,6 +163,12 @@ namespace arise_slam {
         imuIntegratorImu_ = std::make_shared<gtsam::PreintegratedImuMeasurements>(p, prior_imu_bias); // setting up the IMU integration for IMU message
         imuIntegratorOpt_ = std::make_shared<gtsam::PreintegratedImuMeasurements>(p, prior_imu_bias); // setting up the IMU integration for optimization
 
+        // Start loop closure thread
+        if (lc_enabled_) {
+            lc_thread_ = std::thread(&imuPreintegration::loopClosureThread, this);
+            RCLCPP_INFO(this->get_logger(), "Loop closure thread started");
+        }
+
         //set extrinsic matrix for laser and imu
         if (PROVIDE_IMU_LASER_EXTRINSIC) {
             imu2Lidar = gtsam::Pose3(gtsam::Rot3(imu_laser_R), gtsam::Point3(imu_laser_T));
@@ -187,6 +205,16 @@ namespace arise_slam {
         this->declare_parameter<double>("imu_acc_y_limit", 1.0);
         this->declare_parameter<double>("imu_acc_z_limit", 1.0);
 
+        // Loop closure parameters
+        this->declare_parameter<bool>("loop_closure_enabled", false);
+        this->declare_parameter<double>("lc_search_radius", 15.0);
+        this->declare_parameter<double>("lc_time_diff", 30.0);
+        this->declare_parameter<int>("lc_history_search_num", 25);
+        this->declare_parameter<double>("lc_fitness_threshold", 0.3);
+        this->declare_parameter<double>("lc_downsample_res", 0.3);
+        this->declare_parameter<double>("lc_keyframe_dist", 1.0);
+        this->declare_parameter<double>("lc_keyframe_angle", 0.2);
+
         config_.imuAccNoise = this->get_parameter("acc_n").as_double();
         config_.imuAccBiasN = this->get_parameter("acc_w").as_double();
         config_.imuGyrNoise = this->get_parameter("gyr_n").as_double();
@@ -202,6 +230,19 @@ namespace arise_slam {
         config_.imu_acc_x_limit = this->get_parameter("imu_acc_x_limit").as_double();
         config_.imu_acc_y_limit = this->get_parameter("imu_acc_y_limit").as_double();
         config_.imu_acc_z_limit = this->get_parameter("imu_acc_z_limit").as_double();
+
+        // Loop closure parameters
+        lc_enabled_ = this->get_parameter("loop_closure_enabled").as_bool();
+        lc_search_radius_ = this->get_parameter("lc_search_radius").as_double();
+        lc_time_diff_ = this->get_parameter("lc_time_diff").as_double();
+        lc_history_search_num_ = this->get_parameter("lc_history_search_num").as_int();
+        lc_fitness_threshold_ = this->get_parameter("lc_fitness_threshold").as_double();
+        lc_downsample_res_ = this->get_parameter("lc_downsample_res").as_double();
+        lc_keyframe_dist_ = this->get_parameter("lc_keyframe_dist").as_double();
+        lc_keyframe_angle_ = this->get_parameter("lc_keyframe_angle").as_double();
+        RCLCPP_INFO(this->get_logger(), "Loop closure enabled: %d, search_radius: %f, time_diff: %f",
+                    lc_enabled_, lc_search_radius_, lc_time_diff_);
+
         RCLCPP_INFO(this->get_logger(), "config_.imu_acc_x_limit: %f", config_.imu_acc_x_limit);
         RCLCPP_INFO(this->get_logger(), "config_.imu_acc_y_limit: %f", config_.imu_acc_y_limit);
         RCLCPP_INFO(this->get_logger(), "config_.imu_acc_z_limit: %f", config_.imu_acc_z_limit);
@@ -568,8 +609,8 @@ namespace arise_slam {
 
     void imuPreintegration::process_imu_odometry(double currentCorrectionTime, gtsam::Pose3 relativePose) {
 
-        // reset graph for speed
-        if (key > 100) {
+        // reset graph for speed (300 to allow loop closure corrections to propagate)
+        if (key > 300) {
             reset_graph();
         }
 
@@ -752,6 +793,14 @@ namespace arise_slam {
         //1. process imu odometry
         process_imu_odometry(lidarOdomTime, lidarPose);
 
+        // Loop closure: keyframe selection and correction application
+        if (lc_enabled_ && doneFirstOpt) {
+            gtsam::Pose3 current_lidar_pose = prevPose_.compose(imu2Lidar);
+            if (shouldAddKeyframe(current_lidar_pose)) {
+                addKeyframe(current_lidar_pose, lidarOdomTime);
+            }
+            applyLoopClosure();
+        }
 
 #if 1
         // 2. safe lannding process
@@ -1211,6 +1260,261 @@ namespace arise_slam {
         use_laserodom = false;
         use_visualodom = false;
 
+    }
+
+    // ======================== Loop Closure Implementation ========================
+
+    void imuPreintegration::registeredScanHandler(const sensor_msgs::msg::PointCloud2::ConstSharedPtr msg) {
+        std::lock_guard<std::mutex> lock(cloud_mutex_);
+        latest_cloud_->clear();
+        pcl::fromROSMsg(*msg, *latest_cloud_);
+    }
+
+    bool imuPreintegration::shouldAddKeyframe(const gtsam::Pose3& pose) {
+        if (global_kf_count_ == 0) return true;
+
+        double dist = (pose.translation() - last_keyframe_pose_.translation()).norm();
+        double angle = last_keyframe_pose_.rotation().inverse().compose(pose.rotation()).axisAngle().second;
+        return dist > lc_keyframe_dist_ || std::abs(angle) > lc_keyframe_angle_;
+    }
+
+    void imuPreintegration::addKeyframe(const gtsam::Pose3& pose, double timestamp) {
+        pcl::PointCloud<PointType>::Ptr cloud_copy(new pcl::PointCloud<PointType>());
+        {
+            std::lock_guard<std::mutex> lock(cloud_mutex_);
+            if (latest_cloud_->empty()) return;
+
+            // The registered scan is in world frame; transform to body frame for storage
+            Eigen::Affine3f pose_inv = Eigen::Affine3f::Identity();
+            Eigen::Matrix4f mat = pose.matrix().cast<float>();
+            pose_inv.matrix() = mat.inverse();
+            pcl::transformPointCloud(*latest_cloud_, *cloud_copy, pose_inv);
+        }
+
+        // Downsample
+        pcl::PointCloud<PointType>::Ptr cloud_dwz(new pcl::PointCloud<PointType>());
+        pcl::VoxelGrid<PointType> dwz;
+        dwz.setLeafSize(lc_downsample_res_, lc_downsample_res_, lc_downsample_res_);
+        dwz.setInputCloud(cloud_copy);
+        dwz.filter(*cloud_dwz);
+
+        Keyframe kf;
+        kf.index = global_kf_count_;
+        kf.timestamp = timestamp;
+        kf.lidar_pose = pose;
+        kf.cloud = cloud_dwz;
+
+        {
+            std::lock_guard<std::mutex> lock(lc_mutex_);
+            keyframe_history_.push_back(kf);
+
+            // Add position to KD-tree cloud
+            PointType pt;
+            pt.x = pose.translation().x();
+            pt.y = pose.translation().y();
+            pt.z = pose.translation().z();
+            pt.intensity = global_kf_count_;
+            kf_positions_->push_back(pt);
+        }
+
+        last_keyframe_pose_ = pose;
+        global_kf_count_++;
+    }
+
+    void imuPreintegration::loopClosureThread() {
+        rclcpp::Rate rate(1);  // 1 Hz
+        while (!lc_shutdown_) {
+            rate.sleep();
+            if (rclcpp::ok() == false) break;
+
+            int latest_idx;
+            {
+                std::lock_guard<std::mutex> lock(lc_mutex_);
+                latest_idx = (int)keyframe_history_.size() - 1;
+            }
+            if (latest_idx < 1 || latest_idx == last_lc_check_idx_) continue;
+            last_lc_check_idx_ = latest_idx;
+
+            int match_idx = -1;
+            Eigen::Matrix4f correction = Eigen::Matrix4f::Identity();
+            if (detectAndVerifyLoop(latest_idx, match_idx, correction)) {
+                std::lock_guard<std::mutex> lock(lc_mutex_);
+                // Compute corrected pose: ICP gives transform from source(current) to target(historical)
+                // corrected_world_pose = correction * current_world_pose
+                Eigen::Matrix4f current_mat = keyframe_history_[latest_idx].lidar_pose.matrix().cast<float>();
+                Eigen::Matrix4f corrected_mat = correction * current_mat;
+
+                gtsam::Pose3 corrected_pose(corrected_mat.cast<double>());
+
+                LoopResult result;
+                result.from_idx = match_idx;
+                result.to_idx = latest_idx;
+                result.corrected_pose = corrected_pose;
+                result.fitness = 0.0;  // set by detectAndVerifyLoop via log
+                lc_queue_.push_back(result);
+
+                RCLCPP_WARN(this->get_logger(),
+                    "Loop closure detected! keyframe %d <-> %d", match_idx, latest_idx);
+            }
+        }
+    }
+
+    bool imuPreintegration::detectAndVerifyLoop(int current_kf_idx, int& match_idx, Eigen::Matrix4f& correction) {
+        // Lock to read keyframe data
+        Keyframe current_kf;
+        {
+            std::lock_guard<std::mutex> lock(lc_mutex_);
+            if (current_kf_idx >= (int)keyframe_history_.size()) return false;
+            current_kf = keyframe_history_[current_kf_idx];
+
+            if (kf_positions_->size() < 2) return false;
+        }
+
+        // Build KD-tree and search for candidates
+        pcl::KdTreeFLANN<PointType> tree;
+        pcl::PointCloud<PointType>::Ptr positions_copy;
+        {
+            std::lock_guard<std::mutex> lock(lc_mutex_);
+            positions_copy.reset(new pcl::PointCloud<PointType>(*kf_positions_));
+        }
+        tree.setInputCloud(positions_copy);
+
+        PointType search_pt;
+        search_pt.x = current_kf.lidar_pose.translation().x();
+        search_pt.y = current_kf.lidar_pose.translation().y();
+        search_pt.z = current_kf.lidar_pose.translation().z();
+
+        std::vector<int> indices;
+        std::vector<float> distances;
+        tree.radiusSearch(search_pt, lc_search_radius_, indices, distances);
+
+        // Find best candidate: within radius AND sufficient time difference
+        int best_candidate = -1;
+        float best_dist = std::numeric_limits<float>::max();
+        {
+            std::lock_guard<std::mutex> lock(lc_mutex_);
+            for (int idx : indices) {
+                if (idx >= (int)keyframe_history_.size()) continue;
+                double time_diff = std::abs(current_kf.timestamp - keyframe_history_[idx].timestamp);
+                if (time_diff < lc_time_diff_) continue;  // too recent, skip
+                if (distances[&idx - &indices[0]] < best_dist) {
+                    best_dist = distances[&idx - &indices[0]];
+                    best_candidate = idx;
+                }
+            }
+        }
+
+        if (best_candidate < 0) return false;
+
+        // Build target cloud from historical keyframes around the candidate
+        pcl::PointCloud<PointType>::Ptr target_cloud(new pcl::PointCloud<PointType>());
+        {
+            std::lock_guard<std::mutex> lock(lc_mutex_);
+            int half = lc_history_search_num_ / 2;
+            int start = std::max(0, best_candidate - half);
+            int end = std::min((int)keyframe_history_.size() - 1, best_candidate + half);
+
+            for (int i = start; i <= end; i++) {
+                // Skip keyframes too close in time to current (they may have same drift)
+                if (std::abs(keyframe_history_[i].timestamp - current_kf.timestamp) < lc_time_diff_)
+                    continue;
+
+                pcl::PointCloud<PointType>::Ptr transformed(new pcl::PointCloud<PointType>());
+                Eigen::Matrix4f pose_mat = keyframe_history_[i].lidar_pose.matrix().cast<float>();
+                pcl::transformPointCloud(*keyframe_history_[i].cloud, *transformed, pose_mat);
+                *target_cloud += *transformed;
+            }
+        }
+
+        if (target_cloud->empty()) return false;
+
+        // Downsample target
+        pcl::PointCloud<PointType>::Ptr target_dwz(new pcl::PointCloud<PointType>());
+        pcl::VoxelGrid<PointType> dwz;
+        dwz.setLeafSize(lc_downsample_res_, lc_downsample_res_, lc_downsample_res_);
+        dwz.setInputCloud(target_cloud);
+        dwz.filter(*target_dwz);
+
+        // Build source cloud: current keyframe in world frame
+        pcl::PointCloud<PointType>::Ptr source_cloud(new pcl::PointCloud<PointType>());
+        {
+            Eigen::Matrix4f pose_mat = current_kf.lidar_pose.matrix().cast<float>();
+            pcl::transformPointCloud(*current_kf.cloud, *source_cloud, pose_mat);
+        }
+
+        // Run ICP
+        pcl::IterativeClosestPoint<PointType, PointType> icp;
+        icp.setMaxCorrespondenceDistance(lc_search_radius_ * 2.0);
+        icp.setMaximumIterations(100);
+        icp.setTransformationEpsilon(1e-6);
+        icp.setEuclideanFitnessEpsilon(1e-6);
+        icp.setRANSACIterations(0);
+        icp.setInputSource(source_cloud);
+        icp.setInputTarget(target_dwz);
+
+        pcl::PointCloud<PointType> aligned;
+        icp.align(aligned);
+
+        if (!icp.hasConverged()) {
+            RCLCPP_INFO(this->get_logger(), "Loop ICP did not converge, kf %d <-> %d",
+                        best_candidate, current_kf_idx);
+            return false;
+        }
+
+        float fitness = icp.getFitnessScore();
+        if (fitness > lc_fitness_threshold_) {
+            RCLCPP_INFO(this->get_logger(), "Loop ICP fitness too high: %f > %f, kf %d <-> %d",
+                        fitness, lc_fitness_threshold_, best_candidate, current_kf_idx);
+            return false;
+        }
+
+        RCLCPP_INFO(this->get_logger(), "Loop ICP converged! fitness: %f, kf %d <-> %d",
+                    fitness, best_candidate, current_kf_idx);
+
+        match_idx = best_candidate;
+        correction = icp.getFinalTransformation();  // transforms source to align with target
+        return true;
+    }
+
+    void imuPreintegration::applyLoopClosure() {
+        LoopResult result;
+        {
+            std::lock_guard<std::mutex> lock(lc_mutex_);
+            if (lc_queue_.empty()) return;
+            result = lc_queue_.front();
+            lc_queue_.pop_front();
+        }
+
+        // Apply corrected pose as a tight prior on the current GTSAM key
+        gtsam::Pose3 corrected_imu_pose = result.corrected_pose.compose(lidar2Imu);
+        auto lc_noise = gtsam::noiseModel::Diagonal::Sigmas(
+            (gtsam::Vector(6) << 1e-3, 1e-3, 1e-3, 1e-3, 1e-3, 1e-3).finished());
+
+        graphFactors.add(gtsam::PriorFactor<gtsam::Pose3>(X(key - 1), corrected_imu_pose, lc_noise));
+
+        // Run ISAM2 update to incorporate the correction
+        try {
+            optimizer.update(graphFactors, graphValues);
+            optimizer.update();  // extra iteration for convergence
+            graphFactors.resize(0);
+            graphValues.clear();
+
+            gtsam::Values result_vals = optimizer.calculateEstimate();
+            prevPose_ = result_vals.at<gtsam::Pose3>(X(key - 1));
+            prevVel_ = result_vals.at<gtsam::Vector3>(V(key - 1));
+            prevState_ = gtsam::NavState(prevPose_, prevVel_);
+            prevBias_ = result_vals.at<gtsam::imuBias::ConstantBias>(B(key - 1));
+
+            // Reset IMU preintegration with updated bias
+            imuIntegratorOpt_->resetIntegrationAndSetBias(prevBias_);
+
+            RCLCPP_WARN(this->get_logger(), "Loop closure correction applied! kf %d <-> %d",
+                        result.from_idx, result.to_idx);
+        } catch (const gtsam::IndeterminantLinearSystemException& e) {
+            RCLCPP_WARN(this->get_logger(), "Loop closure ISAM2 update failed: %s", e.what());
+            graphFactors.resize(0);
+            graphValues.clear();
+        }
     }
 
 } // end namespace arise_slam

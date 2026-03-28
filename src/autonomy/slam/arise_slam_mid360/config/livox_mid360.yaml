@@ -131,3 +131,13 @@ imu_preintegration_node:
         # Set these manually only as an override (in degrees). 0.0 = auto/compute.
         saved_gravity_roll_offset: 0.0
         saved_gravity_pitch_offset: 0.0
+
+        # Loop closure
+        loop_closure_enabled: true
+        lc_search_radius: 15.0       # meters - search for loop candidates within this radius
+        lc_time_diff: 30.0           # seconds - minimum time gap between loop keyframes
+        lc_history_search_num: 25    # number of surrounding keyframes to build target cloud
+        lc_fitness_threshold: 0.3    # ICP fitness threshold for acceptance
+        lc_downsample_res: 0.3       # voxel size for loop closure clouds
+        lc_keyframe_dist: 1.0        # distance threshold for new keyframe (meters)
+        lc_keyframe_angle: 0.2       # angle threshold for new keyframe (radians)

@@ -15,6 +15,12 @@
 #include <tf2_ros/transform_broadcaster.h>
 
 
+#include <pcl/registration/icp.h>
+#include <pcl/filters/voxel_grid.h>
+#include <pcl_conversions/pcl_conversions.h>
+#include <atomic>
+#include <thread>
+
 #include "utility.h"
 #include <gtsam/geometry/Pose3.h>
 #include <gtsam/geometry/Rot3.h>
@@ -141,6 +147,14 @@ namespace arise_slam {
         sensor_msgs::msg::Imu
         imuConverter(const sensor_msgs::msg::Imu &imu_in);
 
+        // --- Loop Closure ---
+        void registeredScanHandler(const sensor_msgs::msg::PointCloud2::ConstSharedPtr msg);
+        bool shouldAddKeyframe(const gtsam::Pose3& pose);
+        void addKeyframe(const gtsam::Pose3& pose, double timestamp);
+        void loopClosureThread();
+        bool detectAndVerifyLoop(int current_kf_idx, int& match_idx, Eigen::Matrix4f& correction);
+        void applyLoopClosure();
+
         template<typename T>
         double secs(T msg) {
             return msg->header.stamp.sec + msg->header.stamp.nanosec*1e-9;
@@ -252,6 +266,50 @@ namespace arise_slam {
         nav_msgs::msg::Odometry::SharedPtr cur_frame = nullptr;
         nav_msgs::msg::Odometry::SharedPtr last_frame = nullptr;
         imuPreintegration_config config_;
+
+        // --- Loop Closure ---
+        struct Keyframe {
+            int index;
+            double timestamp;
+            gtsam::Pose3 lidar_pose;              // pose in world frame
+            pcl::PointCloud<PointType>::Ptr cloud; // downsampled scan in body frame
+        };
+
+        struct LoopResult {
+            int from_idx;    // historical keyframe index
+            int to_idx;      // current keyframe index
+            gtsam::Pose3 corrected_pose; // ICP-corrected lidar pose in world frame
+            double fitness;
+        };
+
+        // Keyframe storage
+        std::vector<Keyframe> keyframe_history_;
+        pcl::KdTreeFLANN<PointType>::Ptr kf_position_tree_;
+        pcl::PointCloud<PointType>::Ptr kf_positions_;
+        gtsam::Pose3 last_keyframe_pose_;
+        int global_kf_count_ = 0;
+
+        // Registered scan buffer
+        pcl::PointCloud<PointType>::Ptr latest_cloud_;
+        std::mutex cloud_mutex_;
+        rclcpp::Subscription<sensor_msgs::msg::PointCloud2>::SharedPtr subRegisteredScan_;
+
+        // Loop closure config
+        bool lc_enabled_ = false;
+        float lc_search_radius_ = 15.0;
+        float lc_time_diff_ = 30.0;
+        int lc_history_search_num_ = 25;
+        float lc_fitness_threshold_ = 0.3;
+        float lc_downsample_res_ = 0.3;
+        float lc_keyframe_dist_ = 1.0;
+        float lc_keyframe_angle_ = 0.2;
+
+        // Loop closure thread & results
+        std::deque<LoopResult> lc_queue_;
+        std::mutex lc_mutex_;
+        std::thread lc_thread_;
+        std::atomic<bool> lc_shutdown_{false};
+        int last_lc_check_idx_ = -1;
     };
 
     // class TransformFusion : public imuPreintegration {
