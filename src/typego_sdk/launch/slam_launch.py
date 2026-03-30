@@ -75,6 +75,14 @@ def generate_launch_description():
             "scan_topic": scan_topic,
         }
 
+        # Auto-select mode: localization when using existing map, mapping when starting fresh
+        if use_existing_map:
+            slam_params["mode"] = "localization"
+            print(f"🔵 SLAM mode: localization (using pre-existing map)")
+        else:
+            slam_params["mode"] = "mapping"
+            print(f"🔵 SLAM mode: mapping (creating new map)")
+
         # Read initial pose from init_pose.json if it exists
         map_start_pose = [0.0, 0.0, 0.0]  # Default values
         if os.path.exists(init_pose_path):
