@@ -23,7 +23,7 @@
 #include <std_msgs/msg/bool.hpp>
 #include <nav_msgs/msg/path.hpp>
 
-#include "local_planner/srv/set_speed.hpp"
+#include "typego_interface/srv/set_speed.hpp"
 
 #include <geometry_msgs/msg/twist_stamped.hpp>
 #include <geometry_msgs/msg/point_stamped.hpp>
@@ -396,11 +396,11 @@ void speedHandler(const std_msgs::msg::Float32::ConstSharedPtr speed)
 }
 
 void setSpeedHandler(
-  const std::shared_ptr<local_planner::srv::SetSpeed::Request> request,
-  std::shared_ptr<local_planner::srv::SetSpeed::Response> response)
+  const std::shared_ptr<typego_interface::srv::SetSpeed::Request> request,
+  std::shared_ptr<typego_interface::srv::SetSpeed::Response> response)
 {
   double newMaxSpeed = request->max_speed;
-  double newAutonomySpeed = request->autonomy_speed;
+  double newAutonomySpeed = request->max_autonomy_speed;
   bool changeMax = (newMaxSpeed >= 0);
   bool changeAutonomy = (newAutonomySpeed >= 0);
 
@@ -408,7 +408,7 @@ void setSpeedHandler(
     response->success = true;
     response->message = "No changes requested. Returning current values.";
     response->current_max_speed = maxSpeed;
-    response->current_autonomy_speed = autonomySpeed;
+    response->current_max_autonomy_speed = autonomySpeed;
     return;
   }
 
@@ -419,22 +419,28 @@ void setSpeedHandler(
     response->success = false;
     response->message = "max_speed must be > 0, got " + std::to_string(newMaxSpeed);
     response->current_max_speed = maxSpeed;
-    response->current_autonomy_speed = autonomySpeed;
+    response->current_max_autonomy_speed = autonomySpeed;
     return;
   }
   if (newAutonomySpeed <= 0) {
     response->success = false;
-    response->message = "autonomy_speed must be > 0, got " + std::to_string(newAutonomySpeed);
+    response->message = "max_autonomy_speed must be > 0, got " + std::to_string(newAutonomySpeed);
     response->current_max_speed = maxSpeed;
-    response->current_autonomy_speed = autonomySpeed;
+    response->current_max_autonomy_speed = autonomySpeed;
     return;
   }
+
+  // Auto-clamp max_autonomy_speed to max_speed when only max_speed was provided
+  if (changeMax && !changeAutonomy && newAutonomySpeed > newMaxSpeed) {
+    newAutonomySpeed = newMaxSpeed;
+  }
+
   if (newAutonomySpeed > newMaxSpeed) {
     response->success = false;
-    response->message = "autonomy_speed (" + std::to_string(newAutonomySpeed) +
+    response->message = "max_autonomy_speed (" + std::to_string(newAutonomySpeed) +
                         ") must be <= max_speed (" + std::to_string(newMaxSpeed) + ")";
     response->current_max_speed = maxSpeed;
-    response->current_autonomy_speed = autonomySpeed;
+    response->current_max_autonomy_speed = autonomySpeed;
     return;
   }
 
@@ -447,13 +453,13 @@ void setSpeedHandler(
 
   publishSpeedConfig();
 
-  RCLCPP_INFO(nh->get_logger(), "Speed updated: maxSpeed=%.3f, autonomySpeed=%.3f",
+  RCLCPP_INFO(nh->get_logger(), "Speed updated: maxSpeed=%.3f, maxAutonomySpeed=%.3f",
               maxSpeed, autonomySpeed);
 
   response->success = true;
   response->message = "Speed parameters updated successfully.";
   response->current_max_speed = maxSpeed;
-  response->current_autonomy_speed = autonomySpeed;
+  response->current_max_autonomy_speed = autonomySpeed;
 }
 
 void boundaryHandler(const geometry_msgs::msg::PolygonStamped::ConstSharedPtr boundary)
@@ -898,8 +904,8 @@ int main(int argc, char** argv)
 
   RCLCPP_INFO(nh->get_logger(), "NavigateToPose action server created");
 
-  auto setSpeedService = nh->create_service<local_planner::srv::SetSpeed>(
-    "/local_planner/set_speed", setSpeedHandler);
+  auto setSpeedService = nh->create_service<typego_interface::srv::SetSpeed>(
+    "/typego/set_speed", setSpeedHandler);
 
   auto pubSlowDown = nh->create_publisher<std_msgs::msg::Int8> ("/slow_down", 5);
   std_msgs::msg::Int8 slow;

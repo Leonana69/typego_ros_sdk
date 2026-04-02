@@ -57,6 +57,19 @@ if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" AND CMAKE_CXX_COMPILER_VERSION VERSION_L
   target_link_libraries(waypoints_service_node PUBLIC stdc++fs)
 endif()
 
+# ----------- nav2_speed_service_node -----------
+find_package(rcl_interfaces REQUIRED)
+add_executable(nav2_speed_service_node src/nav2_speed_service.cpp)
+set_target_properties(nav2_speed_service_node PROPERTIES
+  CXX_STANDARD 17
+  CXX_STANDARD_REQUIRED ON
+)
+target_link_libraries(nav2_speed_service_node PUBLIC
+  rclcpp::rclcpp
+  ${rcl_interfaces_TARGETS}
+  ${typego_interface_TARGETS}
+)
+
 # ----------- get_position_node -----------
 add_executable(get_position_node src/get_position.cpp)
 set_target_properties(get_position_node PROPERTIES
@@ -82,6 +95,7 @@ endif()
 # ----------- install targets -----------
 install(TARGETS
   waypoints_service_node
+  nav2_speed_service_node
   get_position_node
   DESTINATION lib/${PROJECT_NAME})
 

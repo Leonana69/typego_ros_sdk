@@ -30,6 +30,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/WayPointArray.msg"
   "msg/CustomPoint.msg"
   "msg/CustomMsg.msg"
+  "srv/SetSpeed.srv"
   DEPENDENCIES std_msgs
 )
 

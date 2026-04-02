@@ -30,17 +30,11 @@ find_package(message_filters REQUIRED)
 find_package(pcl_conversions REQUIRED)
 find_package(pcl_ros REQUIRED)
 find_package(std_srvs REQUIRED)
-find_package(rosidl_default_generators REQUIRED)
-
-rosidl_generate_interfaces(${PROJECT_NAME}
-  "srv/SetSpeed.srv"
-)
-rosidl_get_typesupport_target(cpp_typesupport_target ${PROJECT_NAME} "rosidl_typesupport_cpp")
+find_package(typego_interface REQUIRED)
 
 add_executable(localPlanner src/localPlanner.cpp)
 add_executable(pathFollower src/pathFollower.cpp)
-ament_target_dependencies(localPlanner rclcpp rclcpp_action std_msgs std_srvs sensor_msgs nav_msgs nav2_msgs geometry_msgs tf2 tf2_ros tf2_geometry_msgs message_filters pcl_ros pcl_conversions)
-target_link_libraries(localPlanner "${cpp_typesupport_target}")
+ament_target_dependencies(localPlanner rclcpp rclcpp_action std_msgs std_srvs sensor_msgs nav_msgs nav2_msgs geometry_msgs tf2 tf2_ros tf2_geometry_msgs message_filters pcl_ros pcl_conversions typego_interface)
 ament_target_dependencies(pathFollower rclcpp std_msgs sensor_msgs nav_msgs geometry_msgs tf2 tf2_ros tf2_geometry_msgs message_filters pcl_ros pcl_conversions)
 
 install(TARGETS

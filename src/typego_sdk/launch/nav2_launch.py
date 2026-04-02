@@ -72,6 +72,15 @@ def generate_launch_description():
             )
         ])
         
-        return [nav2_group]
+        # Nav2 speed service — mirrors the autonomy SetSpeed pattern for Nav2
+        nav2_speed_node = Node(
+            package='typego_sdk',
+            executable='nav2_speed_service_node',
+            name='nav2_speed_service',
+            namespace=robot_namespace,
+            output='screen',
+        )
+
+        return [nav2_group, nav2_speed_node]
 
     return LaunchDescription(ARGUMENTS + [OpaqueFunction(function=launch_setup)])
