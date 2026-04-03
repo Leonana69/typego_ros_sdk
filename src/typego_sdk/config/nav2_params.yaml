@@ -185,6 +185,7 @@ global_costmap:
       obstacle_layer:
         plugin: "nav2_costmap_2d::ObstacleLayer"
         enabled: True
+        combination_method: 0  # Overwrite: lets raytracing clear stale static_layer walls (e.g. doors)
         observation_sources: scan
         scan:
           topic: /scan
