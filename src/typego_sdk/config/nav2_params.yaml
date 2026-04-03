@@ -133,7 +133,7 @@ local_costmap:
       robot_base_frame: base_link
       update_frequency: 10.0           # Match controller frequency
       publish_frequency: 10.0
-      transform_tolerance: 0.4         # Reduce for better accuracy
+      transform_tolerance: 0.5
       
       rolling_window: true
       width: 10                        # Expand for better lookahead at higher speeds
@@ -177,6 +177,7 @@ global_costmap:
       robot_base_frame: base_link
       footprint: "[[-0.3, -0.20], [-0.3, 0.20], [0.4, 0.20], [0.4, -0.20]]"
       footprint_padding: 0.03
+      transform_tolerance: 0.5
       update_frequency: 2.0
       publish_frequency: 2.0
       resolution: 0.05
