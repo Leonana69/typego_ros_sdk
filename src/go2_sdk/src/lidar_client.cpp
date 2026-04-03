@@ -125,6 +125,7 @@ public:
         if (publish_point_cloud_) {
             if (use_custom_msg_) {
                 custom_publisher_ = this->create_publisher<typego_interface::msg::CustomMsg>("livox/lidar_custom", 10);
+                publisher_ = this->create_publisher<sensor_msgs::msg::PointCloud2>("livox/lidar", 10);
             } else {
                 publisher_ = this->create_publisher<sensor_msgs::msg::PointCloud2>("livox/lidar", 10);
             }
@@ -524,7 +525,30 @@ private:
                 // Publish CustomMsg format
                 num_points = local_custom_points.size();
                 if (num_points == 0) return;
-                
+
+                // Build PointCloud2 from custom points before moving them
+                sensor_msgs::msg::PointCloud2 cloud_msg;
+                cloud_msg.header.stamp = timestamp;
+                cloud_msg.header.frame_id = "lidar_link";
+                cloud_msg.height = 1;
+                cloud_msg.width = num_points;
+                cloud_msg.is_dense = true;
+                cloud_msg.is_bigendian = false;
+                cloud_msg.point_step = 16;
+                cloud_msg.row_step = 16 * num_points;
+                cloud_msg.fields = fields_;
+                cloud_msg.data.resize(num_points * 16);
+                for (size_t i = 0; i < num_points; ++i) {
+                    float* pd = reinterpret_cast<float*>(cloud_msg.data.data() + i * 16);
+                    pd[0] = local_custom_points[i].x;
+                    pd[1] = local_custom_points[i].y;
+                    pd[2] = local_custom_points[i].z;
+                    pd[3] = local_custom_points[i].reflectivity / 255.0f;
+                }
+
+                // Publish laser scan before moving points
+                publish_laser_scan_from_custom(local_custom_points, timestamp);
+
                 typego_interface::msg::CustomMsg custom_msg;
                 custom_msg.header.stamp = timestamp;
                 custom_msg.header.frame_id = "lidar_link";
@@ -532,19 +556,17 @@ private:
                 custom_msg.point_num = static_cast<uint32_t>(num_points);
                 custom_msg.lidar_id = 0;  // Not available in our format
                 custom_msg.points = std::move(local_custom_points);
-                
+
                 custom_publisher_->publish(custom_msg);
-                
+                publisher_->publish(cloud_msg);
+
                 // Log statistics periodically
                 static uint64_t publish_count = 0;
                 if (++publish_count % 100 == 0) {
-                    RCLCPP_INFO(this->get_logger(), 
-                               "Published CustomMsg: %zu points (total received: %lu packets, %lu points, dropped: %lu)",
+                    RCLCPP_INFO(this->get_logger(),
+                               "Published CustomMsg + PointCloud2: %zu points (total received: %lu packets, %lu points, dropped: %lu)",
                                num_points, total_packets_received_, total_points_received_, packets_dropped_);
                 }
-                
-                // Publish laser scan from custom points
-                publish_laser_scan_from_custom(custom_msg.points, timestamp);
                 
             } else {
                 // Publish PointCloud2 format
