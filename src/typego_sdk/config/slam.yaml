@@ -8,8 +8,8 @@ slam_toolbox:
 
     # Network delay handling
     transform_timeout: 0.2
-    scan_buffer_size: 25
-    minimum_time_interval: 0.05
+    scan_buffer_size: 50
+    minimum_time_interval: 0.5
 
     # Allow scans to be processed even when stationary
     # (critical for initial pose convergence and yaw drift correction)
