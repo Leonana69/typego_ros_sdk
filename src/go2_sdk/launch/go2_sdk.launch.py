@@ -45,7 +45,7 @@ def generate_launch_description():
         # Define nodes
         nodes = []
         if autonomy_type == 'base':
-            xfer_format = 'None'
+            xfer_format = 'PointCloud2'
             tf_client_node = Node(
                 package='go2_sdk',
                 executable='tf_client_node',
