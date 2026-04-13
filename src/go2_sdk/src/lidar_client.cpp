@@ -238,8 +238,19 @@ private:
         server_addr.sin_port = htons(robot_port_);
         inet_pton(AF_INET, robot_ip_.c_str(), &server_addr.sin_addr);
 
+        // connect() on a UDP socket pins the peer: the kernel drops datagrams
+        // from any other source, preventing cross-talk when another robot on
+        // the network is still streaming to this host.
+        if (::connect(socket_, (sockaddr*)&server_addr, sizeof(server_addr)) < 0) {
+            RCLCPP_ERROR(this->get_logger(), "Failed to connect UDP socket to %s:%d: %s",
+                         robot_ip_.c_str(), robot_port_, strerror(errno));
+            close(socket_);
+            socket_ = -1;
+            return;
+        }
+
         uint8_t init_packet[1] = {0};
-        ssize_t sent = sendto(socket_, init_packet, sizeof(init_packet), 0, 
+        ssize_t sent = sendto(socket_, init_packet, sizeof(init_packet), 0,
                               (sockaddr*)&server_addr, sizeof(server_addr));
         
         if (sent < 0) {
