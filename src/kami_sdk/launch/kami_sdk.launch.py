@@ -12,6 +12,11 @@ def generate_launch_description():
         default_value=os.environ.get('ROBOT_ID', ''),
         description='Robot ID used to derive the robot namespace (e.g. 1 -> /robot1)'
     )
+    move_bridge_arg = DeclareLaunchArgument(
+        'move_bridge',
+        default_value='false',
+        description='Whether to run the move bridge'
+    )
     autonomy_type_arg = DeclareLaunchArgument(
         'autonomy_type',
         default_value='base',
@@ -20,6 +25,7 @@ def generate_launch_description():
 
     def launch_setup(context):
         robot_id = LaunchConfiguration('robot_id').perform(context)
+        move_bridge = LaunchConfiguration('move_bridge').perform(context).lower() == 'true'
         autonomy_type = LaunchConfiguration('autonomy_type').perform(context)
         if robot_id:
             robot_name = f'robot{robot_id}'
@@ -67,22 +73,24 @@ def generate_launch_description():
         )
         nodes.append(lidar_client_node)
 
-        cmd_vel_controller_node = Node(
-            package='kami_sdk',
-            executable='cmd_vel_controller_node',
-            name='cmd_vel_controller_node',
-            parameters=[{
-                'accept_cmd_vel': True,
-                'cmd_vel_type': 'Twist'  # Use 'Twist' or 'TwistStamped'
-            }],
-            output='screen'
-        )
-        nodes.append(cmd_vel_controller_node)
+        if not move_bridge:
+            cmd_vel_controller_node = Node(
+                package='kami_sdk',
+                executable='cmd_vel_controller_node',
+                name='cmd_vel_controller_node',
+                parameters=[{
+                    'accept_cmd_vel': True,
+                    'cmd_vel_type': 'Twist'  # Use 'Twist' or 'TwistStamped'
+                }],
+                output='screen'
+            )
+            nodes.append(cmd_vel_controller_node)
 
         return nodes
 
     return LaunchDescription([
         robot_id_arg,
         autonomy_type_arg,
+        move_bridge_arg,
         OpaqueFunction(function=launch_setup),
     ])
