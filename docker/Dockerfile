@@ -45,9 +45,22 @@ ENV CYCLONEDDS_URI=/workspace/src/typego_sdk/config/cyclonedds_shm.xml
 
 # install qt5
 RUN apt-get update && apt-get install -y qtdeclarative5-dev libpcl-dev ros-humble-rviz2 ros-humble-pcl-conversions ros-humble-pcl-ros
-# install pip packages
-# RUN apt-get update && apt-get install -y python3-pip
-# RUN pip3 install flask pillow numpy opencv-python openai groq requests aiohttp overrides
+
+# web gateway: rosbag2 + mcap storage + Python deps + Node.js (for frontend build)
+RUN apt-get update && apt-get install -y \
+    ros-humble-rosbag2 \
+    ros-humble-rosbag2-storage-mcap \
+    python3-pip \
+    curl \
+    ca-certificates \
+    && curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
+    && apt-get install -y nodejs \
+    && rm -rf /var/lib/apt/lists/*
+RUN pip3 install --no-cache-dir 'fastapi==0.115.*' 'uvicorn[standard]==0.32.*' \
+    'pillow>=10' 'numpy>=1.24' 'aiofiles>=23'
+
+# bag storage directory for the always-on rotator
+RUN mkdir -p /data/bags
 
 # source the setup files
 RUN echo "source /opt/ros/$ROS_DISTRO/setup.bash" >> /root/.bashrc
@@ -75,6 +88,12 @@ RUN if [ "$AUTONOMY_TYPE" = "full" ]; then \
     apt-get update && apt-get install -y ros-humble-joy; \
 fi
 
+# build the web gateway frontend before colcon so ament_python packages
+# install the compiled assets into share/typego_web_gateway/frontend/
+RUN cd /workspace/src/typego_web_gateway/frontend && npm ci && npm run build
+
 RUN /bin/bash -c "source /opt/ros/$ROS_DISTRO/setup.bash && cd /workspace && make build"
 RUN chmod +x /workspace/src/typego_sdk/scripts/*.sh
+
+EXPOSE 8080
 CMD ["bash", "-c", "source /workspace/install/setup.bash && /workspace/src/typego_sdk/scripts/launch.sh"]

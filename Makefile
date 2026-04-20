@@ -13,6 +13,13 @@ AUTONOMY_TYPE := $(strip $(AUTONOMY_TYPE))
 
 .PHONY: docker_stop docker_start docker_remove docker_open docker_build build setup or-tools
 
+# Console scripts for ament_python packages that need their shebang patched
+# to the active python3 interpreter (colcon hardcodes whichever python3 was on
+# PATH at build time, which is wrong when building inside a conda env for a
+# user who runs from system python — or vice-versa).
+PYTHON_ENTRYPOINTS := \
+	./install/typego_web_gateway/lib/typego_web_gateway/gateway_node
+
 # Build the project
 build:
 	@if [ "$(AUTONOMY_TYPE)" = "base" ]; then \
@@ -32,6 +39,17 @@ build:
 		echo "=> AUTONOMY_TYPE=$(AUTONOMY_TYPE:-unset), building all packages..."; \
 		colcon build; \
 	fi
+	@PYTHON=$$(which python3 2>/dev/null || which python 2>/dev/null || echo "/usr/bin/python3"); \
+	echo "=> Patching ament_python entry-point shebangs to $$PYTHON"; \
+	for ep in $(PYTHON_ENTRYPOINTS); do \
+		if [ -f "$$ep" ]; then \
+			sed -i '1s|^#!.*|#!'"$$PYTHON"'|' "$$ep"; \
+			dos2unix "$$ep" 2>/dev/null || sed -i 's/\r$$//' "$$ep"; \
+			chmod +x "$$ep"; \
+		else \
+			echo "   warning: $$ep not found, skipping shebang patch"; \
+		fi; \
+	done
 
 # Setup dependencies for full autonomy
 # 1. SLAM dependencies (Sophus + gtsam)

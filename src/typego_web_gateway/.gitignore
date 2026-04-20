@@ -1,0 +1,10 @@
+# Frontend build artifacts
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+frontend/*.log
+
+# Python
+__pycache__/
+*.egg-info/
+.pytest_cache/

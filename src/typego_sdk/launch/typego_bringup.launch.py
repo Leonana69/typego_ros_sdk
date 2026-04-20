@@ -34,6 +34,16 @@ ARGUMENTS = [
         default_value='empty_map',
         description='Pre-existing SLAM map name to load (passed to slam_launch.py).'
     ),
+    DeclareLaunchArgument(
+        'launch_web_gateway',
+        default_value='true',
+        description='If "true", launches the typego_web_gateway HMI on :8080.'
+    ),
+    DeclareLaunchArgument(
+        'web_gateway_port',
+        default_value='8080',
+        description='TCP port for the web gateway HTTP+WebSocket server.'
+    ),
 ]
 
 
@@ -43,6 +53,10 @@ def generate_launch_description():
         robot_type = context.perform_substitution(LaunchConfiguration('robot_type'))
         autonomy_type = context.perform_substitution(LaunchConfiguration('autonomy_type'))
         slam_map_name = context.perform_substitution(LaunchConfiguration('slam_map_name'))
+        launch_web_gateway = context.perform_substitution(
+            LaunchConfiguration('launch_web_gateway')).lower() == 'true'
+        web_gateway_port = context.perform_substitution(
+            LaunchConfiguration('web_gateway_port'))
 
         robot_index = f'robot{robot_id}' if robot_id else ''
         tf_prefix = f'/{robot_index}' if robot_index else ''
@@ -109,12 +123,32 @@ def generate_launch_description():
                 }.items(),
             )
 
-        return [
+        actions = [
             LogInfo(msg=f'Robot namespace: "{robot_index or "<none>"}", SLAM map: "{slam_map_name}"'),
             iox_roudi,
             robot_sdk_launch,
             autonomy_launch,
             waypoints_node,
         ]
+
+        if launch_web_gateway:
+            try:
+                web_pkg = get_package_share_directory('typego_web_gateway')
+            except Exception as exc:  # package not built yet — skip with a log
+                actions.append(LogInfo(
+                    msg=f'typego_web_gateway share dir not found ({exc}); skipping HMI.'
+                ))
+            else:
+                actions.append(IncludeLaunchDescription(
+                    PythonLaunchDescriptionSource(
+                        os.path.join(web_pkg, 'launch', 'web_gateway.launch.py')
+                    ),
+                    launch_arguments={
+                        'robot_id': robot_id,
+                        'gateway_port': web_gateway_port,
+                    }.items(),
+                ))
+
+        return actions
 
     return LaunchDescription(ARGUMENTS + [OpaqueFunction(function=launch_setup)])
