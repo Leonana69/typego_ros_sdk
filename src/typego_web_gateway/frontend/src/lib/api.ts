@@ -61,12 +61,13 @@ export interface RobotConfigResponse {
   message?: string;
 }
 
-async function jsonOrThrow<T>(res: Response): Promise<T> {
+async function jsonOrThrow<T>(req: Promise<Response>): Promise<T> {
+  const res = await req;
   if (!res.ok) {
     const body = await res.text();
     throw new Error(`${res.status} ${res.statusText}: ${body}`);
   }
-  return res.json() as Promise<T>;
+  return (await res.json()) as T;
 }
 
 export const api = {

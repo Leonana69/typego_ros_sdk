@@ -90,8 +90,12 @@ RUN if [ "$AUTONOMY_TYPE" = "full" ]; then \
 fi
 
 # build the web gateway frontend before colcon so ament_python packages
-# install the compiled assets into share/typego_web_gateway/frontend/
-RUN cd /workspace/src/typego_web_gateway/frontend && npm ci && npm run build
+# install the compiled assets into share/typego_web_gateway/frontend/.
+# Use `npm install` (not `npm ci`) because no lockfile is shipped — the
+# frontend depends on a small, stable set of packages pinned in package.json.
+RUN cd /workspace/src/typego_web_gateway/frontend \
+    && npm install --no-audit --no-fund \
+    && npm run build
 
 RUN /bin/bash -c "source /opt/ros/$ROS_DISTRO/setup.bash && cd /workspace && make build"
 RUN chmod +x /workspace/src/typego_sdk/scripts/*.sh
