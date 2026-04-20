@@ -5,10 +5,27 @@ DOCKERFILE = ./docker/Dockerfile
 IMAGE = typego-sdk:0.1
 CONTAINER_NAME = typego-sdk
 
-# --- Default environment setup ---
-ENV_FILE := ./docker/.env
--include $(ENV_FILE)
-# Strip whitespace from AUTONOMY_TYPE if it exists
+# --- Single-source robot config ---
+# robot.yaml is the source of truth. The Makefile renders a shell-sourceable
+# env file at /tmp/typego-runtime.env via `typego-config env`, then reads
+# build-time knobs (AUTONOMY_TYPE, ROBOT_ID) from it via `-include`.
+# docker/.env is no longer read; delete it once you've verified the migration.
+ROBOT_YAML := $(CURDIR)/src/typego_config/config/robot.yaml
+ROBOT_ENV  := /tmp/typego-runtime.env
+TYPEGO_CONFIG_CLI := PYTHONPATH=$(CURDIR)/src/typego_config python3 -m typego_config.cli
+
+# Render the env file whenever robot.yaml or the bootstrap CLI is newer.
+$(ROBOT_ENV): $(ROBOT_YAML) $(CURDIR)/src/typego_config/typego_config/env.py
+	@$(TYPEGO_CONFIG_CLI) env --config $(ROBOT_YAML) > $@.tmp && mv $@.tmp $@
+
+.PHONY: robot_env
+robot_env: $(ROBOT_ENV)
+	@:
+
+# Import the rendered variables. The file must exist on first `make`, so
+# commands that need it depend on `$(ROBOT_ENV)` explicitly; the -include
+# below merely folds values into $(AUTONOMY_TYPE) etc. once available.
+-include $(ROBOT_ENV)
 AUTONOMY_TYPE := $(strip $(AUTONOMY_TYPE))
 
 .PHONY: docker_stop docker_start docker_remove docker_open docker_build build setup or-tools
@@ -18,10 +35,12 @@ AUTONOMY_TYPE := $(strip $(AUTONOMY_TYPE))
 # PATH at build time, which is wrong when building inside a conda env for a
 # user who runs from system python — or vice-versa).
 PYTHON_ENTRYPOINTS := \
-	./install/typego_web_gateway/lib/typego_web_gateway/gateway_node
+	./install/typego_web_gateway/lib/typego_web_gateway/gateway_node \
+	./install/typego_config/lib/typego_config/config_service_node \
+	./install/typego_config/lib/typego_config/typego-config
 
 # Build the project
-build:
+build: $(ROBOT_ENV)
 	@if [ "$(AUTONOMY_TYPE)" = "base" ]; then \
 		echo "=> AUTONOMY_TYPE=base, excluding autonomy packages..."; \
 		AUTONOMY_PACKAGES=$$(find src/autonomy -name "package.xml" \
@@ -51,10 +70,15 @@ build:
 		fi; \
 	done
 
+# Validate robot.yaml without building (fast pre-flight check).
+.PHONY: config_validate
+config_validate:
+	@$(TYPEGO_CONFIG_CLI) validate --config $(ROBOT_YAML)
+
 # Setup dependencies for full autonomy
 # 1. SLAM dependencies (Sophus + gtsam)
 # 2. OR-Tools
-setup:
+setup: $(ROBOT_ENV)
 	@echo "=> Setting up TypeGo SDK..."
 	@if [ "$(AUTONOMY_TYPE)" = "full" ]; then \
 		echo "=> Building SLAM dependencies (Sophus + gtsam)..."; \
@@ -101,13 +125,13 @@ docker_stop:
 	@-docker stop -t 0 $(CONTAINER_NAME) > /dev/null 2>&1
 	@-docker rm -f $(CONTAINER_NAME) > /dev/null 2>&1
 
-docker_start:
+docker_start: $(ROBOT_ENV)
 	@make docker_stop
 	@echo "=> Starting TypeGo SDK..."
 	docker run -td --privileged --net=host --ipc=host \
     	--name="$(CONTAINER_NAME)" \
 		--shm-size=2g \
-		--env-file $(ENV_FILE) \
+		--env-file $(ROBOT_ENV) \
 		$(IMAGE)
 
 docker_remove:
@@ -119,7 +143,7 @@ docker_open:
 	@echo "=> Opening bash in TypeGo SDK..."
 	@docker exec -it $(CONTAINER_NAME) bash
 
-docker_build:
+docker_build: $(ROBOT_ENV)
 	@echo "=> Building TypeGo SDK..."
 	@make docker_stop
 	@make docker_remove
@@ -131,10 +155,10 @@ docker_build:
 	@make docker_start
 
 # Run rviz
-rviz:
+rviz: $(ROBOT_ENV)
 	@{ \
-		echo "→ Loading $(ENV_FILE)"; \
-		set -a; source $(ENV_FILE); set +a; \
+		echo "→ Loading $(ROBOT_ENV)"; \
+		set -a; source $(ROBOT_ENV); set +a; \
 		if [ -n "$${ROBOT_ID}" ]; then \
 			ros2 run rviz2 rviz2 $(if $(filter full,$(AUTONOMY_TYPE)),-d $(CURDIR)/src/autonomy/base_autonomy/vehicle_simulator/rviz/vehicle_simulator.rviz) --ros-args -r /tf:=/robot$${ROBOT_ID}/tf -r /tf_static:=/robot$${ROBOT_ID}/tf_static -r /goal_pose:=/robot$${ROBOT_ID}/goal_pose; \
 		else \

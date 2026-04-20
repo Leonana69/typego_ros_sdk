@@ -1,0 +1,10 @@
+# kami_warehouse — Kami platform, base autonomy, warehouse patrol.
+robot:
+  type: kami
+  name: kami-warehouse
+autonomy:
+  type: base
+profiles:
+  nav2_params_file: nav2_params.yaml
+  slam_params_file: slam.yaml
+  local_planner_profile: standard

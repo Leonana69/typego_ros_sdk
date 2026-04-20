@@ -5,7 +5,7 @@ import GoalForm from './components/GoalForm';
 import MapView from './components/MapView';
 import PatrolPanel from './components/PatrolPanel';
 import SpeedControl from './components/SpeedControl';
-import type { GatewayStatus, Pose } from './lib/api';
+import type { GatewayStatus, Pose, RobotConfigResponse } from './lib/api';
 import { api } from './lib/api';
 import { useStream } from './lib/ws';
 import type { StreamMessage } from './lib/ws';
@@ -15,6 +15,7 @@ export default function App() {
   const [pose, setPose] = useState<Pose | null>(null);
   const [picked, setPicked] = useState<{ x: number; y: number } | null>(null);
   const [feed, setFeed] = useState<StreamMessage[]>([]);
+  const [config, setConfig] = useState<RobotConfigResponse | null>(null);
 
   // Poll status for the header pills; pose comes from the WS stream.
   useEffect(() => {
@@ -24,15 +25,20 @@ export default function App() {
         const s = await api.status();
         if (alive) {
           setStatus(s);
-          // When no WS message has arrived yet, prime pose from /status.
           setPose(p => p ?? s.pose);
         }
       } catch {
         if (alive) setStatus(null);
       }
+      try {
+        const c = await api.config();
+        if (alive) setConfig(c);
+      } catch {
+        /* ignore — config service is optional */
+      }
     };
     tick();
-    const t = setInterval(tick, 3000);
+    const t = setInterval(tick, 5000);
     return () => {
       alive = false;
       clearInterval(t);
@@ -52,6 +58,12 @@ export default function App() {
     <div className="app">
       <header>
         <h1>TypeGo Operator Console</h1>
+        {config?.available && config.config && (
+          <span className="pill">
+            {config.config.robot.name} · {config.config.robot.type} ·{' '}
+            {config.config.autonomy.type}
+          </span>
+        )}
         <span className={`pill ${connected ? 'ok' : 'bad'}`}>
           {connected ? 'stream connected' : 'stream offline'}
         </span>

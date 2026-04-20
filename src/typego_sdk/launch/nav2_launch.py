@@ -14,20 +14,34 @@ ARGUMENTS = [
         default_value='',
         description='Namespace for the robot (empty for no namespace)'
     ),
+    DeclareLaunchArgument(
+        'nav2_params_file',
+        default_value='nav2_params.yaml',
+        description='Nav2 parameter file, resolved against typego_sdk/config/ '
+                    'unless an absolute path is given. Fed from '
+                    'profiles.nav2_params_file in robot.yaml.'
+    ),
 ]
 
 def modify_nav2_params(context):
     robot_namespace = context.launch_configurations['robot_namespace']
-    
+    nav2_params_file = context.launch_configurations.get(
+        'nav2_params_file', 'nav2_params.yaml')
+
     # Create scan topic based on namespace
     if robot_namespace:
         scan_topic = f'/{robot_namespace}/scan'
     else:
         scan_topic = '/scan'
-    
-    # Load original parameters
+
+    # Resolve the params file: absolute path wins; otherwise look under
+    # typego_sdk/config/.
     pkg_typego_sdk = get_package_share_directory('typego_sdk')
-    original_config_path = os.path.join(pkg_typego_sdk, 'config', 'nav2_params.yaml')
+    if os.path.isabs(nav2_params_file):
+        original_config_path = nav2_params_file
+    else:
+        original_config_path = os.path.join(
+            pkg_typego_sdk, 'config', nav2_params_file)
     
     with open(original_config_path, 'r') as f:
         params = yaml.safe_load(f)

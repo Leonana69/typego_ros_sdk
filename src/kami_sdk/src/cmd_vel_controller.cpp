@@ -12,15 +12,14 @@
 #include <cerrno>
 
 #include "typego_sdk/namespace_utils.hpp"
+#include "typego_sdk/config_utils.hpp"
 
 class CmdVelControllerNode : public rclcpp::Node {
 public:
     CmdVelControllerNode() : Node("cmd_vel_controller", typego_sdk::get_namespace_from_env()) {
-        // Get robot IP from environment variable or use default
-        const char* robot_ip = std::getenv("ROBOT_IP");
-        robot_ip_ = robot_ip ? std::string(robot_ip) : "192.168.168.168";
+        robot_ip_ = typego_sdk::resolve_robot_ip(this);
         ctrl_port_ = 8484;
-        
+
         RCLCPP_INFO(this->get_logger(), "Kami IP: %s, Port: %d", robot_ip_.c_str(), ctrl_port_);
 
         // Create UDP socket

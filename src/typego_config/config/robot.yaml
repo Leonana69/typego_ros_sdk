@@ -1,0 +1,53 @@
+# Single-source robot configuration. This file replaces docker/.env and
+# the scattered launch-arg defaults. Edit once, relaunch the stack.
+#
+# Schema: typego_config.schema.RobotConfig (see JSON Schema via
+#   `ros2 run typego_config typego-config schema`).
+
+robot:
+  id: ""             # namespace suffix; "" => no namespace
+  type: go2          # go2 | kami
+  name: robot-alpha
+
+autonomy:
+  type: base         # base | full
+
+network:
+  ros_domain_id: 1
+  rmw: rmw_cyclonedds_cpp
+  fastdds_builtin_transports: UDPv4
+  robot_ip: 192.168.0.163
+  edge_service:
+    ip: 192.168.0.104
+    port: 50049
+  gstreamer:
+    interface: wlo1
+    rgb_port: 1722
+    depth_port: 1723
+    audio_port: 1724
+
+web_gateway:
+  enabled: true
+  host: 0.0.0.0
+  port: 8080
+  bag_dir: ~/.typego/bags
+  bag_chunk_seconds: 600
+  bag_retain: 6
+
+map:
+  slam_map_name: 4th-partial
+  init_pose_from_file: true
+
+profiles:
+  nav2_params_file: nav2_params.yaml
+  slam_params_file: slam.yaml
+  local_planner_profile: dog
+  far_planner_profile: outdoor
+  tare_planner_profile: indoor_small
+
+# Dotted keys permitted for runtime mutation via ros2 param set /typego_config
+# and the /typego_config/reload service. Everything else is read-only.
+dynamic:
+  - web_gateway.bag_retain
+  - web_gateway.bag_chunk_seconds
+  - map.slam_map_name

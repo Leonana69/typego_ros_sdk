@@ -57,7 +57,8 @@ RUN apt-get update && apt-get install -y \
     && apt-get install -y nodejs \
     && rm -rf /var/lib/apt/lists/*
 RUN pip3 install --no-cache-dir 'fastapi==0.115.*' 'uvicorn[standard]==0.32.*' \
-    'pillow>=10' 'numpy>=1.24' 'aiofiles>=23'
+    'pillow>=10' 'numpy>=1.24' 'aiofiles>=23' \
+    'pydantic>=2,<3' 'PyYAML>=6'
 
 # bag storage directory for the always-on rotator
 RUN mkdir -p /data/bags

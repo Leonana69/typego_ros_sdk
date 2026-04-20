@@ -17,6 +17,7 @@
 #include <chrono>
 
 #include "typego_sdk/namespace_utils.hpp"
+#include "typego_sdk/config_utils.hpp"
 
 class TFClientNode : public rclcpp::Node {
 public:
@@ -37,8 +38,7 @@ public:
         
         imu_pub_ = this->create_publisher<sensor_msgs::msg::Imu>("imu/data", 10);
 
-        const char* go2_ip = std::getenv("ROBOT_IP");
-        robot_ip_ = go2_ip ? std::string(go2_ip) : "192.168.0.243";
+        robot_ip_ = typego_sdk::resolve_robot_ip(this);
         robot_port_ = 8889;
 
         // Initialize connection

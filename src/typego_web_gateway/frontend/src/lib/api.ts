@@ -45,6 +45,22 @@ export interface Waypoint {
   label: string;
 }
 
+export interface RobotConfigIdentity {
+  id: string;
+  type: 'go2' | 'kami';
+  name: string;
+}
+
+export interface RobotConfigResponse {
+  available: boolean;
+  config?: {
+    robot: RobotConfigIdentity;
+    autonomy: { type: 'base' | 'full' };
+    [key: string]: unknown;
+  };
+  message?: string;
+}
+
 async function jsonOrThrow<T>(res: Response): Promise<T> {
   if (!res.ok) {
     const body = await res.text();
@@ -55,6 +71,11 @@ async function jsonOrThrow<T>(res: Response): Promise<T> {
 
 export const api = {
   status: () => jsonOrThrow<GatewayStatus>(fetch('/api/status')),
+  config: () =>
+    fetch('/api/config').then(async (res) => {
+      const body = await res.json();
+      return body as RobotConfigResponse;
+    }),
   mapMeta: () => jsonOrThrow<MapMeta>(fetch('/api/map/meta')),
   mapUrl: () => `/api/map?ts=${Date.now()}`,
   waypoints: () =>

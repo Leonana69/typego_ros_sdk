@@ -26,6 +26,16 @@ ARGUMENTS = [
         default_value='empty_map',
         description='Pre-existing SLAM map name to load (passed to slam_launch.py).'
     ),
+    DeclareLaunchArgument(
+        'nav2_params_file',
+        default_value='nav2_params.yaml',
+        description='Nav2 parameter file, forwarded to nav2_launch.py.'
+    ),
+    DeclareLaunchArgument(
+        'slam_params_file',
+        default_value='slam.yaml',
+        description='SLAM parameter file, forwarded to slam_launch.py.'
+    ),
 ]
 
 
@@ -33,6 +43,8 @@ def generate_launch_description():
     def launch_setup(context, *args, **kwargs):
         robot_id = context.perform_substitution(LaunchConfiguration('robot_id'))
         slam_map_name = context.perform_substitution(LaunchConfiguration('slam_map_name'))
+        nav2_params_file = context.perform_substitution(LaunchConfiguration('nav2_params_file'))
+        slam_params_file = context.perform_substitution(LaunchConfiguration('slam_params_file'))
 
         if robot_id:
             robot_index = f'robot{robot_id}'
@@ -44,7 +56,10 @@ def generate_launch_description():
         typego_sdk_pkg = get_package_share_directory('typego_sdk')
 
         # --- SLAM ---
-        slam_args = {'existing_map': slam_map_name}
+        slam_args = {
+            'existing_map': slam_map_name,
+            'slam_params_file': slam_params_file,
+        }
         if robot_index:
             slam_args['robot_namespace'] = robot_index
 
@@ -67,7 +82,7 @@ def generate_launch_description():
         )
 
         # --- Nav2 ---
-        nav2_args = {}
+        nav2_args = {'nav2_params_file': nav2_params_file}
         if robot_index:
             nav2_args['robot_namespace'] = robot_index
 

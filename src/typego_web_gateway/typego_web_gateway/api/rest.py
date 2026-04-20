@@ -192,6 +192,18 @@ def build_app(
             status_code=200 if ok else 409,
         )
 
+    # ── config (read-only mirror of robot.yaml via typego_config) ────────
+    @app.get('/api/config')
+    async def config() -> JSONResponse:
+        cfg = await asyncio.to_thread(bridge.get_robot_config)
+        if cfg is None:
+            return JSONResponse(
+                {'available': False,
+                 'message': 'typego_config service not reachable'},
+                status_code=503,
+            )
+        return JSONResponse({'available': True, 'config': cfg})
+
     # ── events ───────────────────────────────────────────────────────────
     @app.get('/api/events')
     async def events(limit: int = Query(100, ge=1, le=500)) -> JSONResponse:

@@ -73,19 +73,39 @@ All robot SDKs expose these topics. If `ROBOT_ID` is set, topics are namespaced 
 
 ### Configuration
 
-Edit `docker/.env` to match your setup:
+One file owns the deployment: `src/typego_config/config/robot.yaml`. Edit it, relaunch the stack. `docker/.env` is no longer read.
 
-```env
-ROBOT_TYPE=go2            # go2 or kami
-ROBOT_IP=192.168.0.243
-ROS_DOMAIN_ID=2
-AUTONOMY_TYPE=base        # base or full
+```yaml
+robot:
+  id: ""
+  type: go2           # go2 | kami
+  name: robot-alpha
+
+autonomy:
+  type: base          # base | full
+
+network:
+  ros_domain_id: 1
+  robot_ip: 192.168.0.163
+  edge_service: { ip: 192.168.0.104, port: 50049 }
+
+map:
+  slam_map_name: 4th-partial
+
+web_gateway:
+  port: 8080
+```
+
+Validate without building:
+
+```bash
+make config_validate
 ```
 
 ### Docker (Recommended)
 
 ```bash
-# Build and start the container
+# Build and start the container (picks up AUTONOMY_TYPE from robot.yaml)
 make docker_build
 
 # Open a shell in the running container
@@ -104,23 +124,50 @@ source /opt/ros/humble/local_setup.bash
 # For full autonomy, install SLAM dependencies first
 make setup
 
-# Build
+# Build (also renders /tmp/typego-runtime.env from robot.yaml)
 make build
 ```
 
 ### Launch
 
+Every default is read from `robot.yaml`, so the no-args command Just Works:
+
 ```bash
-# Base autonomy (SLAM Toolbox + Nav2)
-ros2 launch typego_sdk typego_bringup.launch.py robot_type:=go2 autonomy_type:=base
+# Source middleware env (ROS_DOMAIN_ID / RMW must be set before rclcpp starts)
+make robot_env && set -a && source /tmp/typego-runtime.env && set +a
 
-# Full autonomy with a pre-built map
-ros2 launch typego_sdk typego_bringup.launch.py robot_type:=go2 autonomy_type:=full slam_map_name:=full-map
-
-# Multi-robot (set ROBOT_ID per instance)
-ros2 launch typego_sdk typego_bringup.launch.py robot_id:=1 robot_type:=go2 autonomy_type:=base
-ros2 launch typego_sdk typego_bringup.launch.py robot_id:=2 robot_type:=kami autonomy_type:=base
+# Launch — uses robot.yaml for robot_type, autonomy_type, slam_map_name, …
+ros2 launch typego_sdk typego_bringup.launch.py
 ```
+
+CLI args still override any single field for one-off runs:
+
+```bash
+# Swap the map without editing robot.yaml
+ros2 launch typego_sdk typego_bringup.launch.py slam_map_name:=empty_map
+
+# Apply a shipped profile overlay (see src/typego_config/config/profiles/)
+TYPEGO_PROFILE=go2_indoor ros2 launch typego_sdk typego_bringup.launch.py
+
+# Point at a deployment-specific (e.g. untracked) yaml
+TYPEGO_CONFIG=/abs/path/my-robot.yaml ros2 launch typego_sdk typego_bringup.launch.py
+
+# Multi-robot
+ros2 launch typego_sdk typego_bringup.launch.py robot_id:=1
+ros2 launch typego_sdk typego_bringup.launch.py robot_id:=2 robot_type:=kami
+```
+
+Once up:
+
+- **Web HMI:** <http://localhost:8080> — map, pose, goal form, patrol, event feed, bag download, live `robot name · type · autonomy` pill.
+- **Live config introspection:** `ros2 service call /typego_config/get_config std_srvs/srv/Trigger` or `curl http://localhost:8080/api/config`.
+- **Dry-run / schema / env dumps:**
+
+  ```bash
+  ros2 run typego_config typego-config dryrun      # resolved parameter tree
+  ros2 run typego_config typego-config schema      # JSON schema
+  ros2 run typego_config typego-config env         # KEY=VALUE lines
+  ```
 
 ## Map Management
 
@@ -152,6 +199,8 @@ Send goals via any of these methods:
 | Target | Description |
 |--------|-------------|
 | `make build` | Build all packages (skips autonomy packages when `AUTONOMY_TYPE=base`) |
+| `make config_validate` | Validate `src/typego_config/config/robot.yaml` against the pydantic schema |
+| `make robot_env` | Render `/tmp/typego-runtime.env` from `robot.yaml` for shell/Docker consumption |
 | `make setup` | Install SLAM dependencies (Sophus, gtsam) and OR-Tools for full autonomy |
 | `make docker_build` | Build Docker image and start container |
 | `make docker_start` | Start container from existing image |

@@ -7,6 +7,7 @@
 #include <algorithm>
 
 #include "typego_sdk/namespace_utils.hpp"
+#include "typego_sdk/config_utils.hpp"
 
 // Helper function for HTTP requests
 size_t WriteCallback(void* contents, size_t size, size_t nmemb, std::string* output) {
@@ -18,9 +19,7 @@ size_t WriteCallback(void* contents, size_t size, size_t nmemb, std::string* out
 class CmdVelControllerNode : public rclcpp::Node {
 public:
     CmdVelControllerNode() : Node("cmd_vel_controller", typego_sdk::get_namespace_from_env()) {
-        // Get robot URL from environment variable or use default
-        const char* robot_ip = std::getenv("ROBOT_IP");
-        std::string robot_ip_ = robot_ip ? std::string(robot_ip) : "192.168.0.243";
+        std::string robot_ip_ = typego_sdk::resolve_robot_ip(this);
         robot_url_ = "http://" + robot_ip_ + ":18080";
         RCLCPP_INFO(this->get_logger(), "Go2 IP: %s", robot_ip_.c_str());
 

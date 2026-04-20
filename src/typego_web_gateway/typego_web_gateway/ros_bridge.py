@@ -37,6 +37,8 @@ try:
 except ImportError:
     _TYPEGO_INTERFACE = False
 
+from std_srvs.srv import Trigger
+
 
 @dataclass
 class Pose2D:
@@ -94,6 +96,13 @@ class RosBridge(Node):
         else:
             self._waypoints_sub = None
             self._speed_client = None
+
+        # Optional: typego_config runs separately and may not be up. The
+        # client is created eagerly but calls short-timeout so a missing
+        # config service produces a clean None response.
+        self._config_client = self.create_client(
+            Trigger, 'typego_config/get_config',
+        )
 
         self._tf_buffer = Buffer()
         self._tf_listener = TransformListener(self._tf_buffer, self)
@@ -321,6 +330,25 @@ class RosBridge(Node):
         if resp is None:
             return False, 'empty response'
         return bool(resp.success), str(resp.message)
+
+    def get_robot_config(self, timeout_s: float = 1.0) -> Optional[Dict]:
+        """Call typego_config/get_config; return None if service is down."""
+        import json as _json
+
+        if not self._config_client.wait_for_service(timeout_sec=timeout_s):
+            return None
+        fut = self._config_client.call_async(Trigger.Request())
+        event = threading.Event()
+        fut.add_done_callback(lambda _f: event.set())
+        if not event.wait(timeout=timeout_s + 0.5):
+            return None
+        resp = fut.result()
+        if resp is None or not resp.success:
+            return None
+        try:
+            return _json.loads(resp.message)
+        except Exception:
+            return None
 
 
 def _quat_to_yaw(qz: float, qw: float) -> float:

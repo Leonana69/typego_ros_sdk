@@ -20,6 +20,7 @@
 #include "typego_interface/msg/way_point_array.hpp"
 
 #include "typego_sdk/namespace_utils.hpp"
+#include "typego_sdk/config_utils.hpp"
 
 static const char* labels[] = {
     "hallway",
@@ -107,15 +108,11 @@ public:
         
         load_waypoints(waypoint_file_, slam_map_name_ == "empty_map");
 
-        const char* edge_service_ip = std::getenv("EDGE_SERVICE_IP");
-        edge_service_ip_ = edge_service_ip ? std::string(edge_service_ip) : "localhost";
-        const char* edge_service_port = std::getenv("EDGE_SERVICE_PORT");
-        edge_service_port_ = edge_service_port ? std::string(edge_service_port) : "50049";
-        if (edge_service_ip_.empty()) {
-            RCLCPP_WARN(this->get_logger(), "EDGE_SERVICE_IP not set, using default: localhost");
-        } else {
-            RCLCPP_INFO(this->get_logger(), "Using EDGE_SERVICE_IP: %s", edge_service_ip_.c_str());
-        }
+        edge_service_ip_ = typego_sdk::resolve_edge_service_ip(this);
+        edge_service_port_ = std::to_string(typego_sdk::resolve_edge_service_port(this));
+        RCLCPP_INFO(this->get_logger(),
+            "Using EDGE_SERVICE at %s:%s",
+            edge_service_ip_.c_str(), edge_service_port_.c_str());
     }
 
 private:

@@ -1,0 +1,10 @@
+# go2_outdoor — ARISE SLAM + TARE/FAR exploration, outdoor terrain.
+robot:
+  type: go2
+  name: go2-outdoor
+autonomy:
+  type: full
+profiles:
+  far_planner_profile: outdoor
+  tare_planner_profile: outdoor
+  local_planner_profile: dog

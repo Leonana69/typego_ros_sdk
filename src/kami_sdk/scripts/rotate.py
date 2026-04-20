@@ -7,8 +7,11 @@ import time
 import threading
 import math
 
-import json, socket
-KAMI_IP = "192.168.168.168"
+import json, os, socket, sys
+KAMI_IP = os.environ.get('ROBOT_IP')
+if not KAMI_IP:
+    sys.exit('ROBOT_IP not set. Source robot.yaml via typego-config env first, '
+             'or export ROBOT_IP=<addr>.')
 CTRL_PORT = 8484
 
 sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
