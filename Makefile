@@ -188,6 +188,22 @@ rviz: $(ROBOT_ENV)
 		fi; \
 	}
 
+# Interactive launcher: pick mode + map, watch logs, save-and-return.
+# All logic lives in scripts/sdk_console.py (requires `pip install textual`).
+.PHONY: console
+console: SHELL := /bin/bash
+console: $(ROBOT_ENV)
+	@if [ ! -f $(CURDIR)/install/local_setup.bash ]; then \
+		echo "=> install/local_setup.bash missing — run 'make build' first."; \
+		exit 1; \
+	fi
+	@{ \
+		source /opt/ros/humble/local_setup.bash; \
+		source $(CURDIR)/install/local_setup.bash; \
+		set -a; source $(ROBOT_ENV); set +a; \
+		exec python3 $(CURDIR)/scripts/sdk_console.py; \
+	}
+
 # Save the current SLAM map. Auto-picks the right workflow from AUTONOMY_TYPE
 # (base → slam_toolbox via docker; full → ARISE SLAM on host). All logic
 # lives in scripts/save_map.py.
