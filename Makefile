@@ -126,40 +126,55 @@ or-tools:
 	rm -rf $$TMPDIR $(OR_TOOLS_ARCHIVE) && \
 	echo "=> OR-Tools $$ARCH setup complete."
 
-# Docker commands
+# Docker commands. Host networking + privileged are required for ROS 2 DDS
+# discovery and GPIO access on Jetson; --shm-size bumps /dev/shm so
+# iceoryx/CycloneDDS shared-memory transports don't OOM.
+DOCKER_RUN_FLAGS := -td --privileged --net=host --ipc=host --shm-size=2g \
+    --name $(CONTAINER_NAME) --env-file $(ROBOT_ENV)
+
 docker_stop:
 	@echo "=> Stopping TypeGo SDK..."
-	@-docker stop -t 0 $(CONTAINER_NAME) > /dev/null 2>&1
-	@-docker rm -f $(CONTAINER_NAME) > /dev/null 2>&1
+	@docker rm -f $(CONTAINER_NAME) >/dev/null 2>&1 || true
 
-docker_start: $(ROBOT_ENV)
-	@make docker_stop
+docker_start: $(ROBOT_ENV) docker_stop
 	@echo "=> Starting TypeGo SDK..."
-	docker run -td --privileged --net=host --ipc=host \
-    	--name="$(CONTAINER_NAME)" \
-		--shm-size=2g \
-		--env-file $(ROBOT_ENV) \
-		$(IMAGE)
-
-docker_remove:
-	@echo "=> Removing TypeGo SDK..."
-	@-docker image rm -f $(IMAGE)  > /dev/null 2>&1
-	@-docker rm -f $(CONTAINER_NAME) > /dev/null 2>&1
+	docker run $(DOCKER_RUN_FLAGS) $(IMAGE)
 
 docker_open:
-	@echo "=> Opening bash in TypeGo SDK..."
 	@docker exec -it $(CONTAINER_NAME) bash
 
-docker_build: $(ROBOT_ENV)
+docker_remove: docker_stop
+	@echo "=> Removing TypeGo SDK image..."
+	@docker image rm -f $(IMAGE) >/dev/null 2>&1 || true
+
+docker_build: $(ROBOT_ENV) docker_remove
 	@echo "=> Building TypeGo SDK..."
-	@make docker_stop
-	@make docker_remove
-	@echo -n "=>"
-	docker build \
-		--build-arg AUTONOMY_TYPE=$(AUTONOMY_TYPE) \
+	docker build --build-arg AUTONOMY_TYPE=$(AUTONOMY_TYPE) \
 		-t $(IMAGE) -f $(DOCKERFILE) .
-	@echo -n "=>"
-	@make docker_start
+	@$(MAKE) docker_start
+
+# Launch the full stack: render the env file, source ROS + workspace overlay,
+# load the runtime env, then run typego_bringup. Pass extra launch args via
+# ARGS="foo:=bar baz:=qux".
+#
+# SHELL is forced to bash because /opt/ros/humble/local_setup.bash uses
+# ${BASH_SOURCE[0]} to locate itself; zsh doesn't set that, so sourcing it
+# from a zsh recipe resolves paths against CWD and errors out.
+.PHONY: launch
+launch: SHELL := /bin/bash
+launch: $(ROBOT_ENV)
+	@if [ ! -f $(CURDIR)/install/local_setup.bash ]; then \
+		echo "=> install/local_setup.bash missing — run 'make build' first."; \
+		exit 1; \
+	fi
+	@{ \
+		echo "=> Sourcing ROS + $(ROBOT_ENV)"; \
+		source /opt/ros/humble/local_setup.bash; \
+		source $(CURDIR)/install/local_setup.bash; \
+		set -a; source $(ROBOT_ENV); set +a; \
+		echo "=> ros2 launch typego_sdk typego_bringup.launch.py $(ARGS)"; \
+		exec ros2 launch typego_sdk typego_bringup.launch.py $(ARGS); \
+	}
 
 # Run rviz
 rviz: $(ROBOT_ENV)
@@ -173,45 +188,17 @@ rviz: $(ROBOT_ENV)
 		fi; \
 	}
 
-# Save map for base autonomy
-save_map_base_autonomy:
-	@echo "=> Saving map..."
-	@{ \
-        if [ -z "$(FILE)" ]; then \
-            echo "Error: FILE variable is not set. Please set FILE to the desired filename."; \
-            exit 1; \
-        fi; \
-        echo '$(FILE)'; \
-    }
-	mkdir -p $(CURDIR)/src/typego_sdk/resource/Map-$(FILE)
-	ros2 run typego_sdk get_position_node $(CURDIR)/src/typego_sdk/resource/Map-$(FILE) --ros-args -r /tf:=/robot$(ROBOT_ID)/tf
-
-	docker exec $(CONTAINER_NAME) \
-		bash -c "source /opt/ros/humble/setup.bash && \
-		/opt/ros/humble/bin/ros2 service call $(if $(ROBOT_ID),/robot$(ROBOT_ID),)/slam_toolbox/serialize_map slam_toolbox/SerializePoseGraph \"{filename: '/workspace/$(FILE)'}\""
-	docker cp $(CONTAINER_NAME):/workspace/$(FILE).posegraph $(CURDIR)/src/typego_sdk/resource/Map-$(FILE)/$(FILE).posegraph
-	docker cp $(CONTAINER_NAME):/workspace/$(FILE).data $(CURDIR)/src/typego_sdk/resource/Map-$(FILE)/$(FILE).data
-	docker cp $(CONTAINER_NAME):/workspace/install/typego_sdk/share/typego_sdk/resource/Map-empty_map/waypoints.csv $(CURDIR)/src/typego_sdk/resource/Map-$(FILE)/waypoints.csv
-
-# Save map for full autonomy
-save_map_full_autonomy:
-	@echo "=> Saving map..."
-	@{ \
-        if [ -z "$(FILE)" ]; then \
-            echo "Error: FILE variable is not set. Please set FILE to the desired filename."; \
-            exit 1; \
-        fi; \
-        echo '$(FILE)'; \
-    }
-	mkdir -p $(CURDIR)/src/typego_sdk/resource/Map-$(FILE)
-	ros2 run typego_sdk get_position_node $(CURDIR)/src/typego_sdk/resource/Map-$(FILE) --ros-args -r /tf:=$(if $(ROBOT_ID),/robot$(ROBOT_ID),)/tf -r /tf_static:=$(if $(ROBOT_ID),/robot$(ROBOT_ID),)/tf_static
-
-	ros2 service call /save_slam_map arise_slam_mid360_msgs/srv/SaveSlamMap "{file_path: '$(CURDIR)/src/typego_sdk/resource/Map-$(FILE)/$(FILE)'}"
-	ros2 service call /save_explored_areas visualization_tools/srv/SaveExploredAreas "{file_path: '$(CURDIR)/src/typego_sdk/resource/Map-$(FILE)/$(FILE)'}"
-	cp $(CURDIR)/install/typego_sdk/share/typego_sdk/resource/Map-empty_map/waypoints.csv $(CURDIR)/src/typego_sdk/resource/Map-$(FILE)/waypoints.csv
-	@echo "=> Syncing map to install directory..."
-	mkdir -p $(CURDIR)/install/typego_sdk/share/typego_sdk/resource/Map-$(FILE)
-	cp -r $(CURDIR)/src/typego_sdk/resource/Map-$(FILE)/ $(CURDIR)/install/typego_sdk/share/typego_sdk/resource/Map-$(FILE)/
+# Save the current SLAM map. Auto-picks the right workflow from AUTONOMY_TYPE
+# (base → slam_toolbox via docker; full → ARISE SLAM on host). All logic
+# lives in scripts/save_map.py.
+.PHONY: save_map
+save_map: SHELL := /bin/bash
+save_map: $(ROBOT_ENV)
+	@if [ -z "$(FILE)" ]; then \
+		echo "Error: FILE=<map-name> is required."; exit 1; \
+	fi
+	@set -a; source $(ROBOT_ENV); set +a; \
+	 python3 $(CURDIR)/scripts/save_map.py $(FILE)
 
 # Reset iox
 iox_reset:

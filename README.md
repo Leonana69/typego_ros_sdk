@@ -174,11 +174,8 @@ Once up:
 Maps are stored in `src/typego_sdk/resource/Map-<name>/` and contain SLAM data files, a pose graph, waypoints, and an initial pose.
 
 ```bash
-# Save map (base autonomy, from host)
-make save_map_base_autonomy FILE=my-map
-
-# Save map (full autonomy)
-make save_map_full_autonomy FILE=my-map
+# Save the current SLAM map (picks base/full from robot.yaml's AUTONOMY_TYPE)
+make save_map FILE=my-map
 
 # Load a saved map at launch
 ros2 launch typego_sdk typego_bringup.launch.py slam_map_name:=my-map ...
@@ -207,8 +204,7 @@ Send goals via any of these methods:
 | `make docker_open` | Open interactive shell in container |
 | `make docker_stop` | Stop and remove container |
 | `make rviz` | Launch RViz with appropriate config and namespace remapping |
-| `make save_map_base_autonomy FILE=<name>` | Save current SLAM map (base mode) |
-| `make save_map_full_autonomy FILE=<name>` | Save current SLAM map (full mode) |
+| `make save_map FILE=<name>` | Save current SLAM map (mode picked from `AUTONOMY_TYPE`) |
 | `make iox_reset` | Clean up iceoryx shared memory segments |
 
 ## Key Dependencies
