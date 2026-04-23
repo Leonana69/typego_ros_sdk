@@ -2,6 +2,8 @@ log/
 install/
 build/
 
+__pycache__/
+
 .vscode/
 .DS_Store
 
@@ -15,3 +17,5 @@ src/typego_sdk/resource/Map-*/
 src/autonomy/exploration_planner/tare_planner/or-tools/include/
 src/autonomy/exploration_planner/tare_planner/or-tools/lib/
 src/autonomy/exploration_planner/tare_planner/or-tools/bin/
+
+doc/
