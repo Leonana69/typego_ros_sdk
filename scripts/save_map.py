@@ -2,12 +2,14 @@
 """Save the current SLAM map to src/typego_sdk/resource/Map-<name>/.
 
 Supports both autonomy modes:
-  full: ARISE SLAM (/save_slam_map + /save_explored_areas) — runs on host
-  base: slam_toolbox (/slam_toolbox/serialize_map)         — runs in docker
+  full: ARISE SLAM           (/save_slam_map + /save_explored_areas)
+  base: slam_toolbox         (/slam_toolbox/serialize_map, writes + init_pose.json)
 
-Replaces the old `make save_map_{base,full}_autonomy` targets. Uses an rclpy
-client instead of `ros2 service call` because the latter hangs on long-running
-services under FastDDS+iceoryx.
+Paths are host-relative: the SLAM node (wherever it's running — host via
+`make launch`, or inside `typego-sdk` container via `make docker_open`)
+must see the destination directory at the same path. Uses rclpy clients
+instead of `ros2 service call`, which hangs on long-running services under
+FastDDS+iceoryx.
 
 Usage:
   python3 scripts/save_map.py <name>
@@ -22,7 +24,6 @@ import math
 import os
 import shlex
 import shutil
-import subprocess
 import sys
 import time
 from pathlib import Path
@@ -36,7 +37,6 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 MAP_RESOURCE_DIR = PROJECT_ROOT / "src/typego_sdk/resource"
 INSTALL_MAP_RESOURCE_DIR = PROJECT_ROOT / "install/typego_sdk/share/typego_sdk/resource"
 RUNTIME_ENV = Path("/tmp/typego-runtime.env")
-CONTAINER_NAME = "typego-sdk"
 SERVICE_TIMEOUT_S = 120.0
 TF_TIMEOUT_S = 5.0
 
@@ -135,32 +135,34 @@ def _save_full(node: Node, name: str, map_dir: Path) -> None:
     print(f"=> Synced map to {install_map}")
 
 
-def _docker_cp(src_in_container: str, dst_on_host: Path) -> None:
-    subprocess.run(
-        ["docker", "cp", f"{CONTAINER_NAME}:{src_in_container}", str(dst_on_host)],
-        check=True,
-    )
-
-
 def _save_base(node: Node, name: str, map_dir: Path, robot_id: str | None) -> None:
+    """Base autonomy: call slam_toolbox/serialize_map with a host path.
+
+    slam_toolbox writes <prefix>.posegraph + <prefix>.data on whatever
+    filesystem the slam_toolbox process sees — which is the host when SLAM
+    is launched via `make launch`. If you instead run the stack inside the
+    docker container (`make docker_open`), run this script from inside the
+    container too so the paths resolve the same way.
+    """
     from slam_toolbox.srv import SerializePoseGraph
 
     service = f"{_ns_prefix(robot_id)}/slam_toolbox/serialize_map"
-    container_prefix = f"/workspace/{name}"
+    target_prefix = str(map_dir / name)
 
     resp = _call_service(node, SerializePoseGraph, service,
-                         SerializePoseGraph.Request(filename=container_prefix),
+                         SerializePoseGraph.Request(filename=target_prefix),
                          label=service)
     if resp.result != SerializePoseGraph.Response.RESULT_SUCCESS:
-        raise SystemExit(f"{service}: result={resp.result} (non-success)")
-    print(f"=> {service}: success")
+        raise SystemExit(
+            f"{service}: result={resp.result} (RESULT_FAILED_TO_WRITE_FILE). "
+            f"Check that {map_dir} is writable by the slam_toolbox process."
+        )
+    print(f"=> {service}: wrote {target_prefix}.posegraph + .data")
 
-    for ext in (".posegraph", ".data"):
-        _docker_cp(f"/workspace/{name}{ext}", map_dir / f"{name}{ext}")
-    _docker_cp(
-        "/workspace/install/typego_sdk/share/typego_sdk/resource/Map-empty_map/waypoints.csv",
-        map_dir / "waypoints.csv",
-    )
+    # Stock waypoints ship with Map-empty_map.
+    src_wp = INSTALL_MAP_RESOURCE_DIR / "Map-empty_map/waypoints.csv"
+    if src_wp.is_file():
+        shutil.copy(src_wp, map_dir / "waypoints.csv")
 
 
 def main() -> int:
