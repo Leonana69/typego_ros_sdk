@@ -8,3 +8,10 @@ build/
 ./src/autonomy/base_autonomy/vehicle_simulator/mesh/
 temp/
 src/typego_sdk/resource/Map-*/
+
+# OR-Tools: fetched by `make or-tools` per-arch. Keep the small Makefile and
+# README.md tracked as placeholders; the headers, libraries, and executables
+# are ~155 MB of arch-specific binaries regenerated on demand.
+src/autonomy/exploration_planner/tare_planner/or-tools/include/
+src/autonomy/exploration_planner/tare_planner/or-tools/lib/
+src/autonomy/exploration_planner/tare_planner/or-tools/bin/

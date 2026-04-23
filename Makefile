@@ -96,28 +96,35 @@ setup: $(ROBOT_ENV)
 		echo "=> AUTONOMY_TYPE=$(or $(AUTONOMY_TYPE),unset), skipping SLAM dependency build."; \
 	fi
 
-# OR-Tools setup, download a different version for arm64
+# OR-Tools setup. Download the arch-correct v9.8 debian-11 tarball for both
+# arm64 and amd64. The committed or-tools/{include,lib,bin} is intentionally
+# overwritten here — the vendored amd64 copy in git is incomplete (missing
+# absl/log/ headers and the bin/{protoc,scip,fzn-cp-sat} executables that
+# protobuf-targets.cmake / scip-targets.cmake validate at configure time).
 OR_TOOLS_DIR := $(CURDIR)/src/autonomy/exploration_planner/tare_planner/or-tools
-OR_TOOLS_URL := https://github.com/google/or-tools/releases/download/v9.8/or-tools_arm64_debian-11_cpp_v9.8.3296.tar.gz
-OR_TOOLS_ARCHIVE := /tmp/or-tools_arm64.tar.gz
+OR_TOOLS_VERSION := v9.8.3296
+OR_TOOLS_BASE := https://github.com/google/or-tools/releases/download/v9.8
+OR_TOOLS_ARCHIVE ?= /tmp/or-tools.tar.gz
 or-tools:
 	@echo "=> Setting up OR-Tools..."
 	@ARCH=$$(uname -m); \
-	if [ "$$ARCH" = "aarch64" ]; then \
-		echo "=> Detected aarch64, downloading arm64 OR-Tools..."; \
-		wget -q --show-progress -O $(OR_TOOLS_ARCHIVE) $(OR_TOOLS_URL) && \
-		echo "=> Extracting archive..." && \
-		TMPDIR=$$(mktemp -d) && \
-		tar -xzf $(OR_TOOLS_ARCHIVE) -C $$TMPDIR --strip-components=1 && \
-		echo "=> Replacing include and lib directories..." && \
-		rm -rf $(OR_TOOLS_DIR)/include $(OR_TOOLS_DIR)/lib && \
-		cp -r $$TMPDIR/include $(OR_TOOLS_DIR)/include && \
-		cp -r $$TMPDIR/lib $(OR_TOOLS_DIR)/lib && \
-		rm -rf $$TMPDIR $(OR_TOOLS_ARCHIVE) && \
-		echo "=> OR-Tools arm64 setup complete."; \
-	else \
-		echo "=> Detected $$ARCH, using default OR-Tools (amd64)."; \
-	fi
+	case "$$ARCH" in \
+		aarch64) OR_TOOLS_TARBALL=or-tools_arm64_debian-11_cpp_$(OR_TOOLS_VERSION).tar.gz ;; \
+		x86_64)  OR_TOOLS_TARBALL=or-tools_amd64_debian-11_cpp_$(OR_TOOLS_VERSION).tar.gz ;; \
+		*) echo "=> Unsupported arch $$ARCH; OR-Tools setup skipped."; exit 0 ;; \
+	esac; \
+	echo "=> Detected $$ARCH, downloading $$OR_TOOLS_TARBALL..."; \
+	wget -q --show-progress -O $(OR_TOOLS_ARCHIVE) $(OR_TOOLS_BASE)/$$OR_TOOLS_TARBALL && \
+	echo "=> Extracting archive..." && \
+	TMPDIR=$$(mktemp -d) && \
+	tar -xzf $(OR_TOOLS_ARCHIVE) -C $$TMPDIR --strip-components=1 && \
+	echo "=> Replacing include / lib / bin directories..." && \
+	rm -rf $(OR_TOOLS_DIR)/include $(OR_TOOLS_DIR)/lib $(OR_TOOLS_DIR)/bin && \
+	cp -a $$TMPDIR/include $(OR_TOOLS_DIR)/include && \
+	cp -a $$TMPDIR/lib $(OR_TOOLS_DIR)/lib && \
+	if [ -d $$TMPDIR/bin ]; then cp -a $$TMPDIR/bin $(OR_TOOLS_DIR)/bin; fi && \
+	rm -rf $$TMPDIR $(OR_TOOLS_ARCHIVE) && \
+	echo "=> OR-Tools $$ARCH setup complete."
 
 # Docker commands
 docker_stop:

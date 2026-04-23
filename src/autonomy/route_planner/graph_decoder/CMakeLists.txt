@@ -17,6 +17,7 @@ find_package(std_srvs REQUIRED)
 find_package(visibility_graph_msg REQUIRED)
 find_package(pcl_conversions REQUIRED)
 find_package(PCL REQUIRED)
+find_package(Eigen3 REQUIRED)
 find_package(visualization_msgs REQUIRED)
 
 ###########
@@ -29,14 +30,7 @@ include_directories(
   ${rclcpp_INCLUDE_DIRS}
   ${std_msgs_INCLUDE_DIRS}
   ${PCL_INCLUDE_DIRS}
-  /usr/local/include # Location when using 'make system_install'
-  /usr/include       # More usual location (e.g. when installing using a package)
-)
-
-# Specify additional locations for library files
-link_directories(
-  /usr/local/lib # Location when using 'make system_install'
-  /usr/lib       # More usual location (e.g. when installing using a package)
+  ${EIGEN3_INCLUDE_DIR}
 )
 
 # Dependent cpp files

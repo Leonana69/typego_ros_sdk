@@ -24,13 +24,6 @@ include_directories(
   include
   ${PCL_INCLUDE_DIRS}
   ${OpenCV_INCLUDE_DIRS}
-  /usr/local/include
-  /usr/include
-)
-
-link_directories(
-  /usr/local/lib
-  /usr/lib
 )
 
 set(SOURCES
