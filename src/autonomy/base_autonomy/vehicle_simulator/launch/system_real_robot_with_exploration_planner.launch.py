@@ -25,6 +25,10 @@ def generate_launch_description():
   declare_vehicleX = DeclareLaunchArgument('vehicleX', default_value='0.0', description='')
   declare_vehicleY = DeclareLaunchArgument('vehicleY', default_value='0.0', description='')
   declare_checkTerrainConn = DeclareLaunchArgument('checkTerrainConn', default_value='true', description='')
+  # Accepted for symmetry with system_real_robot{,_with_route_planner}.launch.py,
+  # but ignored: exploration always builds a fresh map, so arise_slam runs without
+  # a pre-loaded map_dir.
+  declare_map_dir = DeclareLaunchArgument('map_dir', default_value='', description='Ignored in exploration mode.')
   
   start_local_planner = IncludeLaunchDescription(
     FrontendLaunchDescriptionSource(os.path.join(
@@ -108,6 +112,7 @@ def generate_launch_description():
   ld.add_action(declare_vehicleX)
   ld.add_action(declare_vehicleY)
   ld.add_action(declare_checkTerrainConn)
+  ld.add_action(declare_map_dir)
 
   ld.add_action(start_local_planner)
   ld.add_action(start_terrain_analysis)

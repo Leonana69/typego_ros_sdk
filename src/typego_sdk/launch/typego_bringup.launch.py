@@ -147,6 +147,14 @@ ARGUMENTS = [
         description='Pre-existing SLAM map name to load (passed to slam_launch.py).'
     ),
     DeclareLaunchArgument(
+        'full_mode',
+        default_value='0',
+        description='Full-autonomy sub-mode (ignored when autonomy_type=base): '
+                    '0 = plain vehicle_simulator, '
+                    '1 = + FAR route planner, '
+                    '2 = + TARE exploration planner.'
+    ),
+    DeclareLaunchArgument(
         'launch_web_gateway',
         default_value=_DEFAULTS['launch_web_gateway'],
         description='If "true", launches the typego_web_gateway HMI on :8080.'
@@ -181,6 +189,7 @@ def generate_launch_description():
         robot_type = context.perform_substitution(LaunchConfiguration('robot_type'))
         autonomy_type = context.perform_substitution(LaunchConfiguration('autonomy_type'))
         slam_map_name = context.perform_substitution(LaunchConfiguration('slam_map_name'))
+        full_mode = context.perform_substitution(LaunchConfiguration('full_mode'))
         launch_web_gateway = context.perform_substitution(
             LaunchConfiguration('launch_web_gateway')).lower() == 'true'
         web_gateway_port = context.perform_substitution(
@@ -236,10 +245,17 @@ def generate_launch_description():
 
         if autonomy_type == 'full':
             # --- Full autonomy (vehicle simulator) ---
+            full_mode_launch_files = {
+                '0': 'system_real_robot.launch.py',
+                '1': 'system_real_robot_with_route_planner.launch.py',
+                '2': 'system_real_robot_with_exploration_planner.launch.py',
+            }
+            full_launch_file = full_mode_launch_files.get(
+                full_mode, 'system_real_robot.launch.py')
             autonomy_pkg = get_package_share_directory('vehicle_simulator')
             autonomy_launch = IncludeLaunchDescription(
                 PythonLaunchDescriptionSource(
-                    os.path.join(autonomy_pkg, 'launch', 'system_real_robot.launch.py')
+                    os.path.join(autonomy_pkg, 'launch', full_launch_file)
                 ),
                 launch_arguments={
                     'map_dir': os.path.join(typego_sdk_pkg, 'resource', f'Map-{slam_map_name}', f'{slam_map_name}.pcd') if slam_map_name != 'empty_map' else '',

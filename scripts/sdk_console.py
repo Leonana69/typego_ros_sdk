@@ -36,6 +36,14 @@ SAVE_MAP_SCRIPT = PROJECT_ROOT / "scripts/save_map.py"
 LAUNCH_CMD = ["ros2", "launch", "typego_sdk", "typego_bringup.launch.py"]
 EMPTY_MAP = "empty_map"
 
+# Full-autonomy sub-modes: (key, short-label, launch-arg-value).
+# Mirrors typego_bringup.launch.py's full_mode mapping.
+FULL_SUB_OPTIONS = [
+    ("0", "plain (vehicle simulator)"),
+    ("1", "FAR route planner"),
+    ("2", "TARE exploration planner"),
+]
+
 
 def _maps_for_mode(mode: str) -> list[str]:
     """List maps valid for the given mode by looking at on-disk artefacts.
@@ -87,6 +95,8 @@ class TypegoConsole(App):
         super().__init__()
         self.state: str = "mode"
         self.mode: Optional[str] = None
+        self.full_mode_key: str = "0"         # full-autonomy sub-mode: "0" / "1" / "2"
+        self.full_mode_label: str = ""        # short label for status line
         self.map_options: list[str] = []
         self.selected_map: Optional[str] = None  # None means "build new"
         self.launch_proc: Optional[asyncio.subprocess.Process] = None
@@ -114,6 +124,7 @@ class TypegoConsole(App):
     def _show_mode_menu(self) -> None:
         self.state = "mode"
         self.mode = None
+        self.full_mode_label = ""
         self.selected_map = None
         self._banner("Typego SDK Console")
         self.log_pane.write("Choose autonomy mode:")
@@ -122,6 +133,18 @@ class TypegoConsole(App):
         self.log_pane.write("")
         self._set_status("Select mode")
         self.prompt.placeholder = "Type 1 or 2, then Enter  (q to quit)"
+        self.prompt.value = ""
+
+    def _show_full_sub_menu(self) -> None:
+        self.state = "full_sub"
+        self._banner("Mode: full")
+        self.log_pane.write("Full-autonomy layer:")
+        for key, label in FULL_SUB_OPTIONS:
+            self.log_pane.write(f"  [bold]{key}[/bold]  {label}")
+        self.log_pane.write("")
+        self.log_pane.write("  [bold]b[/bold]  back       [bold]q[/bold]  quit")
+        self._set_status("Select full-autonomy layer")
+        self.prompt.placeholder = "Type 0, 1, or 2 (or b / q), then Enter"
         self.prompt.value = ""
 
     def _show_map_menu(self) -> None:
@@ -141,12 +164,18 @@ class TypegoConsole(App):
         self.prompt.placeholder = f"Type 1-{upper} (or b / q), then Enter"
         self.prompt.value = ""
 
+    def _mode_label(self) -> str:
+        if self.mode == "full" and self.full_mode_label:
+            return f"full · {self.full_mode_label}"
+        return self.mode or ""
+
     def _update_running_status(self) -> None:
+        label = self._mode_label()
         if self.selected_map is None:
-            self._set_status(f"Running [{self.mode}]  ·  building new map")
+            self._set_status(f"Running [{label}]  ·  building new map")
             self.prompt.placeholder = "[s]ave and return  ·  [m]enu  ·  [q]uit"
         else:
-            self._set_status(f"Running [{self.mode}]  ·  map: {self.selected_map}")
+            self._set_status(f"Running [{label}]  ·  map: {self.selected_map}")
             self.prompt.placeholder = "[m]enu  ·  [q]uit"
 
     def _set_status(self, text: str) -> None:
@@ -159,6 +188,7 @@ class TypegoConsole(App):
         self.prompt.value = ""
         handlers = {
             "mode": self._handle_mode,
+            "full_sub": self._handle_full_sub,
             "map": self._handle_map,
             "running": self._handle_running,
             "naming": self._handle_naming,
@@ -173,19 +203,37 @@ class TypegoConsole(App):
             return
         if raw == "1":
             self.mode = "base"
+            self._show_map_menu()
         elif raw == "2":
             self.mode = "full"
+            self._show_full_sub_menu()
         else:
             self.log_pane.write(f"[red]Unknown option: {raw!r}[/red]")
+
+    async def _handle_full_sub(self, raw: str) -> None:
+        if raw in ("q", "quit"):
+            await self._quit()
             return
-        self._show_map_menu()
+        if raw in ("b", "back"):
+            self._show_mode_menu()
+            return
+        for key, label in FULL_SUB_OPTIONS:
+            if key == raw:
+                self.full_mode_key = key
+                self.full_mode_label = label
+                self._show_map_menu()
+                return
+        self.log_pane.write(f"[red]Unknown option: {raw!r}[/red]")
 
     async def _handle_map(self, raw: str) -> None:
         if raw in ("q", "quit"):
             await self._quit()
             return
         if raw in ("b", "back"):
-            self._show_mode_menu()
+            if self.mode == "full":
+                self._show_full_sub_menu()
+            else:
+                self._show_mode_menu()
             return
         try:
             idx = int(raw)
@@ -246,6 +294,8 @@ class TypegoConsole(App):
             f"autonomy_type:={self.mode}",
             f"slam_map_name:={map_arg}",
         ]
+        if self.mode == "full":
+            cmd.append(f"full_mode:={self.full_mode_key}")
         self._banner(f"Launching: {' '.join(cmd)}")
         self._update_running_status()
         try:
