@@ -102,6 +102,25 @@ Validate without building:
 make config_validate
 ```
 
+### Python host dependencies
+
+Even the Docker path needs a working host Python: `make docker_build` (and every other top-level target) first runs `typego-config env` on the host to render `/tmp/typego-runtime.env` from `robot.yaml`. That CLI imports **PyYAML** and **pydantic**, so both must be present on the interpreter `make` resolves to.
+
+The repo ships a `pyproject.toml` + `uv.lock` covering every pip-installed Python dep (web gateway runtime + config CLI). Use `uv`:
+
+```bash
+uv sync                 # runtime: PyYAML, pydantic, fastapi, uvicorn, numpy, pillow, aiofiles, setuptools
+uv sync --group dev     # + black, pre-commit, pytest, pytest-cov
+```
+
+Or pip, if you prefer:
+
+```bash
+pip install pyyaml pydantic   # minimum to run `make docker_build` / `make build`
+```
+
+ROS 2 Python bindings (`rclpy`, etc.) come from apt, not PyPI, and are not in the lockfile.
+
 ### Docker (production / reproducible deploy)
 
 ```bash
@@ -115,6 +134,8 @@ make docker_open
 make rviz
 ```
 
+> **Host prerequisite:** `make docker_build` renders `/tmp/typego-runtime.env` on the host *before* invoking Docker, so the host Python must have **PyYAML** and **pydantic** installed (see above). Without them the build fails in the `$(ROBOT_ENV)` step, before any Docker commands run.
+
 For day-to-day local work, prefer the native path + `make console` below — it skips the container build and gives you an interactive menu + log pane.
 
 ### Native (recommended for local development)
@@ -122,6 +143,7 @@ For day-to-day local work, prefer the native path + `make console` below — it 
 ```bash
 # One-time
 source /opt/ros/humble/local_setup.bash
+uv sync                      # host Python deps (PyYAML, pydantic, …); or: pip install pyyaml pydantic
 pip install textual          # used by `make console` + `make rviz`
 make setup                   # only needed for full autonomy (Sophus, OR-Tools)
 make build                   # builds + renders /tmp/typego-runtime.env from robot.yaml

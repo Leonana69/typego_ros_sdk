@@ -1,0 +1,34 @@
+[project]
+name = "typego-ros-sdk"
+version = "0.1.0"
+description = "TypeGo ROS 2 SDK — Python runtime dependencies for the web gateway and config tooling."
+readme = "README.md"
+requires-python = ">=3.10,<3.11"
+license = { text = "Apache-2.0" }
+authors = [{ name = "guojun", email = "chengj0803@gmail.com" }]
+
+# Runtime deps installed via pip in docker/Dockerfile, plus setuptools
+# required by the ament_python packages (typego_web_gateway, typego_config).
+# ROS 2 Python bindings (rclpy, etc.) come from apt, not PyPI, so they are
+# intentionally not listed here.
+dependencies = [
+    "fastapi==0.115.*",
+    "uvicorn[standard]==0.32.*",
+    "pillow>=10",
+    "numpy>=1.24",
+    "aiofiles>=23",
+    "pydantic>=2,<3",
+    "PyYAML>=6",
+    "setuptools",
+]
+
+[dependency-groups]
+dev = [
+    "black",
+    "pre-commit",
+    "pytest",
+    "pytest-cov",
+]
+
+[tool.uv]
+package = false
