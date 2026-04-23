@@ -176,16 +176,15 @@ launch: $(ROBOT_ENV)
 		exec ros2 launch typego_sdk typego_bringup.launch.py $(ARGS); \
 	}
 
-# Run rviz
+# Interactive rviz launcher: asks for base/full, then (for full) which layer's
+# config to use. All logic lives in scripts/rviz_launch.py.
+.PHONY: rviz
+rviz: SHELL := /bin/bash
 rviz: $(ROBOT_ENV)
 	@{ \
-		echo "→ Loading $(ROBOT_ENV)"; \
+		source /opt/ros/humble/local_setup.bash; \
 		set -a; source $(ROBOT_ENV); set +a; \
-		if [ -n "$${ROBOT_ID}" ]; then \
-			ros2 run rviz2 rviz2 $(if $(filter full,$(AUTONOMY_TYPE)),-d $(CURDIR)/src/autonomy/base_autonomy/vehicle_simulator/rviz/vehicle_simulator.rviz) --ros-args -r /tf:=/robot$${ROBOT_ID}/tf -r /tf_static:=/robot$${ROBOT_ID}/tf_static -r /goal_pose:=/robot$${ROBOT_ID}/goal_pose; \
-		else \
-			ros2 run rviz2 rviz2 $(if $(filter full,$(AUTONOMY_TYPE)),-d $(CURDIR)/src/autonomy/base_autonomy/vehicle_simulator/rviz/vehicle_simulator.rviz); \
-		fi; \
+		exec python3 $(CURDIR)/scripts/rviz_launch.py; \
 	}
 
 # Interactive launcher: pick mode + map, watch logs, save-and-return.
