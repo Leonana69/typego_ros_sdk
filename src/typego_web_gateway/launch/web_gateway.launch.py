@@ -3,7 +3,8 @@ import os
 
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
-from launch.substitutions import LaunchConfiguration
+from launch.conditions import IfCondition
+from launch.substitutions import LaunchConfiguration, PythonExpression
 from launch_ros.actions import Node
 
 
@@ -15,6 +16,8 @@ def generate_launch_description():
     bag_chunk = LaunchConfiguration('bag_chunk_seconds')
     bag_retain = LaunchConfiguration('bag_retain')
     disable_bag = LaunchConfiguration('disable_bag')
+    foxglove_enabled = LaunchConfiguration('enable_foxglove_bridge')
+    foxglove_port = LaunchConfiguration('foxglove_bridge_port')
 
     # /data/bags is the convention inside the Docker image (which creates
     # that directory at build time). On host systems that path usually
@@ -35,6 +38,15 @@ def generate_launch_description():
             'disable_bag', default_value='false',
             description='set to "true" to skip the always-on rosbag recorder',
         ),
+        DeclareLaunchArgument(
+            'enable_foxglove_bridge', default_value='false',
+            description='run foxglove_bridge alongside the gateway for '
+                        'Foxglove Studio / Lichtblick clients',
+        ),
+        DeclareLaunchArgument(
+            'foxglove_bridge_port', default_value='8765',
+            description='WebSocket port for foxglove_bridge',
+        ),
         Node(
             package='typego_web_gateway',
             executable='gateway_node',
@@ -49,6 +61,23 @@ def generate_launch_description():
                 '--bag-retain', bag_retain,
             ],
             parameters=[{
+                'use_sim_time': False,
+            }],
+        ),
+        # Generic ROS ↔ WebSocket bridge. Foxglove Studio / Lichtblick can
+        # connect to ws://<host>:8765 for the 3D panel, plots, image feeds,
+        # topic graph, etc. — complements the curated HMI on :8080.
+        Node(
+            package='foxglove_bridge',
+            executable='foxglove_bridge',
+            name='foxglove_bridge',
+            output='screen',
+            condition=IfCondition(
+                PythonExpression(['"', foxglove_enabled, '".lower() == "true"'])
+            ),
+            parameters=[{
+                'port': foxglove_port,
+                'address': '0.0.0.0',
                 'use_sim_time': False,
             }],
         ),

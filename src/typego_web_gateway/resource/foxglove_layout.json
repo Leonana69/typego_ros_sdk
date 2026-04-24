@@ -1,0 +1,114 @@
+{
+  "configById": {
+    "3D!typego": {
+      "cameraState": {
+        "distance": 20,
+        "perspective": false,
+        "phi": 0,
+        "target": [0, 0, 0],
+        "targetOffset": [0, 0, 0],
+        "thetaOffset": 0,
+        "fovy": 45,
+        "near": 0.5,
+        "far": 5000
+      },
+      "followMode": "follow-pose",
+      "followTf": "base_link",
+      "scene": {
+        "backgroundColor": "#0e1116",
+        "enableStats": false
+      },
+      "transforms": {},
+      "topics": {
+        "/map": {
+          "visible": true,
+          "colorMode": "map",
+          "frameLocked": true
+        },
+        "/scan": {
+          "visible": true,
+          "pointSize": 3,
+          "colorMode": "flat",
+          "flatColor": "#ffd24d"
+        },
+        "/navigate_to_pose/_action/feedback": {
+          "visible": false
+        }
+      },
+      "layers": {
+        "grid": {
+          "label": "Grid",
+          "instanceId": "grid",
+          "layerId": "foxglove.Grid",
+          "size": 20,
+          "divisions": 20,
+          "color": "#303640",
+          "frameLocked": false,
+          "order": 0
+        }
+      }
+    },
+    "Plot!cmdvel": {
+      "title": "cmd_vel",
+      "paths": [
+        {
+          "value": "/cmd_vel.linear.x",
+          "enabled": true,
+          "timestampMethod": "receiveTime"
+        },
+        {
+          "value": "/cmd_vel.angular.z",
+          "enabled": true,
+          "timestampMethod": "receiveTime"
+        }
+      ],
+      "showXAxisLabels": true,
+      "showYAxisLabels": true,
+      "showLegend": true,
+      "legendDisplay": "top",
+      "isSynced": true,
+      "xAxisVal": "timestamp",
+      "sidebarDimension": 240
+    },
+    "Log!rosout": {
+      "searchTerms": [],
+      "minLogLevel": 2,
+      "topicToRender": "/rosout"
+    },
+    "RawMessages!status": {
+      "topicPath": "/typego_web_gateway/status"
+    },
+    "Teleop!twist": {
+      "topic": "/cmd_vel",
+      "publishRate": 5,
+      "upButton": { "field": "linear-x", "value": 0.3 },
+      "downButton": { "field": "linear-x", "value": -0.3 },
+      "leftButton": { "field": "angular-z", "value": 0.5 },
+      "rightButton": { "field": "angular-z", "value": -0.5 }
+    }
+  },
+  "globalVariables": {},
+  "userNodes": {},
+  "playbackConfig": { "speed": 1 },
+  "layout": {
+    "first": "3D!typego",
+    "second": {
+      "first": {
+        "first": "Plot!cmdvel",
+        "second": "Log!rosout",
+        "direction": "column",
+        "splitPercentage": 45
+      },
+      "second": {
+        "first": "RawMessages!status",
+        "second": "Teleop!twist",
+        "direction": "column",
+        "splitPercentage": 55
+      },
+      "direction": "column",
+      "splitPercentage": 60
+    },
+    "direction": "row",
+    "splitPercentage": 60
+  }
+}

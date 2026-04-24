@@ -31,6 +31,8 @@ setup(
         (os.path.join('share', package_name), ['package.xml']),
         (os.path.join('share', package_name, 'launch'),
          glob('launch/*.launch.py')),
+        (os.path.join('share', package_name, 'resource'),
+         ['resource/foxglove_layout.json']),
     ] + frontend_files(),
     install_requires=['setuptools'],
     zip_safe=True,
