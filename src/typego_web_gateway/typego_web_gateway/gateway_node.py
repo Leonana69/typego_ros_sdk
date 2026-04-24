@@ -64,6 +64,9 @@ def _parse_args(argv) -> argparse.Namespace:
                         help='disable always-on rosbag recording')
     # Ignore unknown args so the ros2 launcher can pass --ros-args etc.
     args, _ = parser.parse_known_args(argv)
+    # Expand ~ here too so env-var / CLI values (e.g. from robot.yaml's
+    # "~/.typego/bags") don't get mkdir'd as a literal "~" folder under cwd.
+    args.bag_dir = os.path.expanduser(args.bag_dir)
     return args
 
 

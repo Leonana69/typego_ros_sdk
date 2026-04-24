@@ -41,7 +41,7 @@ class BagRotator:
         chunk_seconds: int = 600,
         retain: int = 6,
     ):
-        self._bag_dir = Path(bag_dir)
+        self._bag_dir = Path(bag_dir).expanduser()
         self._topics = topics or list(DEFAULT_TOPICS)
         self._chunk_seconds = chunk_seconds
         self._retain = retain
