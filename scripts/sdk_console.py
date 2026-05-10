@@ -14,8 +14,9 @@ import asyncio
 import os
 import signal
 import sys
+from datetime import datetime
 from pathlib import Path
-from typing import Optional
+from typing import Optional, TextIO
 
 try:
     from rich.text import Text
@@ -33,6 +34,7 @@ except ImportError:
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 MAP_RESOURCE_DIR = PROJECT_ROOT / "src/typego_sdk/resource"
 SAVE_MAP_SCRIPT = PROJECT_ROOT / "scripts/save_map.py"
+LOG_DIR = PROJECT_ROOT / "logs"
 LAUNCH_CMD = ["ros2", "launch", "typego_sdk", "typego_bringup.launch.py"]
 EMPTY_MAP = "empty_map"
 
@@ -100,6 +102,8 @@ class TypegoConsole(App):
         self.map_options: list[str] = []
         self.selected_map: Optional[str] = None  # None means "build new"
         self.launch_proc: Optional[asyncio.subprocess.Process] = None
+        self.log_file: Optional[TextIO] = None
+        self.log_path: Optional[Path] = None
 
     # ---------- Layout ----------
 
@@ -287,6 +291,39 @@ class TypegoConsole(App):
 
     # ---------- Launch subprocess ----------
 
+    def _open_log_file(self, cmd: list[str]) -> None:
+        try:
+            LOG_DIR.mkdir(parents=True, exist_ok=True)
+            self.log_path = LOG_DIR / f"console-{datetime.now():%Y%m%d-%H%M%S}.log"
+            self.log_file = self.log_path.open("w", buffering=1, encoding="utf-8", errors="replace")
+            self.log_file.write(f"# typego console log — {datetime.now().isoformat(timespec='seconds')}\n")
+            self.log_file.write(f"# cmd: {' '.join(cmd)}\n")
+        except OSError as exc:
+            self.log_file = None
+            self.log_path = None
+            self.log_pane.write(f"[yellow]Could not open log file: {exc}[/yellow]")
+
+    def _close_log_file(self) -> None:
+        if self.log_file is not None:
+            try:
+                self.log_file.close()
+            except OSError:
+                pass
+        self.log_file = None
+        self.log_path = None
+
+    def _tee_line(self, raw: bytes) -> None:
+        text = raw.decode(errors="replace").rstrip("\r\n")
+        if self.log_file is not None:
+            try:
+                self.log_file.write(text + "\n")
+            except OSError:
+                pass
+        try:
+            self.log_pane.write(Text.from_ansi(text))
+        except Exception:
+            self.log_pane.write(repr(raw))
+
     async def _start_launch(self) -> None:
         self.state = "running"
         map_arg = EMPTY_MAP if self.selected_map is None else self.selected_map
@@ -297,6 +334,10 @@ class TypegoConsole(App):
         if self.mode == "full":
             cmd.append(f"full_mode:={self.full_mode_key}")
         self._banner(f"Launching: {' '.join(cmd)}")
+        self._open_log_file(cmd)
+        if self.log_path is not None:
+            rel = self.log_path.relative_to(PROJECT_ROOT) if self.log_path.is_relative_to(PROJECT_ROOT) else self.log_path
+            self.log_pane.write(f"[dim]Logs tee'd to {rel}  ·  Hold Shift while dragging to copy text.[/dim]")
         self._update_running_status()
         try:
             self.launch_proc = await asyncio.create_subprocess_exec(
@@ -307,6 +348,7 @@ class TypegoConsole(App):
             )
         except FileNotFoundError:
             self.log_pane.write("[red]ros2 not on PATH — source the ROS env before running.[/red]")
+            self._close_log_file()
             self._show_mode_menu()
             return
         self.run_worker(self._pump(self.launch_proc), exclusive=False, name="launch_pump")
@@ -317,14 +359,12 @@ class TypegoConsole(App):
             line = await proc.stdout.readline()
             if not line:
                 break
-            try:
-                self.log_pane.write(Text.from_ansi(line.decode(errors="replace").rstrip()))
-            except Exception:
-                self.log_pane.write(repr(line))
+            self._tee_line(line)
         rc = await proc.wait()
         if proc is self.launch_proc:
             self.log_pane.write(f"[dim]-- ros2 launch exited ({rc}) --[/dim]")
             self.launch_proc = None
+            self._close_log_file()
             # If it died on its own, drop back to the menu rather than leaving
             # the user staring at a frozen-looking screen.
             if self.state == "running":
@@ -334,6 +374,7 @@ class TypegoConsole(App):
         proc = self.launch_proc
         if proc is None or proc.returncode is not None:
             self.launch_proc = None
+            self._close_log_file()
             return
         try:
             os.killpg(os.getpgid(proc.pid), signal.SIGINT)
@@ -348,6 +389,7 @@ class TypegoConsole(App):
                 pass
             await proc.wait()
         self.launch_proc = None
+        self._close_log_file()
 
     async def _run_save_map(self, name: str) -> int:
         cmd = ["python3", str(SAVE_MAP_SCRIPT), name, "--mode", self.mode or ""]
@@ -361,7 +403,7 @@ class TypegoConsole(App):
             line = await proc.stdout.readline()
             if not line:
                 break
-            self.log_pane.write(Text.from_ansi(line.decode(errors="replace").rstrip()))
+            self._tee_line(line)
         return await proc.wait()
 
     async def _quit(self) -> None:
