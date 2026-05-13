@@ -70,7 +70,11 @@ controller_server:
       PreferForwardCritic:
         enabled: true
         cost_power: 1
-        cost_weight: 5.0
+        # Heavily penalize reversing so the controller rotates in place and
+        # drives forward whenever it can. Backward trajectories only win when
+        # every forward/turning option collides (CostCritic dwarfs this weight),
+        # i.e. when there's genuinely no room to turn around.
+        cost_weight: 25.0
         threshold_to_consider: 0.5
       # ObstaclesCritic:
       #   enabled: true
@@ -134,7 +138,10 @@ local_costmap:
       update_frequency: 10.0           # Match controller frequency
       publish_frequency: 10.0
       transform_tolerance: 0.5
-      
+      # Absorb transient map->odom gaps when slam_toolbox's single-threaded
+      # executor stalls under load (default 10 s is too tight).
+      tf_buffer_duration: 30.0
+
       rolling_window: true
       width: 10                        # Expand for better lookahead at higher speeds
       height: 10
@@ -178,6 +185,7 @@ global_costmap:
       footprint: "[[-0.3, -0.20], [-0.3, 0.20], [0.4, 0.20], [0.4, -0.20]]"
       footprint_padding: 0.03
       transform_tolerance: 0.5
+      tf_buffer_duration: 30.0
       update_frequency: 2.0
       publish_frequency: 2.0
       resolution: 0.05
