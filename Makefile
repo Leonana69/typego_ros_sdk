@@ -28,7 +28,7 @@ robot_env: $(ROBOT_ENV)
 -include $(ROBOT_ENV)
 AUTONOMY_TYPE := $(strip $(AUTONOMY_TYPE))
 
-.PHONY: docker_stop docker_start docker_remove docker_open docker_build build setup or-tools
+.PHONY: docker_stop docker_start docker_remove docker_open docker_build build setup or-tools lightning_setup
 
 # Console scripts for ament_python packages that need their shebang patched
 # to the active python3 interpreter (colcon hardcodes whichever python3 was on
@@ -125,6 +125,29 @@ or-tools:
 	if [ -d $$TMPDIR/bin ]; then cp -a $$TMPDIR/bin $(OR_TOOLS_DIR)/bin; fi && \
 	rm -rf $$TMPDIR $(OR_TOOLS_ARCHIVE) && \
 	echo "=> OR-Tools $$ARCH setup complete."
+
+# Install lightning-lm's build deps (Pangolin from source, plus apt-installable
+# packages). Only needed if `autonomy.slam_backend: lightning` is selected in
+# robot.yaml. arise_slam works without any of this.
+lightning_setup:
+	@echo "=> Installing lightning-lm build deps (apt + Pangolin from source)"
+	@sudo apt-get update && sudo apt-get install -y \
+		libgoogle-glog-dev libgflags-dev libyaml-cpp-dev libopencv-dev \
+		libepoxy-dev libglew-dev ros-humble-pcl-conversions ros-humble-pcl-ros
+	@if pkg-config --exists pangolin 2>/dev/null || \
+	    [ -f /usr/local/lib/cmake/Pangolin/PangolinConfig.cmake ] || \
+	    [ -f /usr/lib/cmake/Pangolin/PangolinConfig.cmake ]; then \
+		echo "=> Pangolin already installed, skipping."; \
+	else \
+		echo "=> Building Pangolin from source..."; \
+		TMP=$$(mktemp -d) && cd $$TMP && \
+		git clone --depth 1 --recurse-submodules https://github.com/stevenlovegrove/Pangolin.git && \
+		cd Pangolin && mkdir build && cd build && \
+		cmake .. -DCMAKE_BUILD_TYPE=Release -DBUILD_PYTHON_INTERFACE=OFF && \
+		make -j$$(nproc) && sudo make install && sudo ldconfig && \
+		cd / && rm -rf $$TMP && \
+		echo "=> Pangolin installed to /usr/local."; \
+	fi
 
 # Docker commands. Host networking + privileged are required for ROS 2 DDS
 # discovery and GPIO access on Jetson; --shm-size bumps /dev/shm so
