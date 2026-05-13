@@ -3,9 +3,10 @@ import os
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, TimerAction
+from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource, FrontendLaunchDescriptionSource
 from launch_ros.actions import Node
-from launch.substitutions import LaunchConfiguration 
+from launch.substitutions import LaunchConfiguration, PythonExpression
 
 def generate_launch_description():
   route_planner_config = LaunchConfiguration('route_planner_config')
@@ -17,6 +18,7 @@ def generate_launch_description():
   vehicleY = LaunchConfiguration('vehicleY')
   checkTerrainConn = LaunchConfiguration('checkTerrainConn')
   map_dir = LaunchConfiguration('map_dir')
+  slam_backend = LaunchConfiguration('slam_backend')
 
   declare_route_planner_config = DeclareLaunchArgument('route_planner_config', default_value='indoor', description='')
   declare_world_name = DeclareLaunchArgument('world_name', default_value='real_world', description='')
@@ -27,6 +29,14 @@ def generate_launch_description():
   declare_vehicleY = DeclareLaunchArgument('vehicleY', default_value='0.0', description='')
   declare_checkTerrainConn = DeclareLaunchArgument('checkTerrainConn', default_value='true', description='')
   declare_map_dir = DeclareLaunchArgument('map_dir', default_value='', description='Path to the map PCD file')
+  declare_slam_backend = DeclareLaunchArgument(
+    'slam_backend',
+    default_value='arise',
+    description='LIO backend: "arise" (arise_slam_mid360) or "lightning" (lightning-lm).'
+  )
+
+  use_arise = IfCondition(PythonExpression(["'", slam_backend, "' == 'arise'"]))
+  use_lightning = IfCondition(PythonExpression(["'", slam_backend, "' == 'lightning'"]))
   
   start_local_planner = IncludeLaunchDescription(
     FrontendLaunchDescriptionSource(os.path.join(
@@ -70,7 +80,18 @@ def generate_launch_description():
     ),
     launch_arguments={
       'map_dir': map_dir,
-    }.items()
+    }.items(),
+    condition=use_arise,
+  )
+
+  start_lightning_lm = IncludeLaunchDescription(
+    PythonLaunchDescriptionSource(os.path.join(
+      get_package_share_directory('lightning'), 'launch', 'lightning_lm.launch.py')
+    ),
+    launch_arguments={
+      'map_dir': map_dir,
+    }.items(),
+    condition=use_lightning,
   )
 
   start_visualization_tools = IncludeLaunchDescription(
@@ -114,12 +135,14 @@ def generate_launch_description():
   ld.add_action(declare_vehicleY)
   ld.add_action(declare_checkTerrainConn)
   ld.add_action(declare_map_dir)
+  ld.add_action(declare_slam_backend)
 
   ld.add_action(start_local_planner)
   ld.add_action(start_terrain_analysis)
   ld.add_action(start_terrain_analysis_ext)
   ld.add_action(start_sensor_scan_generation)
   ld.add_action(start_arise_slam)
+  ld.add_action(start_lightning_lm)
   ld.add_action(start_visualization_tools)
   ld.add_action(start_joy)
   ld.add_action(start_far_planner)

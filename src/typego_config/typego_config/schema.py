@@ -16,6 +16,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 RobotType = Literal['go2', 'kami']
 AutonomyType = Literal['base', 'full']
+SlamBackend = Literal['arise', 'lightning']
 Rmw = Literal[
     'rmw_cyclonedds_cpp',
     'rmw_fastrtps_cpp',
@@ -46,6 +47,13 @@ class AutonomyConfig(BaseModel):
     type: AutonomyType = Field(
         default='base',
         description='"base" = SLAM Toolbox + Nav2; "full" = ARISE + TARE/FAR.',
+    )
+    slam_backend: SlamBackend = Field(
+        default='arise',
+        description=(
+            'LIO backend when type=full. "arise" = arise_slam_mid360 (default). '
+            '"lightning" = vendored lightning-lm. Ignored when type=base.'
+        ),
     )
 
 

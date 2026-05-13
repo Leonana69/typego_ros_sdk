@@ -29,6 +29,7 @@ _DEFAULT_FALLBACKS = {
     'robot_id': '',
     'robot_type': 'go2',
     'autonomy_type': 'base',
+    'slam_backend': 'arise',
     'slam_map_name': 'empty_map',
     'launch_web_gateway': 'true',
     'web_gateway_port': '8080',
@@ -105,6 +106,7 @@ def _load_defaults():
         'robot_id': ('robot', 'id'),
         'robot_type': ('robot', 'type'),
         'autonomy_type': ('autonomy', 'type'),
+        'slam_backend': ('autonomy', 'slam_backend'),
         'slam_map_name': ('map', 'slam_map_name'),
         'launch_web_gateway': ('web_gateway', 'enabled'),
         'web_gateway_port': ('web_gateway', 'port'),
@@ -140,6 +142,12 @@ ARGUMENTS = [
         'autonomy_type',
         default_value=_DEFAULTS['autonomy_type'],
         description='Autonomy type; selects which autonomy type to launch.'
+    ),
+    DeclareLaunchArgument(
+        'slam_backend',
+        default_value=_DEFAULTS['slam_backend'],
+        description='LIO backend for full autonomy: "arise" or "lightning". '
+                    'Ignored when autonomy_type=base.'
     ),
     DeclareLaunchArgument(
         'slam_map_name',
@@ -188,6 +196,7 @@ def generate_launch_description():
         robot_id = context.perform_substitution(LaunchConfiguration('robot_id'))
         robot_type = context.perform_substitution(LaunchConfiguration('robot_type'))
         autonomy_type = context.perform_substitution(LaunchConfiguration('autonomy_type'))
+        slam_backend = context.perform_substitution(LaunchConfiguration('slam_backend'))
         slam_map_name = context.perform_substitution(LaunchConfiguration('slam_map_name'))
         full_mode = context.perform_substitution(LaunchConfiguration('full_mode'))
         launch_web_gateway = context.perform_substitution(
@@ -259,6 +268,7 @@ def generate_launch_description():
                 ),
                 launch_arguments={
                     'map_dir': os.path.join(typego_sdk_pkg, 'resource', f'Map-{slam_map_name}', f'{slam_map_name}.pcd') if slam_map_name != 'empty_map' else '',
+                    'slam_backend': slam_backend,
                 }.items(),
             )
         else:

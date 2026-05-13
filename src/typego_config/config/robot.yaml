@@ -11,6 +11,7 @@ robot:
 
 autonomy:
   type: full         # base | full
+  slam_backend: arise  # arise | lightning  (only used when type=full)
 
 network:
   ros_domain_id: 1
