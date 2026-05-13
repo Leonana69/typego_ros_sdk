@@ -108,9 +108,12 @@ class SlamSystem {
     rclcpp::Subscription<sensor_msgs::msg::PointCloud2>::SharedPtr cloud_sub_ = nullptr;
     rclcpp::Subscription<livox_ros_driver2::msg::CustomMsg>::SharedPtr livox_sub_ = nullptr;
 
-    /// outputs (read from yaml's `outputs:` block; defaults match arise_slam contract)
-    std::string odom_topic_ = "integrated_to_init";
-    std::string registered_cloud_topic_ = "registered_scan";
+    /// outputs (read from yaml's `outputs:` block; defaults match the topics
+    /// the typego autonomy stack actually consumes — terrain_analysis,
+    /// local_planner, sensor_scan_generation et al. read /state_estimation,
+    /// not arise_slam's internal /integrated_to_init).
+    std::string odom_topic_ = "/state_estimation";
+    std::string registered_cloud_topic_ = "/registered_scan";
     std::string world_frame_ = "map";
     std::string sensor_frame_ = "sensor";
     bool publish_tf_ = true;

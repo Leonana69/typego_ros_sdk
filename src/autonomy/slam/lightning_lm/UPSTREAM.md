@@ -23,8 +23,11 @@ first clarifying the license with the upstream author (Gao Xiang,
    the LIO front-end already produces each tick.
 
 3. **`src/core/system/slam.h` / `slam.cc`** — added ROS 2 publishers
-   for `nav_msgs/Odometry` (default topic `integrated_to_init`),
-   `sensor_msgs/PointCloud2` (default `registered_scan`), and a
+   for `nav_msgs/Odometry` (default topic `/state_estimation` — the
+   topic terrain_analysis / local_planner / sensor_scan_generation
+   actually subscribe to; arise_slam's `/integrated_to_init` is an
+   internal topic of the LIO front-end, not what downstream consumes),
+   `sensor_msgs/PointCloud2` (default `/registered_scan`), and a
    `tf2_ros::TransformBroadcaster` for `map → sensor`. Driven by
    `lio_->GetState()` and `lio_->GetScanDownWorld()` after each
    `ProcessLidar()` tick. Topic names and frame ids are read from a new

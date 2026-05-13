@@ -48,10 +48,14 @@ fasterlio:
   proj_kfs: false
 
 # Outputs — read by our patched SlamSystem (see UPSTREAM.md, patch 3).
-# Defaults here match arise_slam_mid360's interface contract.
+# Topic names here match what arise_slam's imu_preintegration publishes
+# (NOT laser_mapping's /integrated_to_init, which is an internal arise topic
+#  that nothing downstream actually subscribes to). The autonomy stack —
+# terrain_analysis, local_planner, sensor_scan_generation, visualization_tools,
+# tare_planner via /state_estimation_at_scan — all read /state_estimation.
 outputs:
-  odom_topic: "integrated_to_init"
-  cloud_topic: "registered_scan"
+  odom_topic: "/state_estimation"
+  cloud_topic: "/registered_scan"
   world_frame: "map"
   sensor_frame: "sensor"
   publish_tf: true
