@@ -22,6 +22,10 @@ endif ()
 
 # Printf version info
 # include(cmake/version.cmake)
+# Hardcoded — upstream relies on cmake/version.cmake which isn't shipped here.
+# Empty version makes modern setuptools (>= 68, e.g. in conda envs) reject the
+# generated ament_cmake_python setup.py.
+set(LIVOX_ROS_DRIVER2_VERSION "1.0.0")
 project(${PROJECT_NAME} VERSION ${LIVOX_ROS_DRIVER2_VERSION} LANGUAGES CXX)
 message(STATUS "${PROJECT_NAME} version: ${LIVOX_ROS_DRIVER2_VERSION}")
 

@@ -31,7 +31,9 @@ first clarifying the license with the upstream author (Gao Xiang,
    optional `outputs:` block in the YAML config; defaults match the
    `arise_slam_mid360` interface contract so the rest of the autonomy
    stack (terrain_analysis, local_planner, far/tare_planner) does not
-   need to be aware of the backend switch.
+   need to be aware of the backend switch. Also: skip creating
+   `cloud_sub_` / `livox_sub_` when their YAML topic name is empty
+   (rclcpp rejects empty topic strings with `InvalidTopicNameError`).
 
 4. **`doc/`** — removed (162 MB of demo GIFs/images, none referenced by
    the build).
@@ -44,5 +46,13 @@ first clarifying the license with the upstream author (Gao Xiang,
    files exist; we wrap the `run_slam_online` executable so the parent
    `system_real_robot.launch.py` can include it the same way it includes
    `arise_slam.launch.py`).
+
+7. **`thirdparty/livox_ros_driver/CMakeLists.txt`** — set
+   `LIVOX_ROS_DRIVER2_VERSION` to `1.0.0` before the `project(...)` call.
+   Upstream references `${LIVOX_ROS_DRIVER2_VERSION}` but never defines
+   it (the `include(cmake/version.cmake)` line is commented out), so
+   ament_cmake_python emits `setup.py` with `version=''`. Modern
+   setuptools (≥ 68, common in conda envs) rejects empty versions with
+   `packaging.version.InvalidVersion`.
 
 When pulling new upstream commits, re-apply patches 1–3.

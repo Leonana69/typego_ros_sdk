@@ -115,15 +115,22 @@ bool SlamSystem::Init(const std::string& yaml_path) {
                 ProcessIMU(imu);
             });
 
-        cloud_sub_ = node_->create_subscription<sensor_msgs::msg::PointCloud2>(
-            cloud_topic_, qos, [this](sensor_msgs::msg::PointCloud2::SharedPtr cloud) {
-                Timer::Evaluate([&]() { ProcessLidar(cloud); }, "Proc Lidar", true);
-            });
+        // Empty topic name = disable that path. The workspace's go2/kami driver
+        // only publishes /livox/lidar (PointCloud2); CustomMsg is on a different
+        // namespace (typego_interface), so livox_lidar_topic stays empty here.
+        if (!cloud_topic_.empty()) {
+            cloud_sub_ = node_->create_subscription<sensor_msgs::msg::PointCloud2>(
+                cloud_topic_, qos, [this](sensor_msgs::msg::PointCloud2::SharedPtr cloud) {
+                    Timer::Evaluate([&]() { ProcessLidar(cloud); }, "Proc Lidar", true);
+                });
+        }
 
-        livox_sub_ = node_->create_subscription<livox_ros_driver2::msg::CustomMsg>(
-            livox_topic_, qos, [this](livox_ros_driver2::msg::CustomMsg ::SharedPtr cloud) {
-                Timer::Evaluate([&]() { ProcessLidar(cloud); }, "Proc Lidar", true);
-            });
+        if (!livox_topic_.empty()) {
+            livox_sub_ = node_->create_subscription<livox_ros_driver2::msg::CustomMsg>(
+                livox_topic_, qos, [this](livox_ros_driver2::msg::CustomMsg ::SharedPtr cloud) {
+                    Timer::Evaluate([&]() { ProcessLidar(cloud); }, "Proc Lidar", true);
+                });
+        }
 
         savemap_service_ = node_->create_service<SaveMapService>(
             "lightning/save_map", [this](const SaveMapService::Request::SharedPtr& req,
