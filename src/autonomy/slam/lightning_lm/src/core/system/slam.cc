@@ -148,12 +148,9 @@ bool SlamSystem::Init(const std::string& yaml_path) {
     return true;
 }
 
-void SlamSystem::PublishLioState() {
-    if (!odom_pub_ || !lio_) return;
-    auto state = lio_->GetState();
-    if (!state.pose_is_ok_) return;
+void SlamSystem::PublishStateInternal(const NavState &state) {
+    if (!odom_pub_) return;
 
-    // Build a single header (stamp from LIO state, frame = world).
     builtin_interfaces::msg::Time stamp;
     const double t = state.timestamp_;
     stamp.sec = static_cast<int32_t>(t);
@@ -188,6 +185,20 @@ void SlamSystem::PublishLioState() {
         tf.transform.rotation = odom.pose.pose.orientation;
         tf_broadcaster_->sendTransform(tf);
     }
+}
+
+void SlamSystem::PublishImuState() {
+    if (!odom_pub_ || !lio_) return;
+    auto state = lio_->GetIMUState();
+    if (!state.pose_is_ok_) return;
+    PublishStateInternal(state);
+}
+
+void SlamSystem::PublishLioState() {
+    if (!odom_pub_ || !lio_) return;
+    auto state = lio_->GetState();
+    if (!state.pose_is_ok_) return;
+    PublishStateInternal(state);
 
     if (cloud_pub_) {
         // Full undistorted scan in world frame — matches arise_slam's
@@ -197,6 +208,10 @@ void SlamSystem::PublishLioState() {
         // through walls under slam_backend=lightning.
         auto cloud_world = lio_->GetScanUndistWorld();
         if (cloud_world && !cloud_world->empty()) {
+            builtin_interfaces::msg::Time stamp;
+            const double t = state.timestamp_;
+            stamp.sec = static_cast<int32_t>(t);
+            stamp.nanosec = static_cast<uint32_t>((t - stamp.sec) * 1e9);
             sensor_msgs::msg::PointCloud2 ros_cloud;
             pcl::toROSMsg(*cloud_world, ros_cloud);
             ros_cloud.header.stamp = stamp;
@@ -319,6 +334,7 @@ void SlamSystem::ProcessIMU(const lightning::IMUPtr& imu) {
         return;
     }
     lio_->ProcessIMU(imu);
+    PublishImuState();
 }
 
 void SlamSystem::ProcessLidar(const sensor_msgs::msg::PointCloud2::SharedPtr& cloud) {

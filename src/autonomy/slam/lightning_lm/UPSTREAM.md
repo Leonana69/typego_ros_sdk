@@ -33,13 +33,19 @@ first clarifying the license with the upstream author (Gao Xiang,
    actually subscribe to; arise_slam's `/integrated_to_init` is an
    internal topic of the LIO front-end, not what downstream consumes),
    `sensor_msgs/PointCloud2` (default `/registered_scan`), and a
-   `tf2_ros::TransformBroadcaster` for `map → sensor`. Driven by
-   `lio_->GetState()` and `lio_->GetScanDownWorld()` after each
-   `ProcessLidar()` tick. Topic names and frame ids are read from a new
-   optional `outputs:` block in the YAML config; defaults match the
-   `arise_slam_mid360` interface contract so the rest of the autonomy
-   stack (terrain_analysis, local_planner, far/tare_planner) does not
-   need to be aware of the backend switch. Also: skip creating
+   `tf2_ros::TransformBroadcaster` for `map → sensor`. Topic names
+   and frame ids are read from a new optional `outputs:` block in the
+   YAML config; defaults match what the autonomy stack
+   (terrain_analysis, local_planner, far/tare_planner) actually
+   subscribes to, so the rest of the stack does not need to be aware
+   of the backend switch. Published from two callbacks: `ProcessLidar`
+   (full: odom + TF + dense scan, ~10 Hz, via `lio_->GetState()` and
+   `lio_->GetScanUndistWorld()`) and `ProcessIMU` (light: odom + TF
+   only at IMU rate, via `lio_->GetIMUState()` from lightning's
+   existing IMU-rate ESKF). The IMU-rate publish mirrors arise_slam's
+   `imu_preintegration` node — without it, local_planner sees a stale
+   pose between lidar ticks and the robot can drive past obstacles
+   before reacting. Also: skip creating
    `cloud_sub_` / `livox_sub_` when their YAML topic name is empty
    (rclcpp rejects empty topic strings with `InvalidTopicNameError`).
 

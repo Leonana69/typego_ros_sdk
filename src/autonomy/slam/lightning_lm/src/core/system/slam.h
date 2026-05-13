@@ -18,6 +18,7 @@
 #include "common/eigen_types.h"
 #include "common/imu.h"
 #include "common/keyframe.h"
+#include "common/nav_state.h"
 
 namespace lightning {
 
@@ -80,9 +81,19 @@ class SlamSystem {
     /// ros端保存地图的实现
     void SaveMap(const SaveMapService::Request::SharedPtr request, SaveMapService::Response::SharedPtr response);
 
-    /// publish latest LIO pose + registered scan to fixed downstream contract
-    /// (typego autonomy stack expects integrated_to_init + registered_scan + map->sensor TF)
+    /// Publish the latest LIO state + registered scan. Called from the
+    /// lidar callback (~10 Hz).
     void PublishLioState();
+
+    /// Publish the IMU-rate state (odom + TF only, no cloud). Called from
+    /// the IMU callback (~200 Hz for MID360) so /state_estimation matches
+    /// the rate arise_slam's imu_preintegration node achieves. Without this
+    /// the local planner sees a stale pose between lidar ticks and the
+    /// robot can drive past obstacles before reacting.
+    void PublishImuState();
+
+    /// Shared core that fills + publishes odom and (optionally) TF.
+    void PublishStateInternal(const NavState &state);
 
     Options options_;
     std::atomic_bool running_ = false;
