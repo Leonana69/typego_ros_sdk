@@ -98,6 +98,8 @@ bool SlamSystem::Init(const std::string& yaml_path) {
             if (out["world_frame"]) world_frame_ = out["world_frame"].as<std::string>();
             if (out["sensor_frame"]) sensor_frame_ = out["sensor_frame"].as<std::string>();
             if (out["publish_tf"]) publish_tf_ = out["publish_tf"].as<bool>();
+            if (out["publish_at_imu_rate"])
+                publish_at_imu_rate_ = out["publish_at_imu_rate"].as<bool>();
         }
 
         rclcpp::QoS qos(10);
@@ -337,7 +339,9 @@ void SlamSystem::ProcessIMU(const lightning::IMUPtr& imu) {
         return;
     }
     lio_->ProcessIMU(imu);
-    PublishImuState();
+    if (publish_at_imu_rate_) {
+        PublishImuState();
+    }
 }
 
 void SlamSystem::ProcessLidar(const sensor_msgs::msg::PointCloud2::SharedPtr& cloud) {

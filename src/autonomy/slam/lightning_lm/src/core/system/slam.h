@@ -129,6 +129,14 @@ class SlamSystem {
     std::string sensor_frame_ = "sensor";
     bool publish_tf_ = true;
 
+    /// If true, also publish odom + TF on each IMU sample (~IMU rate). Off
+    /// gives a smoother pose because lightning's ESKF snaps kf_imu_ to kf_
+    /// after each lidar correction (laser_mapping.cc:311); the snap shows up
+    /// as base_link jitter under fast publishing. On gives ~5× the publish
+    /// rate which can help the local planner react faster, at the cost of
+    /// that snap being visible.
+    bool publish_at_imu_rate_ = true;
+
     rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr odom_pub_ = nullptr;
     rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr cloud_pub_ = nullptr;
     std::shared_ptr<tf2_ros::TransformBroadcaster> tf_broadcaster_ = nullptr;
