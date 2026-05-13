@@ -75,6 +75,17 @@ first clarifying the license with the upstream author (Gao Xiang,
    truncate argc at the first `--ros-args` for gflags, then pass the
    original (full) argv to `rclcpp::init` so node remapping still works.
 
+10. **`src/core/lio/pointcloud_preprocess.{h,cc}`** — add a
+    `LivoxPCD2Handler` and wire it into the PointCloud2 `Process()`
+    switch under `LidarType::AVIA`. Upstream's PointCloud2 path only
+    knows Ouster/Velodyne/RoboSense; for Livox it required the
+    `CustomMsg` overload, which forced us to run a Python bridge that
+    became a 10 Hz → 7 Hz bottleneck. Consuming PointCloud2 directly
+    skips that. No per-point timestamp is exposed in the workspace's
+    Livox PointCloud2 publication, so this handler drops in-frame
+    undistortion; at typical quadruped speeds (< 1 m/s, 10 Hz frame
+    rate) the distortion is sub-cm and well below other error sources.
+
 9. **`scripts/typego_to_livox_bridge.py`** — added (helper node).
    Lightning's PointCloud2 preprocessor only handles Ouster / Velodyne /
    RoboSense; for Livox it requires `livox_ros_driver2::msg::CustomMsg`.

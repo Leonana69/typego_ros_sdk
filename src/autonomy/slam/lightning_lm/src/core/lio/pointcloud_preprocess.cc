@@ -25,6 +25,14 @@ void PointCloudPreprocess::Process(const sensor_msgs::msg::PointCloud2 ::SharedP
             RoboSenseHandler(msg);
             break;
 
+        case LidarType::AVIA:
+            // Livox CustomMsg is normally consumed by the other Process()
+            // overload, but the typego workspace publishes the same data
+            // as plain PointCloud2 on /livox/lidar. Accept it here so we
+            // don't need a typego_interface->livox_ros_driver2 bridge.
+            LivoxPCD2Handler(msg);
+            break;
+
         default:
             LOG(ERROR) << "Error LiDAR Type";
             break;
@@ -89,6 +97,43 @@ void PointCloudPreprocess::Process(const livox_ros_driver2::msg::CustomMsg::Shar
     cloud_out_.height = 1;
     cloud_out_.is_dense = false;
     *pcl_out = cloud_out_;
+}
+
+void PointCloudPreprocess::LivoxPCD2Handler(const sensor_msgs::msg::PointCloud2::SharedPtr &msg) {
+    cloud_out_.clear();
+    cloud_full_.clear();
+
+    // Livox MID360 PointCloud2 from typego workspace has fields x, y, z,
+    // intensity. No per-point timestamp is exposed (the CustomMsg path
+    // does have offset_time, but go2_sdk's PointCloud2 publishes a flat
+    // frame). Without it, we set time=0 — there is no in-frame undistortion,
+    // but at 10 Hz / typical quadruped speeds (< 1 m/s) the distortion is
+    // sub-cm and not what's hurting obstacle avoidance.
+    pcl::PointCloud<pcl::PointXYZI> pl_orig;
+    pcl::fromROSMsg(*msg, pl_orig);
+    const int plsize = pl_orig.size();
+    cloud_out_.reserve(plsize);
+
+    for (int i = 0; i < plsize; i++) {
+        if (i % point_filter_num_ != 0) continue;
+
+        const auto &p = pl_orig.points[i];
+        const double range = p.x * p.x + p.y * p.y + p.z * p.z;
+        if (range < (blind_ * blind_)) continue;
+        if (p.z < height_min_ || p.z > height_max_) continue;
+
+        PointType added_pt;
+        added_pt.x = p.x;
+        added_pt.y = p.y;
+        added_pt.z = p.z;
+        added_pt.intensity = p.intensity;
+        added_pt.time = 0.0f;
+        cloud_out_.points.push_back(added_pt);
+    }
+
+    cloud_out_.width = cloud_out_.size();
+    cloud_out_.height = 1;
+    cloud_out_.is_dense = false;
 }
 
 void PointCloudPreprocess::Oust64Handler(const sensor_msgs::msg::PointCloud2::SharedPtr &msg) {
