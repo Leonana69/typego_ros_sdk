@@ -102,6 +102,31 @@ class LaserMapping {
 
     CloudPtr GetScanUndist() const { return scan_undistort_; }
     CloudPtr GetScanDownWorld() const { return scan_down_world_; }
+
+    /// Full undistorted scan transformed into the world frame. This is the
+    /// dense cloud terrain_analysis and friends need; scan_down_world_ is
+    /// downsampled for ICP and is too sparse for obstacle detection.
+    CloudPtr GetScanUndistWorld() const {
+        CloudPtr out(new PointCloudType);
+        if (!scan_undistort_) return out;
+        out->reserve(scan_undistort_->size());
+        for (const auto &pi : scan_undistort_->points) {
+            Vec3d p_global(
+                state_point_.rot_ *
+                    (offset_R_lidar_fixed_ * pi.getVector3fMap().cast<double>() + offset_t_lidar_fixed_) +
+                state_point_.pos_);
+            PointType po;
+            po.x = static_cast<float>(p_global.x());
+            po.y = static_cast<float>(p_global.y());
+            po.z = static_cast<float>(p_global.z());
+            po.intensity = pi.intensity;
+            out->points.push_back(po);
+        }
+        out->width = out->points.size();
+        out->height = 1;
+        out->is_dense = false;
+        return out;
+    }
     CloudPtr GetProjCloud();
 
     /// 获取最新的点云

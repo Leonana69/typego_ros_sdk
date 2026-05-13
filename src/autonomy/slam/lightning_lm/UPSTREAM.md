@@ -18,9 +18,14 @@ first clarifying the license with the upstream author (Gao Xiang,
    inherits from an internal build that are never referenced in source:
    `scrubber_common`, `agibot_robot`.
 
-2. **`src/core/lio/laser_mapping.h`** — added a public getter
-   `GetScanDownWorld()` exposing the world-frame downsampled scan that
-   the LIO front-end already produces each tick.
+2. **`src/core/lio/laser_mapping.h`** — added two public getters:
+   `GetScanDownWorld()` exposes the world-frame downsampled scan the
+   LIO front-end already produces each tick (used for debugging /
+   visualisation), and `GetScanUndistWorld()` returns the full
+   undistorted scan transformed into the world frame (this is what gets
+   published on `/registered_scan` — it matches arise_slam's
+   `laserCloudFullRes` density so terrain_analysis sees the same
+   obstacle data under either backend).
 
 3. **`src/core/system/slam.h` / `slam.cc`** — added ROS 2 publishers
    for `nav_msgs/Odometry` (default topic `/state_estimation` — the

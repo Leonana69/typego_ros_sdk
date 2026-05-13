@@ -190,7 +190,12 @@ void SlamSystem::PublishLioState() {
     }
 
     if (cloud_pub_) {
-        auto cloud_world = lio_->GetScanDownWorld();
+        // Full undistorted scan in world frame — matches arise_slam's
+        // laserCloudFullRes -> /registered_scan. The downsampled
+        // scan_down_world_ is too sparse for terrain_analysis to find
+        // obstacles, which let local_planner's "yellow paths" point straight
+        // through walls under slam_backend=lightning.
+        auto cloud_world = lio_->GetScanUndistWorld();
         if (cloud_world && !cloud_world->empty()) {
             sensor_msgs::msg::PointCloud2 ros_cloud;
             pcl::toROSMsg(*cloud_world, ros_cloud);
