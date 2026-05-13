@@ -21,7 +21,9 @@ fasterlio:
   blind: 0.1
   time_scale: 1e-3
   skip_lidar_num: 0
-  point_filter_num: 4
+  # Keep every point so /registered_scan density matches arise_slam.
+  # The voxel filter (filter_size_scan) still downsamples internally for ICP.
+  point_filter_num: 1
   max_iteration: 4
   filter_size_scan: 0.5
   filter_size_map: 0.5

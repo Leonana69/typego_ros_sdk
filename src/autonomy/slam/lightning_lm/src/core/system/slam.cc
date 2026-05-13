@@ -137,7 +137,10 @@ bool SlamSystem::Init(const std::string& yaml_path) {
                                          SaveMapService::Response::SharedPtr res) { SaveMap(req, res); });
 
         odom_pub_ = node_->create_publisher<nav_msgs::msg::Odometry>(odom_topic_, qos);
-        cloud_pub_ = node_->create_publisher<sensor_msgs::msg::PointCloud2>(registered_cloud_topic_, qos);
+        // Match arise_slam: registered_scan goes out best-effort so the reliable-
+        // protocol round-trip doesn't add latency on a high-volume sensor stream.
+        cloud_pub_ = node_->create_publisher<sensor_msgs::msg::PointCloud2>(
+            registered_cloud_topic_, rclcpp::SensorDataQoS());
         if (publish_tf_) {
             tf_broadcaster_ = std::make_shared<tf2_ros::TransformBroadcaster>(node_);
         }
