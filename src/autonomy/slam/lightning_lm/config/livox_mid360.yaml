@@ -143,10 +143,16 @@ pgo:
   rtk_outlier_th: 1.0
   smooth_factor: 0.01
 roi:
+  # Upstream defaults (height_min: 0.5, range_min: 3.0) are tuned for a car
+  # mounted with the lidar high on the roof. For a quadruped indoors, the
+  # ground is ~0.4 m *below* the lidar, so height_min: 0.5 drops the entire
+  # floor and low obstacles, and range_min: 3.0 blinds the robot in close
+  # quarters. Loosen both. blind in the fasterlio block (0.1 m) still rejects
+  # self-points.
   height_max: 10.0
-  height_min: 0.5
+  height_min: -2.0
   range_max: 70
-  range_min: 3.0
+  range_min: 0.1
 ui:
   car_length: 2.0
   car_width: 1.6
