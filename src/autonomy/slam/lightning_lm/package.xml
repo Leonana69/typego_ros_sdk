@@ -24,7 +24,9 @@
     <depend>pcl_ros</depend>
     <depend>message_filters</depend>
     <depend>visualization_msgs</depend>
-    
+    <exec_depend>rclpy</exec_depend>
+    <exec_depend>typego_interface</exec_depend>
+
     <member_of_group>rosidl_interface_packages</member_of_group>
 
     <test_depend>ament_lint_auto</test_depend>

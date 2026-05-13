@@ -57,6 +57,19 @@ def generate_launch_description():
         arguments=["-config", config_file],
     )
 
+    # Bridge typego_interface/CustomMsg -> livox_ros_driver2/CustomMsg so
+    # lightning's CustomMsg subscriber can consume the workspace's Livox driver.
+    custom_msg_bridge = Node(
+        package="lightning",
+        executable="typego_to_livox_bridge.py",
+        name="lightning_livox_bridge",
+        output="screen",
+        arguments=[
+            "--input", "/livox/lidar_custom",
+            "--output", "/lightning/livox_custom",
+        ],
+    )
+
     return LaunchDescription([
         declare_config,
         declare_map_dir,
@@ -65,5 +78,6 @@ def generate_launch_description():
         declare_world_frame_rot,
         declare_sensor_frame,
         declare_sensor_frame_rot,
+        custom_msg_bridge,
         run_slam,
     ])

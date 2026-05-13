@@ -61,5 +61,16 @@ first clarifying the license with the upstream author (Gao Xiang,
    truncate argc at the first `--ros-args` for gflags, then pass the
    original (full) argv to `rclcpp::init` so node remapping still works.
 
+9. **`scripts/typego_to_livox_bridge.py`** — added (helper node).
+   Lightning's PointCloud2 preprocessor only handles Ouster / Velodyne /
+   RoboSense; for Livox it requires `livox_ros_driver2::msg::CustomMsg`.
+   The go2 / kami driver publishes Livox CustomMsg under the
+   `typego_interface` namespace, and DDS treats the two messages as
+   distinct types despite field-identical layouts. This Python node
+   subscribes to `typego_interface/CustomMsg` and republishes the same
+   payload as `livox_ros_driver2/CustomMsg`. Installed via
+   `install(PROGRAMS ...)` in the lightning CMakeLists, started from
+   `launch/lightning_lm.launch.py`.
+
 When pulling new upstream commits, re-apply patches 1–3 (and 8 if
 `run_slam_online.cc` changes upstream).

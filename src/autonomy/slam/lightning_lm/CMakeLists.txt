@@ -61,6 +61,12 @@ install(DIRECTORY config launch
         DESTINATION share/${PROJECT_NAME}/
 )
 
+# Python helper node: bridges typego_interface CustomMsg -> livox_ros_driver2
+# CustomMsg so lightning-lm can consume the workspace's Livox driver output.
+install(PROGRAMS scripts/typego_to_livox_bridge.py
+        DESTINATION lib/${PROJECT_NAME}/
+)
+
 add_subdirectory(thirdparty/livox_ros_driver)
 
 add_subdirectory(src)

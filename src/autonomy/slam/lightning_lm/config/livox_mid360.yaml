@@ -5,11 +5,13 @@
 
 common:
   dataset: "typego"
-  # Generic PointCloud2 path. The typego workspace publishes Livox CustomMsg as
-  # typego_interface/CustomMsg (not livox_ros_driver2/CustomMsg), so consuming
-  # the PointCloud2 stream avoids needing the upstream livox driver entirely.
-  lidar_topic: "/livox/lidar"
-  livox_lidar_topic: ""                # disabled — see comment above
+  # lightning's generic PointCloud2 handler only knows Ouster/Velodyne/RoboSense
+  # (no Livox PointCloud2 case), so we consume the CustomMsg path instead.
+  # The workspace driver publishes typego_interface/CustomMsg on /livox/lidar_custom;
+  # the typego_to_livox_bridge.py helper republishes it as livox_ros_driver2/CustomMsg
+  # on /lightning/livox_custom, which lightning subscribes to here.
+  lidar_topic: ""
+  livox_lidar_topic: "/lightning/livox_custom"
   imu_topic: "/livox/imu"
 
 # fasterlio front-end
