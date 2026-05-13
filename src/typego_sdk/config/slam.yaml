@@ -12,10 +12,17 @@ slam_toolbox:
     minimum_time_interval: 0.5
 
     # Allow scans to be processed even when stationary
-    # (critical for initial pose convergence and yaw drift correction)
+    # (critical for initial pose convergence and yaw drift correction).
+    # Safe to keep at 0 because localization_slam_toolbox_node uses a
+    # bounded LIFO buffer instead of an ever-growing pose graph.
     minimum_travel_distance: 0.0
     minimum_travel_heading: 0.0
-    map_update_interval: 0.5
+    map_update_interval: 5.0
+
+    # Rolling-buffer localization (localization_slam_toolbox_node only;
+    # ignored by async_slam_toolbox_node in mapping mode).
+    stack_size_to_use: 40
+    localization_pose_search_distance: 2.0
 
     # Scan matching
     use_scan_matching: true

@@ -115,7 +115,7 @@ def generate_launch_description():
             nodes.append(
                 Node(
                     package="slam_toolbox",
-                    executable="async_slam_toolbox_node",
+                    executable="localization_slam_toolbox_node",
                     namespace=ns,      # only topics are namespaced
                     name="slam_toolbox",
                     output="screen",
