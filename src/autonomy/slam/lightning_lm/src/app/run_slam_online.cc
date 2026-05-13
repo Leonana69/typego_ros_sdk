@@ -17,7 +17,19 @@ int main(int argc, char** argv) {
     google::InitGoogleLogging(argv[0]);
     FLAGS_colorlogtostderr = true;
     FLAGS_stderrthreshold = google::INFO;
-    google::ParseCommandLineFlags(&argc, &argv, true);
+
+    // ros2 launch always appends "--ros-args ..." to argv. gflags rejects
+    // unknown flags, so split argv: gflags sees everything before --ros-args,
+    // rclcpp::init sees the original.
+    int gflags_argc = argc;
+    for (int i = 1; i < argc; ++i) {
+        if (std::string(argv[i]) == "--ros-args") {
+            gflags_argc = i;
+            break;
+        }
+    }
+    char** gflags_argv = argv;
+    google::ParseCommandLineFlags(&gflags_argc, &gflags_argv, false);
 
     using namespace lightning;
 

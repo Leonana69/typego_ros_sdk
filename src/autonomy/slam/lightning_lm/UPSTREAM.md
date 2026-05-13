@@ -55,4 +55,11 @@ first clarifying the license with the upstream author (Gao Xiang,
    setuptools (≥ 68, common in conda envs) rejects empty versions with
    `packaging.version.InvalidVersion`.
 
-When pulling new upstream commits, re-apply patches 1–3.
+8. **`src/app/run_slam_online.cc`** — split argv before handing it to
+   gflags. `ros2 launch` always appends `--ros-args ...` after our own
+   args; gflags rejects unknown flags by default and aborts. We
+   truncate argc at the first `--ros-args` for gflags, then pass the
+   original (full) argv to `rclcpp::init` so node remapping still works.
+
+When pulling new upstream commits, re-apply patches 1–3 (and 8 if
+`run_slam_online.cc` changes upstream).
