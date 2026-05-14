@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "TypeGo ROS 2 SDK — Python runtime dependencies for the web gateway and config tooling."
 readme = "README.md"
 requires-python = ">=3.10,<3.11"
-license = { text = "Apache-2.0" }
+license = { text = "MIT" }
 authors = [{ name = "guojun", email = "chengj0803@gmail.com" }]
 
 # Runtime deps installed via pip in docker/Dockerfile, plus setuptools

@@ -17,12 +17,16 @@ typego_bringup.launch.py
 │   └── Nav2 (MPPI controller)
 │
 └── Full Autonomy (autonomy_type:=full)
-    ├── ARISE SLAM (LOAM-based, Livox Mid360)
+    ├── LIO/SLAM (slam_backend:=arise | lightning)
+    │   ├── ARISE SLAM (LOAM-based, Livox Mid360)
+    │   └── Lightning-LM (FasterLIO + loop closure, Livox Mid360)
     ├── Terrain Analysis
     ├── Local Planner
     ├── FAR Route Planner / TARE Exploration Planner
     └── Vehicle Simulator (orchestrator)
 ```
+
+Both LIO backends honour the same downstream contract — odometry on `/state_estimation`, dense undistorted cloud on `/registered_scan`, `map → sensor` TF — so terrain analysis, local planner, FAR, and TARE see identical inputs regardless of which backend is selected.
 
 ## Standard Interfaces
 
@@ -52,7 +56,8 @@ All robot SDKs expose these topics. If `ROBOT_ID` is set, topics are namespaced 
 
 | Package | Description |
 |---------|-------------|
-| `arise_slam_mid360` | LOAM-based SLAM for Livox Mid360 lidar |
+| `arise_slam_mid360` | LOAM-based SLAM for Livox Mid360 lidar (default `slam_backend`) |
+| `lightning` (lightning-lm) | FasterLIO + real-time loop closure for Livox Mid360; switchable via `slam_backend:=lightning`. Consumes `/livox/lidar` + `/livox/imu` directly and publishes `/state_estimation` + `/registered_scan` to match ARISE's contract. |
 | `terrain_analysis` / `terrain_analysis_ext` | Ground/slope/traversability classification |
 | `local_planner` | Trajectory selection with obstacle avoidance |
 | `far_planner` | FAR dynamic route planner (indoor/outdoor configs) |
@@ -83,6 +88,7 @@ robot:
 
 autonomy:
   type: base          # base | full
+  slam_backend: arise # arise | lightning  (only used when type=full)
 
 network:
   ros_domain_id: 1
@@ -181,6 +187,7 @@ make launch
 # One-off overrides
 make launch ARGS="slam_map_name:=empty_map"
 make launch ARGS="autonomy_type:=full full_mode:=2"    # full + TARE
+make launch ARGS="autonomy_type:=full slam_backend:=lightning"  # swap ARISE → lightning-lm
 ```
 
 Or call `ros2 launch` directly (remember to source the env first):
