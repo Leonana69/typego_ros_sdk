@@ -238,10 +238,21 @@ save_map: $(ROBOT_ENV)
 	@set -a; source $(ROBOT_ENV); set +a; \
 	 python3 $(CURDIR)/scripts/save_map.py $(FILE)
 
-# Reset iox
+# Reset iox: stop any running RouDi daemon, then clear its lock files and
+# shared memory so the next `iox-roudi` starts clean. Without killing RouDi
+# and removing the locks first, a new instance aborts with
+# ICEORYX_ROUDI_MEMORY_MANAGER__ROUDI_STILL_RUNNING.
+.PHONY: iox_reset
 iox_reset:
-	sudo rm -rf /dev/shm/iceoryx*
-	sudo rm -rf /dev/shm/iox_*
+	@echo "=> Stopping RouDi..."
+	@pkill -x iox-roudi 2>/dev/null || true
+	@sleep 1
+	@pkill -9 -x iox-roudi 2>/dev/null || true
+	@echo "=> Clearing iceoryx lock files and shared memory..."
+	@rm -f /tmp/roudi.lock /tmp/iox-unique-roudi.lock
+	@rm -rf /tmp/roudi
+	@rm -rf /dev/shm/iceoryx* /dev/shm/iox_*
+	@echo "=> Done. Start a fresh daemon with: iox-roudi"
 
 # Kill stray typego_ros_sdk processes. When `ros2 launch` is killed, its node
 # children get reparented to init and keep running; this target sweeps them
@@ -252,10 +263,12 @@ iox_reset:
 kill:
 	@echo "=> Killing typego_ros_sdk processes..."
 	@pkill -f 'typego_bringup\.launch\.py' 2>/dev/null || true
-	@pkill -f '$(CURDIR)/install/'         2>/dev/null || true
+	@pkill -f '$(CURDIR)/[i]nstall/'       2>/dev/null || true
 	@pkill -f '$(CURDIR)/scripts/rviz_launch\.py' 2>/dev/null || true
+	@pkill -f '[l]aunch_params_'           2>/dev/null || true
 	@sleep 1
 	@pkill -9 -f 'typego_bringup\.launch\.py' 2>/dev/null || true
-	@pkill -9 -f '$(CURDIR)/install/'         2>/dev/null || true
+	@pkill -9 -f '$(CURDIR)/[i]nstall/'       2>/dev/null || true
 	@pkill -9 -f '$(CURDIR)/scripts/rviz_launch\.py' 2>/dev/null || true
+	@pkill -9 -f '[l]aunch_params_'           2>/dev/null || true
 	@echo "=> Done."
