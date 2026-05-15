@@ -242,3 +242,20 @@ save_map: $(ROBOT_ENV)
 iox_reset:
 	sudo rm -rf /dev/shm/iceoryx*
 	sudo rm -rf /dev/shm/iox_*
+
+# Kill stray typego_ros_sdk processes. When `ros2 launch` is killed, its node
+# children get reparented to init and keep running; this target sweeps them
+# up. Matches: the launch process, anything spawned from this workspace's
+# install/ tree (covers slam_toolbox too — its --params-file points there),
+# and the rviz launcher script.
+.PHONY: kill
+kill:
+	@echo "=> Killing typego_ros_sdk processes..."
+	@pkill -f 'typego_bringup\.launch\.py' 2>/dev/null || true
+	@pkill -f '$(CURDIR)/install/'         2>/dev/null || true
+	@pkill -f '$(CURDIR)/scripts/rviz_launch\.py' 2>/dev/null || true
+	@sleep 1
+	@pkill -9 -f 'typego_bringup\.launch\.py' 2>/dev/null || true
+	@pkill -9 -f '$(CURDIR)/install/'         2>/dev/null || true
+	@pkill -9 -f '$(CURDIR)/scripts/rviz_launch\.py' 2>/dev/null || true
+	@echo "=> Done."
