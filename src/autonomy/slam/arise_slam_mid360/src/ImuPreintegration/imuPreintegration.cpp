@@ -1393,12 +1393,16 @@ namespace arise_slam {
         float best_dist = std::numeric_limits<float>::max();
         {
             std::lock_guard<std::mutex> lock(lc_mutex_);
-            for (int idx : indices) {
-                if (idx >= (int)keyframe_history_.size()) continue;
+            // radiusSearch fills indices[] and distances[] in lockstep, so the
+            // distance for candidate indices[i] is distances[i]. Iterate by
+            // position to keep the two paired.
+            for (size_t i = 0; i < indices.size(); ++i) {
+                int idx = indices[i];
+                if (idx < 0 || idx >= (int)keyframe_history_.size()) continue;
                 double time_diff = std::abs(current_kf.timestamp - keyframe_history_[idx].timestamp);
                 if (time_diff < lc_time_diff_) continue;  // too recent, skip
-                if (distances[&idx - &indices[0]] < best_dist) {
-                    best_dist = distances[&idx - &indices[0]];
+                if (distances[i] < best_dist) {
+                    best_dist = distances[i];
                     best_candidate = idx;
                 }
             }
