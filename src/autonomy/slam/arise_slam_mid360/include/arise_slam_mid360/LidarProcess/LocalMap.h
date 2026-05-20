@@ -5,6 +5,7 @@
 #ifndef LOCALMAPOCTREE_H
 #define LOCALMAPOCTREE_H
 
+#include <algorithm>
 #include <cmath>
 #include <memory>
 #include <thread>
@@ -400,6 +401,20 @@ public:
         if(map_[cubeInd].pkdtree_edge_from_block_ == nullptr)
             return false;
 
+        // Shortcut to keypoints cloud
+        const PointCloud &previousEdgePoints = *(map_[cubeInd].pedge_pc_);
+
+        // knnNeighbors only fills as many output slots as there are points in
+        // the block's octree. Requesting more neighbors than the block holds
+        // leaves the tail of nearestIndex at (size_t)-1, which is then used to
+        // index previousEdgePoints below -> out-of-bounds read / SIGSEGV.
+        // Clamp the request to the block size, and bail out if there are too
+        // few points to fit a line (the line model needs P1 plus >=1 other).
+        if(static_cast<int>(previousEdgePoints.size()) < 2)
+            return false;
+        num_nearest_search =
+                std::min(num_nearest_search, static_cast<int>(previousEdgePoints.size()));
+
         // Get nearest neighbors of the query point
         std::vector<size_t> nearestIndex(num_nearest_search, -1);
         std::vector<float> nearestDist(num_nearest_search, -1.0);
@@ -409,8 +424,6 @@ public:
         map_[cubeInd].pkdtree_edge_from_block_->template knnNeighbors<nanoflann::L2Distance<Point>>(
                 pt_query, num_nearest_search, nearestIndex.data(), nearestDist.data());
 #endif
-        // Shortcut to keypoints cloud
-        const PointCloud &previousEdgePoints = *(map_[cubeInd].pedge_pc_);
 
         // to avoid square root when performing comparision
         const float square_max_dist_inliner = max_dist_inliner * max_dist_inliner;

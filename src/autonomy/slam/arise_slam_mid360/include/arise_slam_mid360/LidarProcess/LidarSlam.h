@@ -198,12 +198,16 @@ namespace arise_slam {
         };
 
         struct LidarOdomUncertainty {
-            double uncertainty_x;
-            double uncertainty_y;
-            double uncertainty_z;
-            double uncertainty_roll;
-            double uncertainty_pitch;
-            double uncertainty_yaw;
+            // Default-initialized: `lidarOdomUncer` is read in the absolute-pose
+            // information matrix (LidarSlam.cpp) but never written anywhere, so
+            // without these initializers it was an indeterminate (UB) read.
+            // 0.0 == "no uncertainty", i.e. full-confidence information weight.
+            double uncertainty_x = 0.0;
+            double uncertainty_y = 0.0;
+            double uncertainty_z = 0.0;
+            double uncertainty_roll = 0.0;
+            double uncertainty_pitch = 0.0;
+            double uncertainty_yaw = 0.0;
         };
 
         struct OptimizationParameter {
