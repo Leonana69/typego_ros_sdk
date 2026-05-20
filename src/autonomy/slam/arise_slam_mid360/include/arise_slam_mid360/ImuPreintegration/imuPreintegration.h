@@ -76,6 +76,7 @@ namespace arise_slam {
     public:
 
         imuPreintegration(const rclcpp::NodeOptions & options);
+        ~imuPreintegration() override;
 
         static constexpr double delta_t = 0;
         static constexpr double imu_laser_timedelay= 0.8;
@@ -150,10 +151,12 @@ namespace arise_slam {
         // --- Loop Closure ---
         void registeredScanHandler(const sensor_msgs::msg::PointCloud2::ConstSharedPtr msg);
         bool shouldAddKeyframe(const gtsam::Pose3& pose);
-        void addKeyframe(const gtsam::Pose3& pose, double timestamp);
+        void addKeyframe(const gtsam::Pose3& pose, double timestamp,
+                         gtsam::Key graph_key, int graph_generation);
         void loopClosureThread();
-        bool detectAndVerifyLoop(int current_kf_idx, int& match_idx, Eigen::Matrix4f& correction);
-        void applyLoopClosure();
+        bool detectAndVerifyLoop(int current_kf_idx, int& match_idx,
+                                 Eigen::Matrix4f& correction, double& fitness);
+        void applyLoopClosure(double currentCorrectionTime);
 
         template<typename T>
         double secs(T msg) {
@@ -253,6 +256,7 @@ namespace arise_slam {
         double lastImuT_imu = -1;
         double lastImuT_opt = -1;
         int key = 1;
+        int graph_generation_ = 0;
         int imuPreintegrationResetId = 0;
         int frame_count = 0;
 
@@ -271,6 +275,8 @@ namespace arise_slam {
         struct Keyframe {
             int index;
             double timestamp;
+            gtsam::Key graph_key;                 // GTSAM pose key for this keyframe
+            int graph_generation;                 // optimizer generation that owns graph_key
             gtsam::Pose3 lidar_pose;              // pose in world frame
             pcl::PointCloud<PointType>::Ptr cloud; // downsampled scan in body frame
         };
@@ -278,8 +284,12 @@ namespace arise_slam {
         struct LoopResult {
             int from_idx;    // historical keyframe index
             int to_idx;      // current keyframe index
+            gtsam::Key to_graph_key;
+            int to_graph_generation;
             gtsam::Pose3 corrected_pose; // ICP-corrected lidar pose in world frame
             double fitness;
+            double correction_translation_m;
+            double correction_angle_rad;
         };
 
         // Keyframe storage
@@ -303,6 +313,12 @@ namespace arise_slam {
         float lc_downsample_res_ = 0.3;
         float lc_keyframe_dist_ = 1.0;
         float lc_keyframe_angle_ = 0.2;
+        float lc_max_correspondence_dist_ = 2.0;
+        float lc_max_correction_dist_ = 1.0;
+        float lc_max_correction_angle_ = 0.35;
+        float lc_prior_translation_noise_ = 0.10;
+        float lc_prior_rotation_noise_ = 0.05;
+        float lc_min_loop_interval_ = 5.0;
 
         // Loop closure thread & results
         std::deque<LoopResult> lc_queue_;
@@ -310,6 +326,7 @@ namespace arise_slam {
         std::thread lc_thread_;
         std::atomic<bool> lc_shutdown_{false};
         int last_lc_check_idx_ = -1;
+        double last_lc_accept_time_ = -1.0;
     };
 
     // class TransformFusion : public imuPreintegration {
