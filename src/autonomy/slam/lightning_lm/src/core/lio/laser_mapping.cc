@@ -264,6 +264,7 @@ bool LaserMapping::Run() {
     // pred_state.pos_ = state_point_.pos_;  // 假定位置不动行不行,防止速度漂移
     // kf_.ChangeX(pred_state);
 
+    obs_call_idx_ = 0;  // reset ObsModel call counter for this update's iterations
     kf_.Update(ESKF::ObsType::LIDAR, 1.0);
 
     state_point_ = kf_.GetX();
@@ -618,6 +619,7 @@ void LaserMapping::ObsModel(NavState &s, ESKF::CustomObservationModel &obs) {
     for (size_t i = 0; i < index.size(); ++i) {
         index[i] = i;
     }
+    plane_valid_.resize(cnt_pts);
 
     // LOG(INFO) << "obs from state: " << s.pos_.transpose() << ", " << s.rot_.unit_quaternion().coeffs().transpose();
 
@@ -625,6 +627,15 @@ void LaserMapping::ObsModel(NavState &s, ESKF::CustomObservationModel &obs) {
         [&, this]() {
             Mat3f R_wl = (s.rot_.matrix() * offset_R_lidar_fixed_).cast<float>();
             Vec3f t_wl = (s.rot_ * offset_t_lidar_fixed_ + s.pos_).cast<float>();
+
+            /// Correspondence search (KNN + plane fit) runs for the first two
+            /// ESKF iterations — the large-correction phase — and afterwards
+            /// only while the filter has not yet converged. Otherwise the
+            /// cached neighbours / plane coefficients are reused; the residual
+            /// and Jacobian below are still recomputed every iteration against
+            /// the updated state. This mirrors upstream FasterLIO.
+            const bool research = obs.converge_ || obs_call_idx_ < 2;
+            ++obs_call_idx_;
 
             std::for_each(std::execution::par_unseq, index.begin(), index.end(), [&](const size_t &i) {
                 PointType &point_body = scan_down_body_->points[i];
@@ -636,21 +647,21 @@ void LaserMapping::ObsModel(NavState &s, ESKF::CustomObservationModel &obs) {
                 point_world.intensity = point_body.intensity;
 
                 auto &points_near = nearest_points_[i];
-                points_near.clear();
 
-                /** Find the closest surfaces in the map **/
-                ivox_->GetClosestPoint(point_world, points_near, fasterlio::NUM_MATCH_POINTS);
-                point_selected_surf_[i] = points_near.size() >= fasterlio::MIN_NUM_MATCH_POINTS;
-
-                point_selected_icp_[i] = point_selected_surf_[i];
-
-                /// 能找到3个点以上，则估计平面
-                if (point_selected_surf_[i]) {
-                    point_selected_surf_[i] =
+                /// 仅在未收敛时重新搜索最近邻并估计平面，否则复用缓存结果
+                if (research) {
+                    points_near.clear();
+                    ivox_->GetClosestPoint(point_world, points_near, fasterlio::NUM_MATCH_POINTS);
+                    plane_valid_[i] =
+                        (points_near.size() >= fasterlio::MIN_NUM_MATCH_POINTS) &&
                         math::esti_plane(plane_coef_[i], points_near, fasterlio::ESTI_PLANE_THRESHOLD);
                 }
 
-                /// 计算平面阈值
+                /// 近邻点数足够则可参与点到点ICP
+                point_selected_icp_[i] = points_near.size() >= fasterlio::MIN_NUM_MATCH_POINTS;
+
+                /// 平面有效则计算点面残差与阈值
+                point_selected_surf_[i] = plane_valid_[i];
                 if (point_selected_surf_[i]) {
                     auto temp = point_world.getVector4fMap();
                     temp[3] = 1.0;

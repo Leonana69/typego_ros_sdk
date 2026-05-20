@@ -332,7 +332,13 @@ void ESKF::Update(ESKF::ObsType obs, const double& R) {
             custom_obs_model_.converge_ = true;
         }
 
-        if (converged_times > 0 || i == maximum_iter_ - 1) {
+        // Require two convergences before finishing. With ObsModel's
+        // correspondence search gated on converge_, the iteration after the
+        // first convergence re-runs the KNN/plane fit at the converged pose;
+        // the second convergence then confirms the result on fresh
+        // correspondences. (This is the FAST-LIO scheme described at the top
+        // of this file.)
+        if (converged_times > 1 || i == maximum_iter_ - 1) {
             /// 结束条件：已经收敛
             /// 更新P阵, using (45)
             L_ = P_;

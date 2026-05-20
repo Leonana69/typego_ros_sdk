@@ -204,6 +204,7 @@ class LaserMapping {
     std::vector<float> residuals_;             // point-to-plane residuals
     std::vector<char> point_selected_surf_;    // selected points
     std::vector<Vec4f> plane_coef_;            // plane coeffs
+    std::vector<char> plane_valid_;            // cached plane-fit success (KNN reuse across iters)
 
     /// 点到点相关
     std::vector<char> point_selected_icp_;  // 点到点的selected points
@@ -213,6 +214,7 @@ class LaserMapping {
     std::vector<Mat6d> obs_JTJ_;      // per-point J^T J
     std::vector<Vec6d> obs_JTr_;      // per-point J^T r
     std::vector<double> obs_res_sq_;  // per-point squared residual
+    int obs_call_idx_ = 0;            // ObsModel call index within the current ESKF update
 
     std::mutex mtx_buffer_;
     std::deque<double> time_buffer_;
