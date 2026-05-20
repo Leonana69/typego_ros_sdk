@@ -8,10 +8,12 @@ sensor input -> scan generation -> SLAM/pose -> terrain analysis -> local planni
 ### Inputs (data and configuration)
 - **Lidar point cloud**: Provided by the real robot. The MID-360 driver is intentionally not started in this launch file.
 - **Joystick**: `joy_node` reads `/dev/input/js0` for manual input and safety override.
-- **Launch arguments**: `world_name`, sensor/camera offsets, initial `vehicleX/Y`, and `checkTerrainConn` tune downstream modules.
+- **Launch arguments**: `world_name`, sensor/camera offsets, initial `vehicleX/Y`, `checkTerrainConn`, and `slam_backend` tune downstream modules.
 
 ### Mapping and state estimation
-- **ARISE SLAM** (`arise_slam_mid360`): Consumes lidar data to produce a map and robot pose estimates for downstream modules.
+The LIO (lidar-inertial odometry) backend is selectable via the `slam_backend` launch argument (default `arise`). Both backends publish `/state_estimation` and `/registered_scan`, so downstream modules are unaffected by the choice.
+- **ARISE SLAM** (`arise_slam_mid360`, `slam_backend:=arise`): Feature-based LIO in the LOAM lineage. Consumes lidar data to produce a map and robot pose estimates for downstream modules.
+- **Lightning-LM** (`lightning`, `slam_backend:=lightning`): Direct LIO (FasterLIO over an iVox neighbourhood index) with built-in real-time loop closure — an alternative backend that does not rely on extractable geometric features. See the repository root `README.md` for the full backend trade-offs.
 - **Sensor scan generation** (`sensor_scan_generation`): Converts raw lidar into a scan format used by the terrain modules and planner.
 
 ### Terrain understanding
@@ -49,6 +51,8 @@ ProjectName is empty in `livox_mid360.yaml`, so SLAM topics are rooted at `/`.
 - **imu_preintegration_node**
   - Subscribes: `/livox/imu`, `/laser_odometry`
   - Publishes: `/state_estimation` (Odometry), `/state_estimation_health`, `/imuodom_path`
+
+When `slam_backend:=lightning`, the three nodes above are replaced by a single `lightning` node (`run_slam_online`) that subscribes to `/livox/lidar` (PointCloud2) and `/livox/imu`, runs loop closure internally, and publishes the same `/registered_scan` and `/state_estimation` consumed downstream.
 
 ### 3) Sensor processing (sensor_scan_generation)
 - **sensorScanGeneration**
@@ -88,7 +92,7 @@ Configured by `exploration_planner_config` (default `indoor_small`):
 ### Summary diagram
 Livox LiDAR + IMU
   -> /livox/lidar, /livox/imu
-  -> arise_slam_mid360
+  -> SLAM backend (arise_slam_mid360 or lightning)
        -> /registered_scan, /state_estimation
        -> sensor_scan_generation -> /sensor_scan, /state_estimation_at_scan
        -> terrain_analysis -> /terrain_map -> terrain_analysis_ext -> /terrain_map_ext
