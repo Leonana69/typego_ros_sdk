@@ -141,3 +141,9 @@ imu_preintegration_node:
         lc_downsample_res: 0.3       # voxel size for loop closure clouds
         lc_keyframe_dist: 1.0        # distance threshold for new keyframe (meters)
         lc_keyframe_angle: 0.2       # angle threshold for new keyframe (radians)
+        lc_max_correspondence_dist: 2.0   # ICP correspondence gate; avoid aligning distant repeated structures
+        lc_max_correction_dist: 1.0       # reject loop transforms larger than expected odometry drift
+        lc_max_correction_angle: 0.35     # reject loop transforms above this rotation (radians)
+        lc_prior_translation_noise: 0.10  # loop prior noise in meters
+        lc_prior_rotation_noise: 0.05     # loop prior noise in radians
+        lc_min_loop_interval: 5.0         # seconds between accepted loop corrections

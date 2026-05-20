@@ -13,6 +13,13 @@ namespace arise_slam {
     imuPreintegration::imuPreintegration(const rclcpp::NodeOptions & options)
     : Node("imu_preintegration_node", options) {
     }
+
+    imuPreintegration::~imuPreintegration() {
+        lc_shutdown_ = true;
+        if (lc_thread_.joinable()) {
+            lc_thread_.join();
+        }
+    }
     
     void imuPreintegration::initInterface() {
         //! Callback Groups
@@ -214,6 +221,12 @@ namespace arise_slam {
         this->declare_parameter<double>("lc_downsample_res", 0.3);
         this->declare_parameter<double>("lc_keyframe_dist", 1.0);
         this->declare_parameter<double>("lc_keyframe_angle", 0.2);
+        this->declare_parameter<double>("lc_max_correspondence_dist", 2.0);
+        this->declare_parameter<double>("lc_max_correction_dist", 1.0);
+        this->declare_parameter<double>("lc_max_correction_angle", 0.35);
+        this->declare_parameter<double>("lc_prior_translation_noise", 0.10);
+        this->declare_parameter<double>("lc_prior_rotation_noise", 0.05);
+        this->declare_parameter<double>("lc_min_loop_interval", 5.0);
 
         config_.imuAccNoise = this->get_parameter("acc_n").as_double();
         config_.imuAccBiasN = this->get_parameter("acc_w").as_double();
@@ -240,8 +253,16 @@ namespace arise_slam {
         lc_downsample_res_ = this->get_parameter("lc_downsample_res").as_double();
         lc_keyframe_dist_ = this->get_parameter("lc_keyframe_dist").as_double();
         lc_keyframe_angle_ = this->get_parameter("lc_keyframe_angle").as_double();
-        RCLCPP_INFO(this->get_logger(), "Loop closure enabled: %d, search_radius: %f, time_diff: %f",
-                    lc_enabled_, lc_search_radius_, lc_time_diff_);
+        lc_max_correspondence_dist_ = this->get_parameter("lc_max_correspondence_dist").as_double();
+        lc_max_correction_dist_ = this->get_parameter("lc_max_correction_dist").as_double();
+        lc_max_correction_angle_ = this->get_parameter("lc_max_correction_angle").as_double();
+        lc_prior_translation_noise_ = this->get_parameter("lc_prior_translation_noise").as_double();
+        lc_prior_rotation_noise_ = this->get_parameter("lc_prior_rotation_noise").as_double();
+        lc_min_loop_interval_ = this->get_parameter("lc_min_loop_interval").as_double();
+        RCLCPP_INFO(this->get_logger(),
+                    "Loop closure enabled: %d, search_radius: %.2f, time_diff: %.2f, max_corr: %.2f, max_delta: %.2f",
+                    lc_enabled_, lc_search_radius_, lc_time_diff_,
+                    lc_max_correspondence_dist_, lc_max_correction_dist_);
 
         RCLCPP_INFO(this->get_logger(), "config_.imu_acc_x_limit: %f", config_.imu_acc_x_limit);
         RCLCPP_INFO(this->get_logger(), "config_.imu_acc_y_limit: %f", config_.imu_acc_y_limit);
@@ -303,6 +324,7 @@ namespace arise_slam {
         optParameters.relinearizeThreshold = 0.1;
         optParameters.relinearizeSkip = 1;
         optimizer = gtsam::ISAM2(optParameters);
+        ++graph_generation_;
 
         gtsam::NonlinearFactorGraph newGraphFactors;
         graphFactors = newGraphFactors;
@@ -797,9 +819,10 @@ namespace arise_slam {
         if (lc_enabled_ && doneFirstOpt) {
             gtsam::Pose3 current_lidar_pose = prevPose_.compose(imu2Lidar);
             if (shouldAddKeyframe(current_lidar_pose)) {
-                addKeyframe(current_lidar_pose, lidarOdomTime);
+                addKeyframe(current_lidar_pose, lidarOdomTime,
+                            X(key - 1), graph_generation_);
             }
-            applyLoopClosure();
+            applyLoopClosure(lidarOdomTime);
         }
 
 #if 1
@@ -1278,7 +1301,8 @@ namespace arise_slam {
         return dist > lc_keyframe_dist_ || std::abs(angle) > lc_keyframe_angle_;
     }
 
-    void imuPreintegration::addKeyframe(const gtsam::Pose3& pose, double timestamp) {
+    void imuPreintegration::addKeyframe(const gtsam::Pose3& pose, double timestamp,
+                                        gtsam::Key graph_key, int graph_generation) {
         pcl::PointCloud<PointType>::Ptr cloud_copy(new pcl::PointCloud<PointType>());
         {
             std::lock_guard<std::mutex> lock(cloud_mutex_);
@@ -1301,6 +1325,8 @@ namespace arise_slam {
         Keyframe kf;
         kf.index = global_kf_count_;
         kf.timestamp = timestamp;
+        kf.graph_key = graph_key;
+        kf.graph_generation = graph_generation;
         kf.lidar_pose = pose;
         kf.cloud = cloud_dwz;
 
@@ -1328,16 +1354,23 @@ namespace arise_slam {
             if (rclcpp::ok() == false) break;
 
             int latest_idx;
+            double latest_time;
             {
                 std::lock_guard<std::mutex> lock(lc_mutex_);
                 latest_idx = (int)keyframe_history_.size() - 1;
+                latest_time = latest_idx >= 0 ? keyframe_history_[latest_idx].timestamp : -1.0;
             }
             if (latest_idx < 1 || latest_idx == last_lc_check_idx_) continue;
             last_lc_check_idx_ = latest_idx;
+            if (last_lc_accept_time_ > 0.0 &&
+                latest_time - last_lc_accept_time_ < lc_min_loop_interval_) {
+                continue;
+            }
 
             int match_idx = -1;
+            double fitness = 0.0;
             Eigen::Matrix4f correction = Eigen::Matrix4f::Identity();
-            if (detectAndVerifyLoop(latest_idx, match_idx, correction)) {
+            if (detectAndVerifyLoop(latest_idx, match_idx, correction, fitness)) {
                 std::lock_guard<std::mutex> lock(lc_mutex_);
                 // Compute corrected pose: ICP gives transform from source(current) to target(historical)
                 // corrected_world_pose = correction * current_world_pose
@@ -1349,17 +1382,27 @@ namespace arise_slam {
                 LoopResult result;
                 result.from_idx = match_idx;
                 result.to_idx = latest_idx;
+                result.to_graph_key = keyframe_history_[latest_idx].graph_key;
+                result.to_graph_generation = keyframe_history_[latest_idx].graph_generation;
                 result.corrected_pose = corrected_pose;
-                result.fitness = 0.0;  // set by detectAndVerifyLoop via log
+                result.fitness = fitness;
+                result.correction_translation_m =
+                    correction.block<3, 1>(0, 3).cast<double>().norm();
+                result.correction_angle_rad =
+                    std::abs(Eigen::AngleAxisf(correction.block<3, 3>(0, 0)).angle());
                 lc_queue_.push_back(result);
+                last_lc_accept_time_ = keyframe_history_[latest_idx].timestamp;
 
                 RCLCPP_WARN(this->get_logger(),
-                    "Loop closure detected! keyframe %d <-> %d", match_idx, latest_idx);
+                    "Loop closure detected! keyframe %d <-> %d, delta %.3f m %.2f deg",
+                    match_idx, latest_idx, result.correction_translation_m,
+                    result.correction_angle_rad * 180.0 / M_PI);
             }
         }
     }
 
-    bool imuPreintegration::detectAndVerifyLoop(int current_kf_idx, int& match_idx, Eigen::Matrix4f& correction) {
+    bool imuPreintegration::detectAndVerifyLoop(int current_kf_idx, int& match_idx,
+                                                Eigen::Matrix4f& correction, double& fitness) {
         // Lock to read keyframe data
         Keyframe current_kf;
         {
@@ -1396,9 +1439,11 @@ namespace arise_slam {
             // radiusSearch fills indices[] and distances[] in lockstep, so the
             // distance for candidate indices[i] is distances[i]. Iterate by
             // position to keep the two paired.
-            for (size_t i = 0; i < indices.size(); ++i) {
+            for (std::size_t i = 0; i < indices.size(); ++i) {
                 int idx = indices[i];
-                if (idx < 0 || idx >= (int)keyframe_history_.size()) continue;
+                if (idx < 0) continue;
+                if (idx == current_kf_idx) continue;
+                if (idx >= (int)keyframe_history_.size()) continue;
                 double time_diff = std::abs(current_kf.timestamp - keyframe_history_[idx].timestamp);
                 if (time_diff < lc_time_diff_) continue;  // too recent, skip
                 if (distances[i] < best_dist) {
@@ -1438,6 +1483,13 @@ namespace arise_slam {
         dwz.setLeafSize(lc_downsample_res_, lc_downsample_res_, lc_downsample_res_);
         dwz.setInputCloud(target_cloud);
         dwz.filter(*target_dwz);
+        if (target_dwz->size() < 100 || current_kf.cloud->size() < 100) {
+            RCLCPP_INFO(this->get_logger(),
+                        "Loop ICP skipped due to small clouds: source %zu target %zu, kf %d <-> %d",
+                        current_kf.cloud->size(), target_dwz->size(),
+                        best_candidate, current_kf_idx);
+            return false;
+        }
 
         // Build source cloud: current keyframe in world frame
         pcl::PointCloud<PointType>::Ptr source_cloud(new pcl::PointCloud<PointType>());
@@ -1448,7 +1500,7 @@ namespace arise_slam {
 
         // Run ICP
         pcl::IterativeClosestPoint<PointType, PointType> icp;
-        icp.setMaxCorrespondenceDistance(lc_search_radius_ * 2.0);
+        icp.setMaxCorrespondenceDistance(lc_max_correspondence_dist_);
         icp.setMaximumIterations(100);
         icp.setTransformationEpsilon(1e-6);
         icp.setEuclideanFitnessEpsilon(1e-6);
@@ -1465,22 +1517,38 @@ namespace arise_slam {
             return false;
         }
 
-        float fitness = icp.getFitnessScore();
+        fitness = icp.getFitnessScore();
         if (fitness > lc_fitness_threshold_) {
             RCLCPP_INFO(this->get_logger(), "Loop ICP fitness too high: %f > %f, kf %d <-> %d",
                         fitness, lc_fitness_threshold_, best_candidate, current_kf_idx);
             return false;
         }
 
-        RCLCPP_INFO(this->get_logger(), "Loop ICP converged! fitness: %f, kf %d <-> %d",
-                    fitness, best_candidate, current_kf_idx);
+        Eigen::Matrix4f final_transform = icp.getFinalTransformation();
+        double correction_dist = final_transform.block<3, 1>(0, 3).cast<double>().norm();
+        double correction_angle =
+            std::abs(Eigen::AngleAxisf(final_transform.block<3, 3>(0, 0)).angle());
+        if (correction_dist > lc_max_correction_dist_ ||
+            correction_angle > lc_max_correction_angle_) {
+            RCLCPP_INFO(this->get_logger(),
+                        "Loop ICP correction rejected: delta %.3f m %.2f deg exceeds %.3f m %.2f deg, kf %d <-> %d",
+                        correction_dist, correction_angle * 180.0 / M_PI,
+                        lc_max_correction_dist_, lc_max_correction_angle_ * 180.0 / M_PI,
+                        best_candidate, current_kf_idx);
+            return false;
+        }
+
+        RCLCPP_INFO(this->get_logger(),
+                    "Loop ICP converged! fitness: %f, delta %.3f m %.2f deg, kf %d <-> %d",
+                    fitness, correction_dist, correction_angle * 180.0 / M_PI,
+                    best_candidate, current_kf_idx);
 
         match_idx = best_candidate;
-        correction = icp.getFinalTransformation();  // transforms source to align with target
+        correction = final_transform;  // transforms source to align with target
         return true;
     }
 
-    void imuPreintegration::applyLoopClosure() {
+    void imuPreintegration::applyLoopClosure(double currentCorrectionTime) {
         LoopResult result;
         {
             std::lock_guard<std::mutex> lock(lc_mutex_);
@@ -1489,12 +1557,37 @@ namespace arise_slam {
             lc_queue_.pop_front();
         }
 
-        // Apply corrected pose as a tight prior on the current GTSAM key
+        if (result.to_graph_generation != graph_generation_) {
+            RCLCPP_WARN(this->get_logger(),
+                        "Skipping stale loop closure kf %d <-> %d from graph generation %d; current generation is %d",
+                        result.from_idx, result.to_idx,
+                        result.to_graph_generation, graph_generation_);
+            return;
+        }
+
+        const int current_index = key - 1;
+        const gtsam::Key current_pose_key = X(current_index);
+        const gtsam::Key current_vel_key = V(current_index);
+        const gtsam::Key current_bias_key = B(current_index);
+        const gtsam::Values before_update = optimizer.calculateEstimate();
+        if (!before_update.exists(result.to_graph_key) ||
+            !before_update.exists(current_pose_key) ||
+            !before_update.exists(current_vel_key) ||
+            !before_update.exists(current_bias_key)) {
+            RCLCPP_WARN(this->get_logger(),
+                        "Skipping loop closure kf %d <-> %d because graph key is no longer active",
+                        result.from_idx, result.to_idx);
+            return;
+        }
+
+        // Apply the corrected pose to the graph key that produced the loop keyframe.
         gtsam::Pose3 corrected_imu_pose = result.corrected_pose.compose(lidar2Imu);
         auto lc_noise = gtsam::noiseModel::Diagonal::Sigmas(
-            (gtsam::Vector(6) << 1e-3, 1e-3, 1e-3, 1e-3, 1e-3, 1e-3).finished());
+            (gtsam::Vector(6) << lc_prior_rotation_noise_, lc_prior_rotation_noise_,
+             lc_prior_rotation_noise_, lc_prior_translation_noise_,
+             lc_prior_translation_noise_, lc_prior_translation_noise_).finished());
 
-        graphFactors.add(gtsam::PriorFactor<gtsam::Pose3>(X(key - 1), corrected_imu_pose, lc_noise));
+        graphFactors.add(gtsam::PriorFactor<gtsam::Pose3>(result.to_graph_key, corrected_imu_pose, lc_noise));
 
         // Run ISAM2 update to incorporate the correction
         try {
@@ -1504,16 +1597,19 @@ namespace arise_slam {
             graphValues.clear();
 
             gtsam::Values result_vals = optimizer.calculateEstimate();
-            prevPose_ = result_vals.at<gtsam::Pose3>(X(key - 1));
-            prevVel_ = result_vals.at<gtsam::Vector3>(V(key - 1));
+            prevPose_ = result_vals.at<gtsam::Pose3>(current_pose_key);
+            prevVel_ = result_vals.at<gtsam::Vector3>(current_vel_key);
             prevState_ = gtsam::NavState(prevPose_, prevVel_);
-            prevBias_ = result_vals.at<gtsam::imuBias::ConstantBias>(B(key - 1));
+            prevBias_ = result_vals.at<gtsam::imuBias::ConstantBias>(current_bias_key);
 
             // Reset IMU preintegration with updated bias
             imuIntegratorOpt_->resetIntegrationAndSetBias(prevBias_);
+            repropagate_imuodometry(currentCorrectionTime);
 
-            RCLCPP_WARN(this->get_logger(), "Loop closure correction applied! kf %d <-> %d",
-                        result.from_idx, result.to_idx);
+            RCLCPP_WARN(this->get_logger(),
+                        "Loop closure correction applied! kf %d <-> %d, delta %.3f m %.2f deg",
+                        result.from_idx, result.to_idx, result.correction_translation_m,
+                        result.correction_angle_rad * 180.0 / M_PI);
         } catch (const gtsam::IndeterminantLinearSystemException& e) {
             RCLCPP_WARN(this->get_logger(), "Loop closure ISAM2 update failed: %s", e.what());
             graphFactors.resize(0);
