@@ -28,6 +28,24 @@ typego_bringup.launch.py
 
 Both LIO backends honour the same downstream contract — odometry on `/state_estimation`, dense undistorted cloud on `/registered_scan`, `map → sensor` TF — so terrain analysis, local planner, FAR, and TARE see identical inputs regardless of which backend is selected.
 
+### LIO Backends
+
+Both backends are LIO (lidar–inertial odometry) for the Livox Mid-360 with built-in loop closure. They differ in algorithm class and engineering trade-offs:
+
+**ARISE SLAM** — *feature-based* LIO in the LOAM lineage. Three nodes (`feature_extraction_node` → `laser_mapping_node` ← `imu_preintegration_node`); GTSAM/ISAM2 factor graph; PCL-ICP loop closure. Publishes `/state_estimation` at IMU rate (~50 Hz).
+
+- **Pick when:** the scene has rich geometric structure (corners, edges, planes); the controller needs IMU-rate state feedback (near-zero output lag).
+- **Avoid when:** open or feature-poor environments — empty plazas, long blank corridors, parking lots, tunnel-like halls — where edge/planar feature extraction degenerates.
+- **Cost:** lower CPU (single-feature pipeline parallelised across 3 procs) but higher RSS than Lightning.
+
+**Lightning-LM** — *direct* LIO using FasterLIO over an iVox neighbourhood index (no explicit feature extraction; registers against the full undistorted cloud). Single `run_slam_online` process; built-in real-time loop closure. Publishes `/state_estimation` at lidar rate (~10 Hz).
+
+- **Pick when:** feature-poor / unstructured scenes — the direct registration uses the full cloud and does not rely on extractable features. Also when accuracy and low RAM matter more than odometry latency.
+- **Avoid when:** the controller demands IMU-rate state feedback, or CPU is the bottleneck (roughly 2–3× the CPU footprint of ARISE on the same bag).
+- **Cost:** ~10× higher output lag than ARISE; higher CPU; lower RSS.
+
+A comparison harness (`scripts/slam_bench/run_bench.sh`) replays a bag through each backend and emits a side-by-side `summary.md` covering output rate, lag, CPU/RSS, and closed-loop drift. Runs land in `logs/slam_bench/<timestamp>/`.
+
 ## Standard Interfaces
 
 All robot SDKs expose these topics. If `ROBOT_ID` is set, topics are namespaced under `/robot${ROBOT_ID}/`.
