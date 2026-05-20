@@ -28,6 +28,7 @@
 #include <geometry_msgs/msg/twist_stamped.hpp>
 #include <geometry_msgs/msg/point_stamped.hpp>
 #include <geometry_msgs/msg/polygon_stamped.hpp>
+#include <visualization_msgs/msg/marker.hpp>
 #include <sensor_msgs/msg/imu.h>
 
 #include "tf2/transform_datatypes.h"
@@ -66,6 +67,13 @@ rclcpp::Publisher<sensor_msgs::msg::Joy>::SharedPtr pubJoy_;
 rclcpp::Publisher<std_msgs::msg::Float32MultiArray>::SharedPtr pubSpeedConfig_;
 bool has_active_goal_ = false;
 double goal_tolerance_ = 0.3;  // meters
+
+// Waypoint marker visualization: shows the active goal in RViz and removes it
+// shortly after the robot arrives.
+rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr pubGoalMarker_;
+bool goalMarkerReached_ = false;         // marker recolored green, pending removal
+double goalMarkerReachedTime_ = 0;       // time the robot reached the goal
+const double goalMarkerHoldTime_ = 1.0;  // seconds to keep the green marker before deleting
 
 string pathFolder;
 string vehicleFrame = "vehicle";
@@ -197,6 +205,49 @@ static void publishSpeedConfig()
   pubSpeedConfig_->publish(msg);
 }
 
+static void releaseAutonomyControl()
+{
+  autonomyMode = false;
+  joySpeed = 0.0f;
+  joySpeedRaw = 0.0f;
+  publishJoy(false);
+}
+
+// Publish (or update) the waypoint marker. reached=false draws it in magenta
+// while the goal is pursued; reached=true recolors it green on arrival.
+void publishGoalMarker(bool reached)
+{
+  visualization_msgs::msg::Marker marker;
+  marker.header.frame_id = "map";
+  marker.header.stamp = nh->now();
+  marker.ns = "way_point";
+  marker.id = 0;
+  marker.type = visualization_msgs::msg::Marker::SPHERE;
+  marker.action = visualization_msgs::msg::Marker::ADD;
+  marker.pose.position.x = goalX;
+  marker.pose.position.y = goalY;
+  marker.pose.position.z = vehicleZ;
+  marker.pose.orientation.w = 1.0;
+  marker.scale.x = marker.scale.y = marker.scale.z = 0.5;
+  marker.color.a = 0.85f;
+  marker.color.r = reached ? 0.0f : 0.8f;
+  marker.color.g = reached ? 1.0f : 0.16f;
+  marker.color.b = reached ? 0.0f : 0.8f;
+  pubGoalMarker_->publish(marker);
+}
+
+// Remove the waypoint marker from RViz.
+void deleteGoalMarker()
+{
+  visualization_msgs::msg::Marker marker;
+  marker.header.frame_id = "map";
+  marker.header.stamp = nh->now();
+  marker.ns = "way_point";
+  marker.id = 0;
+  marker.action = visualization_msgs::msg::Marker::DELETE;
+  pubGoalMarker_->publish(marker);
+}
+
 void activateGoal(double x, double y, GoalSource source)
 {
   goalX = x;
@@ -206,6 +257,9 @@ void activateGoal(double x, double y, GoalSource source)
   joySpeed = clampedAutonomySpeed();
   publishJoy(true);
   RCLCPP_INFO(nh->get_logger(), "Goal activated: x=%.2f, y=%.2f", x, y);
+
+  goalMarkerReached_ = false;
+  publishGoalMarker(false);
 }
 
 void clearGoal()
@@ -218,6 +272,7 @@ void clearGoal()
   goalSource_ = GoalSource::NONE;
   has_active_goal_ = false;
   current_goal_handle_ = nullptr;
+  releaseAutonomyControl();
 }
 
 void cancelGoal()
@@ -230,8 +285,10 @@ void cancelGoal()
   goalSource_ = GoalSource::NONE;
   has_active_goal_ = false;
   current_goal_handle_ = nullptr;
-  autonomyMode = false;
-  publishJoy(false);
+  releaseAutonomyControl();
+
+  goalMarkerReached_ = false;
+  deleteGoalMarker();
 }
 
 void odometryHandler(const nav_msgs::msg::Odometry::ConstSharedPtr odom)
@@ -894,6 +951,11 @@ int main(int argc, char** argv)
   pubSpeedConfig_ = nh->create_publisher<std_msgs::msg::Float32MultiArray>(
       "/speed_config", rclcpp::QoS(1).transient_local());
 
+  // Waypoint marker publisher — transient_local so RViz still shows the
+  // current goal marker if it subscribes after the goal was set.
+  pubGoalMarker_ = nh->create_publisher<visualization_msgs::msg::Marker>(
+      "/way_point_marker", rclcpp::QoS(1).transient_local());
+
   // Create action server for NavigateToPose
   action_server_ = rclcpp_action::create_server<NavigateToPose>(
     nh,
@@ -1318,9 +1380,13 @@ int main(int argc, char** argv)
               current_goal_handle_->publish_feedback(feedback);
             }
 
-            // Goal reached — clear goal (succeeds action server if applicable)
+            // Goal reached — recolor the marker green, then clear the goal.
+            // The green marker is removed shortly after by the loop below.
             if (distanceToGoal < goal_tolerance_) {
               RCLCPP_INFO(nh->get_logger(), "Goal reached! Distance: %.2f m", distanceToGoal);
+              publishGoalMarker(true);
+              goalMarkerReached_ = true;
+              goalMarkerReachedTime_ = nh->now().seconds();
               clearGoal();
             }
           }
@@ -1428,6 +1494,14 @@ int main(int argc, char** argv)
         RCLCPP_WARN_THROTTLE(nh->get_logger(), *nh->get_clock(), 2000,
             "Scan data stale, publishing stop path");
       }
+    }
+
+    // Remove the waypoint marker a short moment after the goal is reached,
+    // keeping the green "arrived" marker visible briefly as confirmation.
+    if (goalMarkerReached_ &&
+        nh->now().seconds() - goalMarkerReachedTime_ > goalMarkerHoldTime_) {
+      deleteGoalMarker();
+      goalMarkerReached_ = false;
     }
 
     status = rclcpp::ok();

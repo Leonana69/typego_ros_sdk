@@ -23,6 +23,7 @@ find_package(nav_msgs REQUIRED)
 find_package(nav2_msgs REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(sensor_msgs REQUIRED)
+find_package(visualization_msgs REQUIRED)
 find_package(tf2_ros REQUIRED)
 find_package(tf2_geometry_msgs REQUIRED)
 find_package(tf2 REQUIRED)
@@ -34,7 +35,7 @@ find_package(typego_interface REQUIRED)
 
 add_executable(localPlanner src/localPlanner.cpp)
 add_executable(pathFollower src/pathFollower.cpp)
-ament_target_dependencies(localPlanner rclcpp rclcpp_action std_msgs std_srvs sensor_msgs nav_msgs nav2_msgs geometry_msgs tf2 tf2_ros tf2_geometry_msgs message_filters pcl_ros pcl_conversions typego_interface)
+ament_target_dependencies(localPlanner rclcpp rclcpp_action std_msgs std_srvs sensor_msgs nav_msgs nav2_msgs geometry_msgs visualization_msgs tf2 tf2_ros tf2_geometry_msgs message_filters pcl_ros pcl_conversions typego_interface)
 ament_target_dependencies(pathFollower rclcpp std_msgs sensor_msgs nav_msgs geometry_msgs tf2 tf2_ros tf2_geometry_msgs message_filters pcl_ros pcl_conversions)
 
 install(TARGETS
