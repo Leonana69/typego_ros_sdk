@@ -378,20 +378,23 @@ inline bool esti_plane(Eigen::Matrix<T, 4, 1>& pca_result, const PointVector& po
 
         normvec = A.colPivHouseholderQr().solve(b);
     } else {
-        Eigen::MatrixXd A(point.size(), 3);
-        Eigen::VectorXd b(point.size(), 1);
+        // Max-size-fixed storage (rows <= NUM_MATCH_POINTS) so the 3-4 neighbour
+        // fallback no longer heap-allocates. Kept in double precision to match
+        // the original Eigen::MatrixXd path bit-for-bit.
+        Eigen::Matrix<double, Eigen::Dynamic, 3, Eigen::ColMajor, fasterlio::NUM_MATCH_POINTS, 3> A(point.size(), 3);
+        Eigen::Matrix<double, Eigen::Dynamic, 1, Eigen::ColMajor, fasterlio::NUM_MATCH_POINTS, 1> b(point.size(), 1);
 
         A.setZero();
         b.setOnes();
         b *= -1.0f;
 
-        for (int j = 0; j < point.size(); j++) {
+        for (size_t j = 0; j < point.size(); j++) {
             A(j, 0) = point[j].x;
             A(j, 1) = point[j].y;
             A(j, 2) = point[j].z;
         }
 
-        Eigen::MatrixXd n = A.colPivHouseholderQr().solve(b);
+        Eigen::Matrix<double, 3, 1> n = A.colPivHouseholderQr().solve(b);
         normvec(0, 0) = n(0, 0);
         normvec(1, 0) = n(1, 0);
         normvec(2, 0) = n(2, 0);

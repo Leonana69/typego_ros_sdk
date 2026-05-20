@@ -613,7 +613,8 @@ void LaserMapping::MapIncremental() {
 void LaserMapping::ObsModel(NavState &s, ESKF::CustomObservationModel &obs) {
     int cnt_pts = scan_down_body_->size();
 
-    std::vector<size_t> index(cnt_pts);
+    std::vector<size_t> &index = obs_index_;
+    index.resize(cnt_pts);
     for (size_t i = 0; i < index.size(); ++i) {
         index[i] = i;
     }
@@ -704,10 +705,13 @@ void LaserMapping::ObsModel(NavState &s, ESKF::CustomObservationModel &obs) {
     obs.HTH_.setZero();
     obs.HTr_.setZero();
 
-    std::vector<Mat6d> JTJ(effect_feat_surf_);
-    std::vector<Vec6d> JTr(effect_feat_surf_);
+    std::vector<Mat6d> &JTJ = obs_JTJ_;
+    std::vector<Vec6d> &JTr = obs_JTr_;
+    JTJ.resize(effect_feat_surf_);
+    JTr.resize(effect_feat_surf_);
 
-    std::vector<double> res_sq(index.size());
+    std::vector<double> &res_sq = obs_res_sq_;
+    res_sq.resize(index.size());
 
     std::for_each(std::execution::par_unseq, index.begin(), index.end(), [&](const size_t &i) {
         Vec3f point_this_be = corr_pts_[i].head<3>();
@@ -755,7 +759,7 @@ void LaserMapping::ObsModel(NavState &s, ESKF::CustomObservationModel &obs) {
         JTJ.resize(cnt_pts);
         JTr.resize(cnt_pts);
 
-        std::vector<size_t> index(cnt_pts);
+        index.resize(cnt_pts);
         for (size_t i = 0; i < index.size(); ++i) {
             index[i] = i;
         }

@@ -132,7 +132,10 @@ bool IVox<dim, node_type, PointType>::GetClosestPoint(const PointType& pt, Point
 template <int dim, IVoxNodeType node_type, typename PointType>
 bool IVox<dim, node_type, PointType>::GetClosestPoint(const PointType& pt, PointVector& closest_pt, int max_num,
                                                       double max_range) {
-    std::vector<DistPoint> candidates;
+    // Reused per-thread scratch buffer — this routine runs concurrently under
+    // std::execution::par_unseq, so the buffer must be thread-local.
+    thread_local std::vector<DistPoint> candidates;
+    candidates.clear();
     candidates.reserve(max_num * nearby_grids_.size());
 
     auto key = Pos2Grid(math::ToEigen<float, dim>(pt));

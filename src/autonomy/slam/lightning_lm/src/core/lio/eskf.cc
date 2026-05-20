@@ -6,6 +6,7 @@
 #include "core/lightning_math.hpp"
 
 #include <Eigen/Eigenvalues>
+#include <Eigen/LU>
 #include <algorithm>
 
 namespace {
@@ -219,9 +220,19 @@ void ESKF::Update(ESKF::ObsType obs, const double& R) {
             }
         }
 
-        const Mat6d observable_projector = eigen_vectors * observable_mask.asDiagonal() * eigen_vectors.transpose();
-        const Mat6d HTH_eff = observable_projector * HTH_sym * observable_projector;
-        const Vec6d HTr_eff = observable_projector * HTr;
+        // No degenerate direction => the observability projector is identity,
+        // so HTH_eff/HTr_eff equal HTH_sym/HTr — skip the 6x6 triple-products.
+        Mat6d HTH_eff;
+        Vec6d HTr_eff;
+        if (nullity == 0) {
+            HTH_eff = HTH_sym;
+            HTr_eff = HTr;
+        } else {
+            const Mat6d observable_projector =
+                eigen_vectors * observable_mask.asDiagonal() * eigen_vectors.transpose();
+            HTH_eff = observable_projector * HTH_sym * observable_projector;
+            HTr_eff = observable_projector * HTr;
+        }
 
         CovType P_temp = (P_ / R).inverse();  // P阵上面已经更新
 
@@ -229,17 +240,25 @@ void ESKF::Update(ESKF::ObsType obs, const double& R) {
         // P_temp.setIdentity();
 
         P_temp.block<pose_obs_dim_, pose_obs_dim_>(0, 0) += HTH_eff;
-        CovType Q_inv = P_temp.inverse();  // Q inv
+
+        // The Kalman gain only consumes the first pose_obs_dim_ columns of
+        // P_temp^{-1}. Factor P_temp once and solve for that
+        // state_dim_ x pose_obs_dim_ block instead of forming the full N x N
+        // inverse (same LU factorization, fewer triangular solves).
+        Eigen::Matrix<double, state_dim_, pose_obs_dim_> Q_inv_rhs =
+            Eigen::Matrix<double, state_dim_, pose_obs_dim_>::Zero();
+        Q_inv_rhs.template block<pose_obs_dim_, pose_obs_dim_>(0, 0).setIdentity();
+        const Eigen::Matrix<double, state_dim_, pose_obs_dim_> Q_inv_cols =
+            P_temp.partialPivLu().solve(Q_inv_rhs);
 
         // Q*H^T * R^-1 * r = K * r
         // <-- K ----->
-        K_r = Q_inv.template block<state_dim_, pose_obs_dim_>(0, 0) * HTr_eff;
+        K_r = Q_inv_cols * HTr_eff;
 
         // K_H = Q^-1 H^T R^-1 H
         //       <--  K     ->
         K_H.setZero();
-        K_H.template block<state_dim_, pose_obs_dim_>(0, 0) =
-            Q_inv.template block<state_dim_, pose_obs_dim_>(0, 0) * HTH_eff;
+        K_H.template block<state_dim_, pose_obs_dim_>(0, 0) = Q_inv_cols * HTH_eff;
 
         // dx = Kr + (KH-I) dx
         // LOG(INFO) << "K_r: " << K_r.transpose()

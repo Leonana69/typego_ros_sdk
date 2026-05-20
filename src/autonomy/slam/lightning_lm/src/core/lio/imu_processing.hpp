@@ -269,6 +269,12 @@ inline void ImuProcess::UndistortPcl(const MeasureGroup &meas, ESKF &kf_state, C
         return;
     }
 
+    // Loop-invariant for both undistortion loops below (imu_state is fixed at
+    // this point): hoist the extrinsic transpose and end-frame rotation inverse
+    // out of the per-point inner loop.
+    const Mat3d R_lidar_imu_T = R_lidar_imu_.transpose();
+    const auto imu_rot_inv = imu_state.rot_.inverse();
+
     auto it_pcl = pcl_out->points.end() - 1;
     for (auto it_kp = imu_pose_.end() - 1; it_kp != imu_pose_.begin(); it_kp--) {
         auto head = it_kp - 1;
@@ -296,9 +302,9 @@ inline void ImuProcess::UndistortPcl(const MeasureGroup &meas, ESKF &kf_state, C
 
             Vec3d P_i(it_pcl->x, it_pcl->y, it_pcl->z);
             Vec3d T_ei(pos_imu + vel_imu * dt + 0.5 * acc_imu * dt * dt - imu_state.pos_);
-            Vec3d p_compensate = R_lidar_imu_.transpose() *
-                                 (imu_state.rot_.inverse() * (R_i * (R_lidar_imu_ * P_i + t_lidar_mu_) + T_ei) -
-                                  t_lidar_mu_);  // not accurate!
+            Vec3d p_compensate =
+                R_lidar_imu_T * (imu_rot_inv * (R_i * (R_lidar_imu_ * P_i + t_lidar_mu_) + T_ei) -
+                                 t_lidar_mu_);  // not accurate!
 
             // save Undistorted points and their rotation
             it_pcl->x = p_compensate(0);

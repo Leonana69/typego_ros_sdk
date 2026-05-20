@@ -25,11 +25,24 @@ if (OPENMP_FOUND)
     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${OpenMP_CXX_FLAGS}")
 endif ()
 
+# Architecture-specific tuning. The previous code unconditionally emitted
+# x86-only -msse* flags, which the compiler rejects on aarch64 (Jetson Orin).
+# Select flags from CMAKE_SYSTEM_PROCESSOR instead so the build works on both.
 if (BUILD_WITH_MARCH_NATIVE)
     add_compile_options(-march=native)
 else ()
-    add_definitions(-msse -msse2 -msse3 -msse4 -msse4.1 -msse4.2)
-    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -msse -msse2 -msse3 -msse4 -msse4.1 -msse4.2")
+    string(TOLOWER "${CMAKE_SYSTEM_PROCESSOR}" LIGHTNING_ARCH)
+    if (LIGHTNING_ARCH MATCHES "aarch64|arm64")
+        # Jetson Orin carries Cortex-A78AE cores; -mcpu sets ISA + scheduling.
+        add_compile_options(-mcpu=cortex-a78)
+        message(STATUS "lightning: aarch64 detected — building with -mcpu=cortex-a78")
+    elseif (LIGHTNING_ARCH MATCHES "x86_64|amd64|i.86")
+        # -msse4.2 implies the whole -msse..-msse4.1 chain.
+        add_compile_options(-msse4.2)
+        message(STATUS "lightning: x86 detected — building with -msse4.2")
+    else ()
+        message(STATUS "lightning: unknown arch '${CMAKE_SYSTEM_PROCESSOR}' — no -march tuning applied")
+    endif ()
 endif ()
 
 include_directories(

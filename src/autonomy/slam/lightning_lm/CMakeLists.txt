@@ -14,10 +14,26 @@ set(CMAKE_BUILD_TYPE Release)
 # 导入第三方库，同时做一些全局编译选项配置
 add_definitions("-DPCL_NO_PRECOMPILE")
 
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fPIC -fopenmp -fPIC -g")
-set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS} -O2 -fopenmp -fPIC -g -ggdb")
-set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS} -ggdb -g -fopenmp -fPIC -g")
+# Base flags applied to every build type. CMake appends the per-config flags
+# (CMAKE_CXX_FLAGS_<CONFIG>) on top of these, so the per-config strings must
+# NOT re-embed ${CMAKE_CXX_FLAGS} — doing so passed every flag twice.
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fPIC -fopenmp -g")
 set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -fPIC -g")
+
+# Release: -O3 plus -DNDEBUG. -DNDEBUG is essential: without it Eigen keeps its
+# internal assertions live and every assert() runs, including inside the LIO
+# per-point hot loops. It was previously missing from this Release override.
+set(CMAKE_CXX_FLAGS_RELEASE "-O3 -DNDEBUG")
+set(CMAKE_CXX_FLAGS_DEBUG "-O0 -ggdb")
+
+# Optional, numerically-aggressive math — deliberately OFF and kept isolated.
+# -ffast-math relaxes IEEE-754 semantics and must never be bundled with the
+# default flags; enable explicitly with -DLIGHTNING_FAST_MATH=ON.
+option(LIGHTNING_FAST_MATH "Build with -ffast-math (relaxes IEEE FP; numerically aggressive)" OFF)
+if (LIGHTNING_FAST_MATH)
+    message(WARNING "LIGHTNING_FAST_MATH=ON: building with -ffast-math; floating-point results will differ.")
+    add_compile_options(-ffast-math)
+endif ()
 
 
 if (CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")

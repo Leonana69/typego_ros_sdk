@@ -208,6 +208,12 @@ class LaserMapping {
     /// 点到点相关
     std::vector<char> point_selected_icp_;  // 点到点的selected points
 
+    /// ObsModel reusable scratch buffers (avoid per-call heap allocation)
+    std::vector<size_t> obs_index_;   // point index list
+    std::vector<Mat6d> obs_JTJ_;      // per-point J^T J
+    std::vector<Vec6d> obs_JTr_;      // per-point J^T r
+    std::vector<double> obs_res_sq_;  // per-point squared residual
+
     std::mutex mtx_buffer_;
     std::deque<double> time_buffer_;
 
