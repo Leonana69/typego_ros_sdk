@@ -77,6 +77,8 @@ public:
                     const float scale=1.0f,
                     const float alpha=0.9f);
 
+    void DeleteNodeMarker(const std::string& ns, const int id=0);
+
     void VizGraph(const NodePtrStack& graph);
 
     void VizPointCloud(const rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr viz_pub, 

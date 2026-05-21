@@ -93,6 +93,9 @@ void FARMaster::Init() {
   is_reset_env_       = false;
   is_stop_update_     = false;
   is_init_completed_  = false;
+  has_active_goal_viz_ = false;
+  goal_viz_reached_ = false;
+  goal_viz_reached_time_ = 0.0;
 
   // allocate memory to pointers
   new_vertices_ptr_     = PointCloudPtr(new pcl::PointCloud<PCLPoint>());
@@ -141,6 +144,7 @@ void FARMaster::Init() {
 }
 
 void FARMaster::ResetEnvironmentAndGraph() {
+  this->ClearGoalVisualization();
   this->ResetInternalValues();
   if (!FARUtil::IsDebug) { // Terminal Output
     printf("\033[A"), printf("\033[A"), printf("\033[2K");
@@ -165,10 +169,50 @@ void FARMaster::ResetEnvironmentAndGraph() {
   planner_viz_.VizPath(empty_path);
 }
 
+void FARMaster::MarkGoalVisualizationReached() {
+  if (!has_active_goal_viz_ || goal_viz_reached_) {
+    return;
+  }
+
+  planner_viz_.VizPoint3D(active_goal_viz_point_, "original_goal", VizColor::GREEN, 1.5);
+  planner_viz_.PubNodesVisualization();
+  planner_viz_.DeleteNodeMarker("waypoint");
+  planner_viz_.DeleteNodeMarker("free_goal");
+
+  goal_viz_reached_ = true;
+  goal_viz_reached_time_ = nh_->now().seconds();
+}
+
+void FARMaster::UpdateGoalVisualization() {
+  if (!goal_viz_reached_) {
+    return;
+  }
+  if (nh_->now().seconds() - goal_viz_reached_time_ <= goal_viz_hold_time_) {
+    return;
+  }
+
+  planner_viz_.DeleteNodeMarker("original_goal");
+  has_active_goal_viz_ = false;
+  goal_viz_reached_ = false;
+}
+
+void FARMaster::ClearGoalVisualization() {
+  if (!has_active_goal_viz_ && !goal_viz_reached_) {
+    return;
+  }
+
+  planner_viz_.DeleteNodeMarker("original_goal");
+  planner_viz_.DeleteNodeMarker("waypoint");
+  planner_viz_.DeleteNodeMarker("free_goal");
+  has_active_goal_viz_ = false;
+  goal_viz_reached_ = false;
+}
+
 void FARMaster::MainLoopCallBack() {
   if (!is_init_completed_) {
     return;
   }
+  this->UpdateGoalVisualization();
   if (is_reset_env_) {
       this->ResetEnvironmentAndGraph();
       is_reset_env_ = false;
@@ -342,6 +386,7 @@ void FARMaster::PlanningCallBack() {
     traverse_timer.data = FARUtil::Timer.record_time("Overall_executing");
     traverse_time_pub_->publish(traverse_timer);
     if (is_reach_goal) {
+      this->MarkGoalVisualizationReached();
       FARUtil::Timer.end_time("Overall_executing", false);
     }
 
@@ -815,7 +860,11 @@ void FARMaster::WaypointCallBack(const geometry_msgs::msg::PointStamped& route_g
   graph_planner_.UpdateGoal(goal_p);
   FARUtil::Timer.start_time("Overall_executing", true);
   // visualize original goal
+  active_goal_viz_point_ = goal_p;
+  has_active_goal_viz_ = true;
+  goal_viz_reached_ = false;
   planner_viz_.VizPoint3D(goal_p, "original_goal", VizColor::RED, 1.5);
+  planner_viz_.PubNodesVisualization();
 }
 
 /* allocate static utility PointCloud pointer memory */

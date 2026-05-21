@@ -78,6 +78,11 @@ private:
     bool is_reset_env_, is_stop_update_, is_init_completed_;
 
     geometry_msgs::msg::PointStamped goal_waypoint_stamped_;
+    Point3D active_goal_viz_point_;
+    bool has_active_goal_viz_;
+    bool goal_viz_reached_;
+    double goal_viz_reached_time_;
+    const double goal_viz_hold_time_ = 1.0;
 
     bool is_cloud_init_, is_scan_init_, is_odom_init_, is_planner_running_;
     bool is_graph_init_;
@@ -130,6 +135,12 @@ private:
     void LoadROSParams();
 
     void ResetEnvironmentAndGraph();
+
+    void MarkGoalVisualizationReached();
+
+    void UpdateGoalVisualization();
+
+    void ClearGoalVisualization();
 
     void LocalBoundaryHandler(const std::vector<PointPair>& local_boundary);
 

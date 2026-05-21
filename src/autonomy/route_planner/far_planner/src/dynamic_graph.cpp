@@ -62,9 +62,11 @@ bool DynamicGraph::IsInterNavpointNecessary() {
 }
 
 bool DynamicGraph::ExtractGraphNodes(const CTNodeStack& new_ctnodes) {
-    if (new_ctnodes.empty()) return false;
     NavNodePtr new_node_ptr = NULL;
     new_nodes_.clear();
+
+    // Free-space trajectory nodes must keep updating even when no new contour
+    // vertices are detected. Open areas can otherwise stall until odometry moves.
     if (this->IsInterNavpointNecessary()) { // check wheter or not need inter navigation points
         if (FARUtil::IsDebug) RCLCPP_INFO(nh_->get_logger(), "DG: One trajectory node has been created.");
         this->CreateNavNodeFromPoint(last_connect_pos_, new_node_ptr, false, true);

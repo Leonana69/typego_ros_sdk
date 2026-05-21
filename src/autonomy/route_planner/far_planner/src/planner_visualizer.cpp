@@ -61,6 +61,20 @@ void DPVisualizer::VizPoint3D(const Point3D& point,
     marker_set_.insert(node_marker);
 }
 
+void DPVisualizer::DeleteNodeMarker(const std::string& ns, const int id)
+{
+    Marker node_marker;
+    node_marker.header.frame_id = FARUtil::worldFrameId;
+    node_marker.header.stamp = nh_->now();
+    node_marker.ns = ns;
+    node_marker.id = id;
+    node_marker.action = Marker::DELETE;
+
+    MarkerArray marker_array;
+    marker_array.markers.push_back(node_marker);
+    viz_node_pub_->publish(marker_array);
+}
+
 void DPVisualizer::VizPath(const NodePtrStack& global_path, const bool& is_free_nav) {
     Marker path_marker;
     path_marker.type = Marker::LINE_STRIP;
@@ -483,4 +497,3 @@ void DPVisualizer::SetColor(const VizColor& color,
     }
     scan_marker.color = c;
 }
-
