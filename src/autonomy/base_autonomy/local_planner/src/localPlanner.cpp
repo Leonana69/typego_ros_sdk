@@ -6,6 +6,7 @@
 #include <iostream>
 #include <mutex>
 #include <atomic>
+#include <limits>
 #include <stdexcept>
 #include "rclcpp/rclcpp.hpp"
 #include "rclcpp/time.hpp"
@@ -87,6 +88,8 @@ double terrainVoxelSize = 0.2;
 bool useTerrainAnalysis = false;
 bool checkObstacle = true;
 bool checkRotObstacle = false;
+bool clearVehicleFootprint = true;
+bool plannerDiagnostics = true;
 double adjacentRange = 3.5;
 double obstacleHeightThre = 0.2;
 double groundHeightThre = 0.1;
@@ -125,6 +128,14 @@ double goalClearRange = 0.5;
 double goalBehindRange = 0.8;
 double goalX = 0;
 double goalY = 0;
+double vehicleFootprintMargin = 0.05;
+int behindGoalTurnSign = 0;
+double plannerDiagLogInterval = 2.0;
+double plannerDiagBumpHeight = 0.1;
+double plannerDiagNearRange = 2.0;
+double plannerDiagPathDeviationThre = 35.0;
+double lastNoPathDiagTime = -1000.0;
+double lastPathDeviationDiagTime = -1000.0;
 
 float joySpeed = 0;
 float joySpeedRaw = 0;
@@ -210,7 +221,32 @@ static void releaseAutonomyControl()
   autonomyMode = false;
   joySpeed = 0.0f;
   joySpeedRaw = 0.0f;
+  behindGoalTurnSign = 0;
   publishJoy(false);
+}
+
+static bool insideClearedVehicleFootprint(float x, float y)
+{
+  if (!clearVehicleFootprint) return false;
+  return fabs(x) <= static_cast<float>(vehicleLength / 2.0 + vehicleFootprintMargin) &&
+         fabs(y) <= static_cast<float>(vehicleWidth / 2.0 + vehicleFootprintMargin);
+}
+
+static bool shouldLogPlannerDiagnostic(double& lastLogTime)
+{
+  if (!plannerDiagnostics) return false;
+  double now = nh->now().seconds();
+  if (now - lastLogTime < plannerDiagLogInterval) return false;
+  lastLogTime = now;
+  return true;
+}
+
+static float angleDiffDeg(float a, float b)
+{
+  float diff = fabs(a - b);
+  while (diff > 360.0f) diff -= 360.0f;
+  if (diff > 180.0f) diff = 360.0f - diff;
+  return diff;
 }
 
 // Publish (or update) the waypoint marker. reached=false draws it in magenta
@@ -254,6 +290,7 @@ void activateGoal(double x, double y, GoalSource source)
   goalY = y;
   goalSource_ = source;
   autonomyMode = true;
+  behindGoalTurnSign = 0;
   joySpeed = clampedAutonomySpeed();
   publishJoy(true);
   RCLCPP_INFO(nh->get_logger(), "Goal activated: x=%.2f, y=%.2f", x, y);
@@ -802,6 +839,8 @@ int main(int argc, char** argv)
   nh->declare_parameter<bool>("useTerrainAnalysis", useTerrainAnalysis);
   nh->declare_parameter<bool>("checkObstacle", checkObstacle);
   nh->declare_parameter<bool>("checkRotObstacle", checkRotObstacle);
+  nh->declare_parameter<bool>("clearVehicleFootprint", clearVehicleFootprint);
+  nh->declare_parameter<bool>("plannerDiagnostics", plannerDiagnostics);
   nh->declare_parameter<double>("adjacentRange", adjacentRange);
   nh->declare_parameter<double>("obstacleHeightThre", obstacleHeightThre);
   nh->declare_parameter<double>("groundHeightThre", groundHeightThre);
@@ -834,6 +873,11 @@ int main(int argc, char** argv)
   nh->declare_parameter<double>("omniDirGoalThre", omniDirGoalThre);
   nh->declare_parameter<double>("goalClearRange", goalClearRange);
   nh->declare_parameter<double>("goalBehindRange", goalBehindRange);
+  nh->declare_parameter<double>("vehicleFootprintMargin", vehicleFootprintMargin);
+  nh->declare_parameter<double>("plannerDiagLogInterval", plannerDiagLogInterval);
+  nh->declare_parameter<double>("plannerDiagBumpHeight", plannerDiagBumpHeight);
+  nh->declare_parameter<double>("plannerDiagNearRange", plannerDiagNearRange);
+  nh->declare_parameter<double>("plannerDiagPathDeviationThre", plannerDiagPathDeviationThre);
   nh->declare_parameter<double>("goalX", goalX);
   nh->declare_parameter<double>("goalY", goalY);
   nh->declare_parameter<double>("goalTolerance", goal_tolerance_);
@@ -850,6 +894,8 @@ int main(int argc, char** argv)
   nh->get_parameter("useTerrainAnalysis", useTerrainAnalysis);
   nh->get_parameter("checkObstacle", checkObstacle);
   nh->get_parameter("checkRotObstacle", checkRotObstacle);
+  nh->get_parameter("clearVehicleFootprint", clearVehicleFootprint);
+  nh->get_parameter("plannerDiagnostics", plannerDiagnostics);
   nh->get_parameter("adjacentRange", adjacentRange);
   nh->get_parameter("obstacleHeightThre", obstacleHeightThre);
   nh->get_parameter("groundHeightThre", groundHeightThre);
@@ -882,6 +928,11 @@ int main(int argc, char** argv)
   nh->get_parameter("omniDirGoalThre", omniDirGoalThre);
   nh->get_parameter("goalClearRange", goalClearRange);
   nh->get_parameter("goalBehindRange", goalBehindRange);
+  nh->get_parameter("vehicleFootprintMargin", vehicleFootprintMargin);
+  nh->get_parameter("plannerDiagLogInterval", plannerDiagLogInterval);
+  nh->get_parameter("plannerDiagBumpHeight", plannerDiagBumpHeight);
+  nh->get_parameter("plannerDiagNearRange", plannerDiagNearRange);
+  nh->get_parameter("plannerDiagPathDeviationThre", plannerDiagPathDeviationThre);
   nh->get_parameter("goalX", goalX);
   nh->get_parameter("goalY", goalY);
   nh->get_parameter("goalTolerance", goal_tolerance_);
@@ -905,6 +956,17 @@ int main(int argc, char** argv)
   }
   if (obstacleHeightThre < 0) {
     RCLCPP_FATAL(nh->get_logger(), "obstacleHeightThre must be >= 0, got %f", obstacleHeightThre);
+    rclcpp::shutdown();
+    return 1;
+  }
+  if (vehicleFootprintMargin < 0) {
+    RCLCPP_FATAL(nh->get_logger(), "vehicleFootprintMargin must be >= 0, got %f", vehicleFootprintMargin);
+    rclcpp::shutdown();
+    return 1;
+  }
+  if (plannerDiagLogInterval < 0 || plannerDiagBumpHeight < 0 ||
+      plannerDiagNearRange < 0 || plannerDiagPathDeviationThre < 0) {
+    RCLCPP_FATAL(nh->get_logger(), "Planner diagnostic thresholds must be >= 0");
     rclcpp::shutdown();
     return 1;
   }
@@ -1071,6 +1133,23 @@ int main(int argc, char** argv)
       size_t plannerCloudSize = plannerCloud->points.size();
       size_t boundaryCloudSize = boundaryCloud->points.size();
       size_t addedObstaclesSize = addedObstacles->points.size();
+      size_t diagTerrainCropPoints = 0;
+      size_t diagTerrainHardObstaclePoints = 0;
+      size_t diagTerrainSmallHardBumps = 0;
+      size_t diagTerrainCostBumps = 0;
+      size_t diagTerrainNearHardObstaclePoints = 0;
+      size_t diagFootprintClearedPoints = 0;
+      size_t diagBoundaryCropPoints = 0;
+      size_t diagAddedObstacleCropPoints = 0;
+      double diagTerrainMaxHeight = 0.0;
+      double diagNearestHardDist = std::numeric_limits<double>::infinity();
+      float diagNearestHardX = 0.0f;
+      float diagNearestHardY = 0.0f;
+      float diagNearestHardH = 0.0f;
+      double diagNearestSmallHardDist = std::numeric_limits<double>::infinity();
+      float diagNearestSmallHardX = 0.0f;
+      float diagNearestSmallHardY = 0.0f;
+      float diagNearestSmallHardH = 0.0f;
       plannerCloudCrop->reserve(plannerCloudSize + boundaryCloudSize + addedObstaclesSize);
       for (size_t i = 0; i < plannerCloudSize; i++) {
         float pointX1 = plannerCloud->points[i].x - vehicleX;
@@ -1083,8 +1162,37 @@ int main(int argc, char** argv)
         point.intensity = plannerCloud->points[i].intensity;
 
         float disSq = point.x * point.x + point.y * point.y;
+        if (insideClearedVehicleFootprint(point.x, point.y)) {
+          diagFootprintClearedPoints++;
+          continue;
+        }
         if (disSq < adjacentRangeSq && ((point.z > minRelZ && point.z < maxRelZ) || useTerrainAnalysis)) {
           plannerCloudCrop->push_back(point);
+          diagTerrainCropPoints++;
+          float h = point.intensity;
+          if (h > diagTerrainMaxHeight) diagTerrainMaxHeight = h;
+          if (h > obstacleHeightThre) {
+            diagTerrainHardObstaclePoints++;
+            double dis = sqrt(disSq);
+            if (dis < diagNearestHardDist) {
+              diagNearestHardDist = dis;
+              diagNearestHardX = point.x;
+              diagNearestHardY = point.y;
+              diagNearestHardH = h;
+            }
+            if (h <= plannerDiagBumpHeight) diagTerrainSmallHardBumps++;
+            if (h <= plannerDiagBumpHeight && dis < diagNearestSmallHardDist) {
+              diagNearestSmallHardDist = dis;
+              diagNearestSmallHardX = point.x;
+              diagNearestSmallHardY = point.y;
+              diagNearestSmallHardH = h;
+            }
+            if (disSq <= plannerDiagNearRange * plannerDiagNearRange) {
+              diagTerrainNearHardObstaclePoints++;
+            }
+          } else if (h > groundHeightThre) {
+            diagTerrainCostBumps++;
+          }
         }
       }
 
@@ -1099,6 +1207,7 @@ int main(int argc, char** argv)
         float disSq = point.x * point.x + point.y * point.y;
         if (disSq < adjacentRangeSq) {
           plannerCloudCrop->push_back(point);
+          diagBoundaryCropPoints++;
         }
       }
 
@@ -1113,6 +1222,7 @@ int main(int argc, char** argv)
         float disSq = point.x * point.x + point.y * point.y;
         if (disSq < adjacentRangeSq) {
           plannerCloudCrop->push_back(point);
+          diagAddedObstacleCropPoints++;
         }
       }
 
@@ -1144,16 +1254,26 @@ int main(int argc, char** argv)
         }
 
         if (!twoWayDrive) {
-          if (joyDir > 95.0) {
-            joyDir = 95.0;
-            preSelectedGroupID = 0;
-          } else if (joyDir < -95.0) {
-            joyDir = -95.0;
-            preSelectedGroupID = 6;
+          if (fabs(joyDir) > freezeAng) {
+            if (behindGoalTurnSign == 0) {
+              behindGoalTurnSign = joyDir >= 0.0f ? 1 : -1;
+            }
+            joyDir = behindGoalTurnSign > 0 ? 95.0f : -95.0f;
+            preSelectedGroupID = behindGoalTurnSign > 0 ? 0 : 6;
+          } else {
+            if (fabs(joyDir) < freezeAng - 20.0) behindGoalTurnSign = 0;
+            if (joyDir > 95.0) {
+              joyDir = 95.0;
+              preSelectedGroupID = 0;
+            } else if (joyDir < -95.0) {
+              joyDir = -95.0;
+              preSelectedGroupID = 6;
+            }
           }
         }
       } else {
         freezeStatus = 0;
+        behindGoalTurnSign = 0;
       }
 
       if (freezeStatus == 1 && autonomyMode) {
@@ -1165,6 +1285,12 @@ int main(int argc, char** argv)
       float defPathScale = pathScale;
       if (pathScaleBySpeed) pathScale = defPathScale * joySpeed;
       if (pathScale < minPathScale) pathScale = minPathScale;
+      float diagInitialPathRange = pathRange;
+      float diagInitialPathScale = pathScale;
+      size_t diagHardObstacleBlockVotes = 0;
+      size_t diagMaxPointBlockVotes = 0;
+      float diagBestGroupScore = 0.0f;
+      int diagBestGroupCandidate = -1;
 
       while (pathScale >= minPathScale && pathRange >= minPathRange) {
         for (int i = 0; i < 36 * pathNum; i++) {
@@ -1228,6 +1354,10 @@ int main(int argc, char** argv)
                 size_t blockedPathByVoxelNum = correspondences[ind].size();
                 for (size_t j = 0; j < blockedPathByVoxelNum; j++) {
                   if (h > obstacleHeightThre || !useTerrainAnalysis) {
+                    diagHardObstacleBlockVotes++;
+                    if (blockedPathByVoxelNum > diagMaxPointBlockVotes) {
+                      diagMaxPointBlockVotes = blockedPathByVoxelNum;
+                    }
                     clearPathList[pathNum * rotDir + correspondences[ind][j]]++;
                   } else {
                     if (pathPenaltyList[pathNum * rotDir + correspondences[ind][j]] < h && h > groundHeightThre) {
@@ -1299,6 +1429,10 @@ int main(int argc, char** argv)
             float rotAng = (10.0 * rotDir - 180.0) * M_PI / 180;
             float rotDeg = 10.0 * rotDir;
             if (rotDeg > 180.0) rotDeg -= 360.0;
+            if (clearPathPerGroupScore[i] > diagBestGroupScore) {
+              diagBestGroupScore = clearPathPerGroupScore[i];
+              diagBestGroupCandidate = i;
+            }
             if (maxScore < clearPathPerGroupScore[i] && ((rotAng * 180.0 / M_PI > minObsAngCW && rotAng * 180.0 / M_PI < minObsAngCCW) || 
                 (rotDeg > minObsAngCW && rotDeg < minObsAngCCW && twoWayDrive) || !checkRotObstacle)) {
               maxScore = clearPathPerGroupScore[i];
@@ -1324,6 +1458,25 @@ int main(int argc, char** argv)
         if (selectedGroupID >= 0) {
           int rotDir = int(selectedGroupID / groupNum);
           float rotAng = (10.0 * rotDir - 180.0) * M_PI / 180;
+          float selectedRotDeg = 10.0f * rotDir - 180.0f;
+          float selectedHeadingDiff = angleDiffDeg(selectedRotDeg, joyDir);
+          if (diagTerrainHardObstaclePoints > 0 &&
+              selectedHeadingDiff > plannerDiagPathDeviationThre &&
+              shouldLogPlannerDiagnostic(lastPathDeviationDiagTime)) {
+            RCLCPP_INFO(nh->get_logger(),
+                "Local path deviates from goal direction: selected_rot=%.1fdeg goal_dir=%.1fdeg diff=%.1fdeg, "
+                "terrain_crop=%zu hard=%zu small_hard(<%.2fm)=%zu cost=%zu near_hard_%.1fm=%zu max_h=%.3f, "
+                "nearest_hard=(%.2f,%.2f,h=%.3f,d=%.2f) nearest_small=(%.2f,%.2f,h=%.3f,d=%.2f), "
+                "footprint_cleared=%zu boundary=%zu added=%zu block_votes=%zu",
+                selectedRotDeg, joyDir, selectedHeadingDiff,
+                diagTerrainCropPoints, diagTerrainHardObstaclePoints,
+                plannerDiagBumpHeight, diagTerrainSmallHardBumps, diagTerrainCostBumps,
+                plannerDiagNearRange, diagTerrainNearHardObstaclePoints, diagTerrainMaxHeight,
+                diagNearestHardX, diagNearestHardY, diagNearestHardH, diagNearestHardDist,
+                diagNearestSmallHardX, diagNearestSmallHardY, diagNearestSmallHardH, diagNearestSmallHardDist,
+                diagFootprintClearedPoints, diagBoundaryCropPoints, diagAddedObstacleCropPoints,
+                diagHardObstacleBlockVotes);
+          }
 
           selectedGroupID = selectedGroupID % groupNum;
           size_t selectedPathLength = startPaths[selectedGroupID]->points.size();
@@ -1454,6 +1607,39 @@ int main(int argc, char** argv)
       pathScale = defPathScale;
 
       if (!pathFound) {
+        if (shouldLogPlannerDiagnostic(lastNoPathDiagTime)) {
+          const char* likelyCause = "no_positive_path_score";
+          if (freezeStatus == 1 && autonomyMode) {
+            likelyCause = "behind_goal_freeze";
+          } else if (diagTerrainHardObstaclePoints > 0 && diagHardObstacleBlockVotes > 0) {
+            likelyCause = "terrain_map_obstacles";
+          } else if (diagBoundaryCropPoints > 0 || diagAddedObstacleCropPoints > 0) {
+            likelyCause = "boundary_or_added_obstacles";
+          } else if (relativeGoalDis + goalClearRange < minPathRange && pathCropByGoal) {
+            likelyCause = "goal_crop_too_short";
+          }
+
+          RCLCPP_WARN(nh->get_logger(),
+              "No free local paths: likely=%s, "
+              "terrain_crop=%zu hard=%zu small_hard(<%.2fm)=%zu cost=%zu near_hard_%.1fm=%zu max_h=%.3f, "
+              "nearest_hard=(%.2f,%.2f,h=%.3f,d=%.2f) nearest_small=(%.2f,%.2f,h=%.3f,d=%.2f), "
+              "footprint_cleared=%zu boundary=%zu added=%zu block_votes=%zu max_point_votes=%zu, "
+              "best_group=%d best_score=%.3f, goal_dist=%.2f joy_dir=%.1f path_range=%.2f path_scale=%.2f, "
+              "freeze=%d two_way=%d check_obs=%d crop_by_goal=%d",
+              likelyCause,
+              diagTerrainCropPoints, diagTerrainHardObstaclePoints,
+              plannerDiagBumpHeight, diagTerrainSmallHardBumps, diagTerrainCostBumps,
+              plannerDiagNearRange, diagTerrainNearHardObstaclePoints, diagTerrainMaxHeight,
+              diagNearestHardX, diagNearestHardY, diagNearestHardH, diagNearestHardDist,
+              diagNearestSmallHardX, diagNearestSmallHardY, diagNearestSmallHardH, diagNearestSmallHardDist,
+              diagFootprintClearedPoints, diagBoundaryCropPoints, diagAddedObstacleCropPoints,
+              diagHardObstacleBlockVotes, diagMaxPointBlockVotes,
+              diagBestGroupCandidate, diagBestGroupScore,
+              relativeGoalDis, joyDir, diagInitialPathRange, diagInitialPathScale,
+              freezeStatus, static_cast<int>(twoWayDrive), static_cast<int>(checkObstacle),
+              static_cast<int>(pathCropByGoal));
+        }
+
         path.poses.resize(1);
         path.poses[0].pose.position.x = 0;
         path.poses[0].pose.position.y = 0;

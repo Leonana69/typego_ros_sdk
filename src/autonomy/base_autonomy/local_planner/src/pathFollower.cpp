@@ -74,6 +74,7 @@ bool manualMode = false;
 bool autonomyMode = false;
 double autonomySpeed = 1.0;
 double joyToSpeedDelay = 2.0;
+int oneWayTurnSign = 0;
 
 float joySpeed = 0;
 float joySpeedRaw = 0;
@@ -434,6 +435,19 @@ int main(int argc, char** argv)
       else if (dirDiff < -M_PI) dirDiff += 2 * M_PI;
       if (dirDiff > M_PI) dirDiff -= 2 * M_PI;
       else if (dirDiff < -M_PI) dirDiff += 2 * M_PI;
+
+      if (!twoWayDrive) {
+        const float turnLockEnter = 170.0f * M_PI / 180.0f;
+        const float turnLockExit = 135.0f * M_PI / 180.0f;
+        if (fabs(dirDiff) > turnLockEnter) {
+          if (oneWayTurnSign == 0) {
+            oneWayTurnSign = dirDiff >= 0.0f ? 1 : -1;
+          }
+          dirDiff = oneWayTurnSign > 0 ? fabs(dirDiff) : -fabs(dirDiff);
+        } else if (fabs(dirDiff) < turnLockExit) {
+          oneWayTurnSign = 0;
+        }
+      }
 
       if (twoWayDrive) {
         double time = nh->now().seconds();
