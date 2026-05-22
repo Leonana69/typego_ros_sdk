@@ -1037,6 +1037,12 @@ int main(int argc, char** argv)
   auto pubSlowDown = nh->create_publisher<std_msgs::msg::Int8> ("/slow_down", 5);
   std_msgs::msg::Int8 slow;
 
+  // Rotation-clearance sector [minObsAngCW, minObsAngCCW] in degrees (cw <= 0 <= ccw),
+  // consumed by pathFollower to keep the body from turning into nearby obstacles.
+  auto pubRotClearance = nh->create_publisher<std_msgs::msg::Float32MultiArray>("/rot_clearance", 5);
+  std_msgs::msg::Float32MultiArray rotClearance;
+  rotClearance.data.resize(2);
+
   auto pubPath = nh->create_publisher<nav_msgs::msg::Path>("/path", 5);
   nav_msgs::msg::Path path;
 
@@ -1379,8 +1385,11 @@ int main(int argc, char** argv)
             }
           }
 
+          // Rotation-clearance sector: also computed for omnidirectional robots so the
+          // path follower can suppress unsafe body rotation, even when the rotation
+          // obstacle group filter (checkRotObstacle) stays disabled.
           if (disSq < diameterScaledSq && (fabs(x) > vehicleLength / pathScale / 2.0 || fabs(y) > vehicleWidth / pathScale / 2.0) &&
-              (h > obstacleHeightThre || !useTerrainAnalysis) && checkRotObstacle) {
+              (h > obstacleHeightThre || !useTerrainAnalysis) && (checkRotObstacle || omniDirDrive)) {
             float angObs = atan2(y, x) * 180.0 / M_PI;
             if (angObs > 0) {
               if (minObsAngCCW > angObs - angOffset) minObsAngCCW = angObs - angOffset;
@@ -1463,6 +1472,11 @@ int main(int argc, char** argv)
           else if (selectedPathNum < slowPathNumThre && fabs(selectedGroupID - 129) > slowGroupNumThre) slow.data = 3;
           else slow.data = 0;
           pubSlowDown->publish(slow);
+
+          // Publish the rotation-clearance sector for the selected (final) path scale.
+          rotClearance.data[0] = minObsAngCW;
+          rotClearance.data[1] = minObsAngCCW;
+          pubRotClearance->publish(rotClearance);
         }
 
         if (selectedGroupID >= 0) {
@@ -1659,6 +1673,11 @@ int main(int argc, char** argv)
         path.header.frame_id = vehicleFrame;
         pubPath->publish(path);
 
+        // No free path found: close the rotation sector so the body holds heading.
+        rotClearance.data[0] = 0.0;
+        rotClearance.data[1] = 0.0;
+        pubRotClearance->publish(rotClearance);
+
         #if PLOTPATHSET == 1
         freePaths->clear();
         sensor_msgs::msg::PointCloud2 freePaths2;
@@ -1687,6 +1706,12 @@ int main(int argc, char** argv)
         path.header.stamp = nh->now();
         path.header.frame_id = vehicleFrame;
         pubPath->publish(path);
+
+        // Stale scan: close the rotation sector — clearance is unknown.
+        rotClearance.data[0] = 0.0;
+        rotClearance.data[1] = 0.0;
+        pubRotClearance->publish(rotClearance);
+
         RCLCPP_WARN_THROTTLE(nh->get_logger(), *nh->get_clock(), 2000,
             "Scan data stale, publishing stop path");
       }

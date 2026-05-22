@@ -58,12 +58,17 @@ profiles:
   far_planner_profile: outdoor            # far_planner/config/<name>.yaml: indoor | outdoor
   tare_planner_profile: indoor_small      # tare_planner/<name>.yaml: indoor_small | indoor_large | outdoor
 
+# NOTE: the local_planner path-collision table (local_planner/paths/
+# correspondences.txt) is baked for a fixed footprint. After changing
+# length/width, regenerate it with local_planner/paths/path_generator.m
+# (update the matching vehicleLength/vehicleWidth there) or path collision
+# checking will not reflect the new size.
 vehicle:
-  length: 0.7              # m  footprint length  -> local_planner vehicleLength
+  length: 0.75              # m  footprint length  -> local_planner vehicleLength
   width: 0.4               # m  footprint width   -> local_planner vehicleWidth
 
 sensors:
-  lidar_offset_x: 0.05     # m  LiDAR X offset from base_link  -> sensorOffsetX
+  lidar_offset_x: 0.30     # m  LiDAR X offset from base_link  -> sensorOffsetX
   lidar_offset_y: 0.0      # m  LiDAR Y offset from base_link  -> sensorOffsetY
   camera_offset_z: 0.25    # m  camera Z offset from base_link -> cameraOffsetZ
 

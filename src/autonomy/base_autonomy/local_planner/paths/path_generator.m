@@ -111,11 +111,30 @@ pause(1.0);
 %% find correspondence
 %{.
 voxelSize = 0.02;
-searchRadius = 0.45;
+searchRadius = 0.45;     % voxel-grid extent; must match localPlanner.cpp searchRadius
 offsetX = 3.2;
 offsetY = 4.5;
 voxelNumX = 161;
 voxelNumY = 451;
+
+% --- Vehicle footprint for collision checking --------------------------------
+% The voxel->path corridor is an oriented rectangle (the robot body) swept along
+% each path. The footprint is baked inflated by 1/minPathScale so the effective
+% world-frame footprint (baked * pathScale) equals the true footprint at the
+% minimum path scale and stays conservative above it.
+% Keep these in sync with the local_planner configuration:
+%   vehicleLength / vehicleWidth -> robot.yaml  vehicle.length / vehicle.width
+%   footprintMargin              -> local_planner.launch  vehicleFootprintMargin
+%   minPathScale                 -> local_planner.launch  minPathScale
+% Changing any of them requires regenerating correspondences.txt.
+vehicleLength   = 0.75;
+vehicleWidth    = 0.4;
+footprintMargin = 0.05;
+minPathScale    = 0.675;
+
+bakeHalfL  = (vehicleLength / 2 + footprintMargin) / minPathScale;
+bakeHalfW  = (vehicleWidth  / 2 + footprintMargin) / minPathScale;
+bakeRadius = sqrt(bakeHalfL^2 + bakeHalfW^2);   % rectangle bounding circle
 
 fprintf('\nPreparing voxels\n');
 
@@ -138,9 +157,28 @@ end
 plot3(voxelPoints(:, 1), voxelPoints(:, 2), zeros(voxelPointNum, 1), 'k.');
 pause(1.0);
 
-fprintf('\nCollision checking\n');
+fprintf('\nComputing path sample headings\n');
 
-[ind, dis] = rangesearch(pathAll(1 : 2, :)', voxelPoints, searchRadius);
+% Per-sample heading = local path tangent (forward difference within a path).
+% The last sample of each path reuses the preceding sample's heading.
+numSamples = size(pathAll, 2);
+heading = zeros(1, numSamples);
+for c = 1 : numSamples - 1
+    if pathAll(4, c + 1) == pathAll(4, c)
+        heading(c) = atan2(pathAll(2, c + 1) - pathAll(2, c), ...
+                           pathAll(1, c + 1) - pathAll(1, c));
+    elseif c > 1
+        heading(c) = heading(c - 1);
+    end
+end
+if numSamples > 1
+    heading(numSamples) = heading(numSamples - 1);
+end
+
+fprintf('\nCollision checking (oriented-rectangle sweep)\n');
+
+% Broad phase: candidate path samples within the rectangle's bounding circle.
+[ind, ~] = rangesearch(pathAll(1 : 2, :)', voxelPoints, bakeRadius);
 
 fprintf('\nSaving correspondences\n');
 
@@ -148,22 +186,25 @@ fileID = fopen('correspondences.txt', 'w');
 
 for i = 1 : voxelPointNum
     fprintf(fileID, '%d ', i - 1);
-    
-    indVoxel = sort(ind{i});
-    indVoxelNum = size(indVoxel, 2);
-    
-    pathIndRec = -1;
-    for j = 1 : indVoxelNum
-        pathInd = pathAll(4, indVoxel(j));
-        if pathInd == pathIndRec
-            continue;
-        end
 
-        fprintf(fileID, '%d ', pathInd);
-        pathIndRec = pathInd;
+    cand = ind{i};
+    if ~isempty(cand)
+        % Narrow phase: keep candidates whose oriented body rectangle, placed at
+        % the path sample and aligned with the local tangent, contains the voxel.
+        rx = voxelPoints(i, 1) - pathAll(1, cand);
+        ry = voxelPoints(i, 2) - pathAll(2, cand);
+        ch = cos(heading(cand));
+        sh = sin(heading(cand));
+        xLocal =  ch .* rx + sh .* ry;
+        yLocal = -sh .* rx + ch .* ry;
+        inRect = abs(xLocal) <= bakeHalfL & abs(yLocal) <= bakeHalfW;
+        hitPaths = unique(pathAll(4, cand(inRect)));
+        for j = 1 : numel(hitPaths)
+            fprintf(fileID, '%d ', hitPaths(j));
+        end
     end
     fprintf(fileID, '-1\n');
-    
+
     if mod(i, 1000) == 0
         i
     end

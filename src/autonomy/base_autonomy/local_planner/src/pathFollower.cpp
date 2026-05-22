@@ -71,6 +71,8 @@ double stopTime = 5.0;
 bool noRotAtStop = false;
 bool noRotAtGoal = true;
 bool omniDirDrive = false;
+double rotMarginDeg = 10.0;     // deg: slack kept inside the rotation-clearance sector
+double rotScaleBandDeg = 25.0;  // deg: taper yaw rate to zero over this band near the sector edge
 bool manualMode = false;
 bool autonomyMode = false;
 double autonomySpeed = 1.0;
@@ -85,6 +87,12 @@ float joyManualLeft = 0;
 float joyManualYaw = 0;
 std::atomic<int> safetyStop{0};
 std::atomic<int> slowDown{0};
+
+// Rotation-clearance sector from localPlanner (degrees, cw <= 0 <= ccw).
+// Defaults are fully open so the yaw clamp is inert until the first message.
+std::atomic<float> rotClearCW{-180.0f};
+std::atomic<float> rotClearCCW{180.0f};
+std::atomic<double> lastRotClearTime{0};
 
 float vehicleX = 0;
 float vehicleY = 0;
@@ -231,6 +239,14 @@ void slowDownHandler(const std_msgs::msg::Int8::ConstSharedPtr slow)
   slowDown = slow->data;
 }
 
+void rotClearanceHandler(const std_msgs::msg::Float32MultiArray::ConstSharedPtr msg)
+{
+  if (msg->data.size() < 2) return;
+  rotClearCW.store(msg->data[0]);
+  rotClearCCW.store(msg->data[1]);
+  lastRotClearTime.store(nh->now().seconds());
+}
+
 void speedConfigHandler(const std_msgs::msg::Float32MultiArray::ConstSharedPtr msg)
 {
   if (msg->data.size() < 2) return;
@@ -282,6 +298,8 @@ int main(int argc, char** argv)
   nh->declare_parameter<bool>("noRotAtStop", noRotAtStop);
   nh->declare_parameter<bool>("noRotAtGoal", noRotAtGoal);
   nh->declare_parameter<bool>("omniDirDrive", omniDirDrive);
+  nh->declare_parameter<double>("rotMarginDeg", rotMarginDeg);
+  nh->declare_parameter<double>("rotScaleBandDeg", rotScaleBandDeg);
   nh->declare_parameter<bool>("autonomyMode", autonomyMode);
   nh->declare_parameter<double>("autonomySpeed", autonomySpeed);
   nh->declare_parameter<double>("joyToSpeedDelay", joyToSpeedDelay);
@@ -316,6 +334,8 @@ int main(int argc, char** argv)
   nh->get_parameter("noRotAtStop", noRotAtStop);
   nh->get_parameter("noRotAtGoal", noRotAtGoal);
   nh->get_parameter("omniDirDrive", omniDirDrive);
+  nh->get_parameter("rotMarginDeg", rotMarginDeg);
+  nh->get_parameter("rotScaleBandDeg", rotScaleBandDeg);
   nh->get_parameter("autonomyMode", autonomyMode);
   nh->get_parameter("autonomySpeed", autonomySpeed);
   nh->get_parameter("joyToSpeedDelay", joyToSpeedDelay);
@@ -353,6 +373,9 @@ int main(int argc, char** argv)
   auto subStop = nh->create_subscription<std_msgs::msg::Int8>("/stop", 5, stopHandler);
 
   auto subSlowDown = nh->create_subscription<std_msgs::msg::Int8>("/slow_down", 5, slowDownHandler);
+
+  auto subRotClearance = nh->create_subscription<std_msgs::msg::Float32MultiArray>(
+      "/rot_clearance", 5, rotClearanceHandler);
 
   auto subSpeedConfig = nh->create_subscription<std_msgs::msg::Float32MultiArray>(
       "/speed_config", rclcpp::QoS(1).transient_local(), speedConfigHandler);
@@ -475,6 +498,29 @@ int main(int argc, char** argv)
 
       if (vehicleYawRate > maxYawRate * M_PI / 180.0) vehicleYawRate = maxYawRate * M_PI / 180.0;
       else if (vehicleYawRate < -maxYawRate * M_PI / 180.0) vehicleYawRate = -maxYawRate * M_PI / 180.0;
+
+      // Collision-aware rotation: an omnidirectional robot can translate toward the
+      // goal without facing it, so suppress yaw that would rotate the body into a
+      // nearby obstacle. The clearance sector [cw, ccw] comes from localPlanner;
+      // a stale signal (planner silent > 0.5 s) falls back to unrestricted rotation.
+      if (omniDirDrive) {
+        float clrCW = rotClearCW.load();    // <= 0 deg, clockwise (right) budget
+        float clrCCW = rotClearCCW.load();  // >= 0 deg, counter-clockwise (left) budget
+        if (lastRotClearTime.load() > 0 &&
+            nh->now().seconds() - lastRotClearTime.load() > 0.5) {
+          clrCW = -180.0f;
+          clrCCW = 180.0f;
+        }
+        if (vehicleYawRate > 0.0) {          // turning CCW / left
+          float budget = clrCCW - rotMarginDeg;
+          if (budget <= 0.0f) vehicleYawRate = 0;
+          else if (budget < rotScaleBandDeg) vehicleYawRate *= budget / rotScaleBandDeg;
+        } else if (vehicleYawRate < 0.0) {   // turning CW / right
+          float budget = -clrCW - rotMarginDeg;
+          if (budget <= 0.0f) vehicleYawRate = 0;
+          else if (budget < rotScaleBandDeg) vehicleYawRate *= budget / rotScaleBandDeg;
+        }
+      }
 
       if (joySpeed2 == 0 && !autonomyMode) {
         vehicleYawRate = maxYawRate * joyYaw * M_PI / 180.0;
