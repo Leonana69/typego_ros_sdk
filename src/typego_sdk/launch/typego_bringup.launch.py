@@ -35,6 +35,23 @@ _DEFAULT_FALLBACKS = {
     'web_gateway_port': '8080',
     'nav2_params_file': 'nav2_params.yaml',
     'slam_params_file': 'slam.yaml',
+    # profiles.* — which per-tool tuning YAML each planner loads
+    'local_planner_profile': 'dog',
+    'far_planner_profile': 'outdoor',
+    'tare_planner_profile': 'indoor_small',
+    # sensors.* — sensor mounting offsets
+    'sensor_offset_x': '0.05',
+    'sensor_offset_y': '0.0',
+    'camera_offset_z': '0.25',
+    # vehicle.* — physical footprint
+    'vehicle_length': '0.7',
+    'vehicle_width': '0.3',
+    # motion.* — speed / yaw limits
+    'max_speed': '1.375',
+    'autonomy_speed': '0.875',
+    'cmd_vel_max_linear': '0.8',
+    'cmd_vel_max_angular': '1.0',
+    'cmd_vel_min_angular': '0.2',
 }
 
 
@@ -112,6 +129,19 @@ def _load_defaults():
         'web_gateway_port': ('web_gateway', 'port'),
         'nav2_params_file': ('profiles', 'nav2_params_file'),
         'slam_params_file': ('profiles', 'slam_params_file'),
+        'local_planner_profile': ('profiles', 'local_planner_profile'),
+        'far_planner_profile': ('profiles', 'far_planner_profile'),
+        'tare_planner_profile': ('profiles', 'tare_planner_profile'),
+        'sensor_offset_x': ('sensors', 'lidar_offset_x'),
+        'sensor_offset_y': ('sensors', 'lidar_offset_y'),
+        'camera_offset_z': ('sensors', 'camera_offset_z'),
+        'vehicle_length': ('vehicle', 'length'),
+        'vehicle_width': ('vehicle', 'width'),
+        'max_speed': ('motion', 'max_speed'),
+        'autonomy_speed': ('motion', 'autonomy_speed'),
+        'cmd_vel_max_linear': ('motion', 'cmd_vel_max_linear'),
+        'cmd_vel_max_angular': ('motion', 'cmd_vel_max_angular'),
+        'cmd_vel_min_angular': ('motion', 'cmd_vel_min_angular'),
     }
     for key, path_keys in mapping.items():
         value = _dig(data, *path_keys)
@@ -183,6 +213,75 @@ ARGUMENTS = [
         description='SLAM parameter file (profiles.slam_params_file in robot.yaml).'
     ),
     DeclareLaunchArgument(
+        'local_planner_profile',
+        default_value=_DEFAULTS['local_planner_profile'],
+        description='local_planner config profile (profiles.local_planner_profile): '
+                    'dog | omniDir | standard.'
+    ),
+    DeclareLaunchArgument(
+        'far_planner_profile',
+        default_value=_DEFAULTS['far_planner_profile'],
+        description='FAR route-planner profile (profiles.far_planner_profile): '
+                    'indoor | outdoor. Used only in full_mode 1.'
+    ),
+    DeclareLaunchArgument(
+        'tare_planner_profile',
+        default_value=_DEFAULTS['tare_planner_profile'],
+        description='TARE exploration profile (profiles.tare_planner_profile): '
+                    'indoor_small | indoor_large | outdoor. Used only in full_mode 2.'
+    ),
+    DeclareLaunchArgument(
+        'sensor_offset_x',
+        default_value=_DEFAULTS['sensor_offset_x'],
+        description='LiDAR X offset from base_link, m (sensors.lidar_offset_x).'
+    ),
+    DeclareLaunchArgument(
+        'sensor_offset_y',
+        default_value=_DEFAULTS['sensor_offset_y'],
+        description='LiDAR Y offset from base_link, m (sensors.lidar_offset_y).'
+    ),
+    DeclareLaunchArgument(
+        'camera_offset_z',
+        default_value=_DEFAULTS['camera_offset_z'],
+        description='Camera Z offset from base_link, m (sensors.camera_offset_z).'
+    ),
+    DeclareLaunchArgument(
+        'vehicle_length',
+        default_value=_DEFAULTS['vehicle_length'],
+        description='Vehicle footprint length, m (vehicle.length).'
+    ),
+    DeclareLaunchArgument(
+        'vehicle_width',
+        default_value=_DEFAULTS['vehicle_width'],
+        description='Vehicle footprint width, m (vehicle.width).'
+    ),
+    DeclareLaunchArgument(
+        'max_speed',
+        default_value=_DEFAULTS['max_speed'],
+        description='Local-planner top linear speed, m/s (motion.max_speed).'
+    ),
+    DeclareLaunchArgument(
+        'autonomy_speed',
+        default_value=_DEFAULTS['autonomy_speed'],
+        description='Local-planner autonomy cruise speed, m/s (motion.autonomy_speed).'
+    ),
+    DeclareLaunchArgument(
+        'cmd_vel_max_linear',
+        default_value=_DEFAULTS['cmd_vel_max_linear'],
+        description='cmd_vel_controller linear clamp, m/s (motion.cmd_vel_max_linear).'
+    ),
+    DeclareLaunchArgument(
+        'cmd_vel_max_angular',
+        default_value=_DEFAULTS['cmd_vel_max_angular'],
+        description='cmd_vel_controller angular clamp, rad/s (motion.cmd_vel_max_angular).'
+    ),
+    DeclareLaunchArgument(
+        'cmd_vel_min_angular',
+        default_value=_DEFAULTS['cmd_vel_min_angular'],
+        description='cmd_vel_controller angular deadband floor, rad/s '
+                    '(motion.cmd_vel_min_angular).'
+    ),
+    DeclareLaunchArgument(
         'launch_config_service',
         default_value='true',
         description='If "true", spawns the typego_config service node for '
@@ -207,6 +306,32 @@ def generate_launch_description():
             LaunchConfiguration('nav2_params_file'))
         slam_params_file = context.perform_substitution(
             LaunchConfiguration('slam_params_file'))
+        local_planner_profile = context.perform_substitution(
+            LaunchConfiguration('local_planner_profile'))
+        far_planner_profile = context.perform_substitution(
+            LaunchConfiguration('far_planner_profile'))
+        tare_planner_profile = context.perform_substitution(
+            LaunchConfiguration('tare_planner_profile'))
+        sensor_offset_x = context.perform_substitution(
+            LaunchConfiguration('sensor_offset_x'))
+        sensor_offset_y = context.perform_substitution(
+            LaunchConfiguration('sensor_offset_y'))
+        camera_offset_z = context.perform_substitution(
+            LaunchConfiguration('camera_offset_z'))
+        vehicle_length = context.perform_substitution(
+            LaunchConfiguration('vehicle_length'))
+        vehicle_width = context.perform_substitution(
+            LaunchConfiguration('vehicle_width'))
+        max_speed = context.perform_substitution(
+            LaunchConfiguration('max_speed'))
+        autonomy_speed = context.perform_substitution(
+            LaunchConfiguration('autonomy_speed'))
+        cmd_vel_max_linear = context.perform_substitution(
+            LaunchConfiguration('cmd_vel_max_linear'))
+        cmd_vel_max_angular = context.perform_substitution(
+            LaunchConfiguration('cmd_vel_max_angular'))
+        cmd_vel_min_angular = context.perform_substitution(
+            LaunchConfiguration('cmd_vel_min_angular'))
         launch_config_service = context.perform_substitution(
             LaunchConfiguration('launch_config_service')).lower() == 'true'
 
@@ -231,6 +356,10 @@ def generate_launch_description():
             launch_arguments={
                 'autonomy_type': autonomy_type,
                 'robot_id': robot_id,
+                # motion.* — cmd_vel_controller clamps (applies to base + full)
+                'cmd_vel_max_linear': cmd_vel_max_linear,
+                'cmd_vel_max_angular': cmd_vel_max_angular,
+                'cmd_vel_min_angular': cmd_vel_min_angular,
             }.items(),
         )
 
@@ -262,14 +391,29 @@ def generate_launch_description():
             full_launch_file = full_mode_launch_files.get(
                 full_mode, 'system_real_robot.launch.py')
             autonomy_pkg = get_package_share_directory('vehicle_simulator')
+            # Common args every system_real_robot*.launch.py declares.
+            full_launch_args = {
+                'map_dir': os.path.join(typego_sdk_pkg, 'resource', f'Map-{slam_map_name}', f'{slam_map_name}.pcd') if slam_map_name != 'empty_map' else '',
+                'slam_backend': slam_backend,
+                'sensorOffsetX': sensor_offset_x,
+                'sensorOffsetY': sensor_offset_y,
+                'cameraOffsetZ': camera_offset_z,
+                'vehicleLength': vehicle_length,
+                'vehicleWidth': vehicle_width,
+                'maxSpeed': max_speed,
+                'autonomySpeed': autonomy_speed,
+                'local_planner_config': local_planner_profile,
+            }
+            # Mode-specific args — only pass an arg the chosen file declares.
+            if full_mode == '1':
+                full_launch_args['route_planner_config'] = far_planner_profile
+            elif full_mode == '2':
+                full_launch_args['exploration_planner_config'] = tare_planner_profile
             autonomy_launch = IncludeLaunchDescription(
                 PythonLaunchDescriptionSource(
                     os.path.join(autonomy_pkg, 'launch', full_launch_file)
                 ),
-                launch_arguments={
-                    'map_dir': os.path.join(typego_sdk_pkg, 'resource', f'Map-{slam_map_name}', f'{slam_map_name}.pcd') if slam_map_name != 'empty_map' else '',
-                    'slam_backend': slam_backend,
-                }.items(),
+                launch_arguments=full_launch_args.items(),
             )
         else:
             # --- Base autonomy (SLAM, waypoints service, Nav2) ---

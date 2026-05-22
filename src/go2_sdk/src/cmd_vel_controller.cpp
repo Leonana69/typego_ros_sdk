@@ -26,9 +26,16 @@ public:
         // Declare parameters
         this->declare_parameter("accept_cmd_vel", true);
         this->declare_parameter<std::string>("cmd_vel_type", "Twist");  // "Twist" or "TwistStamped"
-        
+        // Velocity clamps — sourced from robot.yaml motion.* via the SDK launch.
+        this->declare_parameter("cmd_vel_max_linear", 0.8);
+        this->declare_parameter("cmd_vel_max_angular", 1.0);
+        this->declare_parameter("cmd_vel_min_angular", 0.2);
+
         accept_cmd_vel_ = this->get_parameter("accept_cmd_vel").as_bool();
         std::string cmd_vel_type = this->get_parameter("cmd_vel_type").as_string();
+        max_speed_ = this->get_parameter("cmd_vel_max_linear").as_double();
+        max_angular_speed_ = this->get_parameter("cmd_vel_max_angular").as_double();
+        min_angular_speed_ = this->get_parameter("cmd_vel_min_angular").as_double();
 
         // Subscribe based on message type
         if (cmd_vel_type == "TwistStamped") {
@@ -54,10 +61,6 @@ private:
     }
 
     void process_twist_command(double linear_x, double linear_y, double angular_z) {
-        const double max_speed_ = 0.8;
-        const double max_angular_speed_ = 1.0;
-        const double min_angular_speed_ = 0.2;
-        
         if (!accept_cmd_vel_) {
             return;
         }
@@ -131,6 +134,9 @@ private:
     std::string robot_url_;
     bool accept_cmd_vel_;
     bool use_twist_stamped_;
+    double max_speed_;
+    double max_angular_speed_;
+    double min_angular_speed_;
 };
 
 int main(int argc, char** argv) {

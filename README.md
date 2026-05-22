@@ -126,6 +126,10 @@ Validate without building:
 make config_validate
 ```
 
+For a key-by-key map of every `robot.yaml` setting — what it controls, the launch
+arg / ROS param / file it drives, and when it takes effect — see
+[`doc/CONFIG.md`](doc/CONFIG.md).
+
 ### Python host dependencies
 
 Even the Docker path needs a working host Python: `make docker_build` (and every other top-level target) first runs `typego-config env` on the host to render `/tmp/typego-runtime.env` from `robot.yaml`. That CLI imports **PyYAML** and **pydantic**, so both must be present on the interpreter `make` resolves to.

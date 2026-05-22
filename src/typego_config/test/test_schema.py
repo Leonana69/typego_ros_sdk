@@ -53,7 +53,44 @@ def test_flatten_produces_dotted_keys():
     assert 'network.ros_domain_id' in flat
     assert 'network.edge_service.port' in flat
     assert 'profiles.nav2_params_file' in flat
+    assert 'vehicle.length' in flat
+    assert 'sensors.camera_offset_z' in flat
+    assert 'motion.max_speed' in flat
     assert not any(k.startswith('dynamic') for k in flat)
+
+
+def test_vehicle_sensors_motion_defaults():
+    cfg = RobotConfig()
+    assert cfg.vehicle.length == 0.7
+    assert cfg.vehicle.width == 0.3
+    assert cfg.sensors.lidar_offset_x == 0.05
+    assert cfg.sensors.camera_offset_z == 0.25
+    assert cfg.motion.max_speed == 1.375
+    assert cfg.motion.autonomy_speed == 0.875
+    assert cfg.motion.cmd_vel_max_linear == 0.8
+    assert cfg.motion.cmd_vel_max_angular == 1.0
+    assert cfg.motion.cmd_vel_min_angular == 0.2
+
+
+def test_motion_out_of_bounds_rejected():
+    with pytest.raises(ValidationError):
+        RobotConfig.model_validate({'motion': {'max_speed': 99.0}})
+
+
+def test_motion_cross_field_validation():
+    # autonomy_speed must not exceed max_speed
+    with pytest.raises(ValidationError):
+        RobotConfig.model_validate(
+            {'motion': {'max_speed': 1.0, 'autonomy_speed': 2.0}})
+    # cmd_vel_min_angular must not exceed cmd_vel_max_angular
+    with pytest.raises(ValidationError):
+        RobotConfig.model_validate(
+            {'motion': {'cmd_vel_max_angular': 1.0, 'cmd_vel_min_angular': 2.0}})
+
+
+def test_vehicle_non_positive_rejected():
+    with pytest.raises(ValidationError):
+        RobotConfig.model_validate({'vehicle': {'length': 0.0}})
 
 
 def test_flatten_values_are_primitives():

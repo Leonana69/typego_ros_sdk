@@ -22,11 +22,26 @@ def generate_launch_description():
         default_value='base',
         description='Autonomy type: "base" (Twist) or "full" (TwistStamped + CustomMsg)'
     )
+    cmd_vel_max_linear_arg = DeclareLaunchArgument(
+        'cmd_vel_max_linear', default_value='0.8',
+        description='cmd_vel linear clamp, m/s (robot.yaml motion.cmd_vel_max_linear)'
+    )
+    cmd_vel_max_angular_arg = DeclareLaunchArgument(
+        'cmd_vel_max_angular', default_value='1.0',
+        description='cmd_vel angular clamp, rad/s (robot.yaml motion.cmd_vel_max_angular)'
+    )
+    cmd_vel_min_angular_arg = DeclareLaunchArgument(
+        'cmd_vel_min_angular', default_value='0.2',
+        description='cmd_vel angular deadband floor, rad/s (robot.yaml motion.cmd_vel_min_angular)'
+    )
 
     def launch_setup(context):
         robot_id = LaunchConfiguration('robot_id').perform(context)
         move_bridge = LaunchConfiguration('move_bridge').perform(context).lower() == 'true'
         autonomy_type = LaunchConfiguration('autonomy_type').perform(context)
+        cmd_vel_max_linear = float(LaunchConfiguration('cmd_vel_max_linear').perform(context))
+        cmd_vel_max_angular = float(LaunchConfiguration('cmd_vel_max_angular').perform(context))
+        cmd_vel_min_angular = float(LaunchConfiguration('cmd_vel_min_angular').perform(context))
         if robot_id:
             robot_name = f'robot{robot_id}'
             robot_ns = f'/{robot_name}'
@@ -80,7 +95,10 @@ def generate_launch_description():
                 name='cmd_vel_controller_node',
                 parameters=[{
                     'accept_cmd_vel': True,
-                    'cmd_vel_type': 'Twist'  # Use 'Twist' or 'TwistStamped'
+                    'cmd_vel_type': 'Twist',  # Use 'Twist' or 'TwistStamped'
+                    'cmd_vel_max_linear': cmd_vel_max_linear,
+                    'cmd_vel_max_angular': cmd_vel_max_angular,
+                    'cmd_vel_min_angular': cmd_vel_min_angular,
                 }],
                 output='screen'
             )
@@ -92,5 +110,8 @@ def generate_launch_description():
         robot_id_arg,
         autonomy_type_arg,
         move_bridge_arg,
+        cmd_vel_max_linear_arg,
+        cmd_vel_max_angular_arg,
+        cmd_vel_min_angular_arg,
         OpaqueFunction(function=launch_setup),
     ])

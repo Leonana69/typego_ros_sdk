@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from typing import List, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 RobotType = Literal['go2', 'kami']
 AutonomyType = Literal['base', 'full']
@@ -143,6 +143,79 @@ class ProfilesConfig(BaseModel):
     )
 
 
+class VehicleConfig(BaseModel):
+    """Physical footprint of the robot, consumed by the local planner."""
+    model_config = ConfigDict(extra='forbid')
+
+    length: float = Field(
+        default=0.7, gt=0.0, le=5.0,
+        description='Footprint length (m). -> local_planner vehicleLength.',
+    )
+    width: float = Field(
+        default=0.3, gt=0.0, le=5.0,
+        description='Footprint width (m). -> local_planner vehicleWidth.',
+    )
+
+
+class SensorsConfig(BaseModel):
+    """Sensor mounting offsets from base_link."""
+    model_config = ConfigDict(extra='forbid')
+
+    lidar_offset_x: float = Field(
+        default=0.05, ge=-2.0, le=2.0,
+        description='LiDAR X offset from base_link (m). -> sensorOffsetX.',
+    )
+    lidar_offset_y: float = Field(
+        default=0.0, ge=-2.0, le=2.0,
+        description='LiDAR Y offset from base_link (m). -> sensorOffsetY.',
+    )
+    camera_offset_z: float = Field(
+        default=0.25, ge=-2.0, le=2.0,
+        description='Camera Z offset from base_link (m). -> cameraOffsetZ.',
+    )
+
+
+class MotionConfig(BaseModel):
+    """Speed / yaw limits. Two distinct linear knobs on purpose:
+    ``max_speed`` caps the autonomy planner; ``cmd_vel_max_linear`` clamps
+    the command actually sent to the robot by cmd_vel_controller.
+    """
+    model_config = ConfigDict(extra='forbid')
+
+    max_speed: float = Field(
+        default=1.375, gt=0.0, le=5.0,
+        description='Local-planner top linear speed (m/s). -> local_planner maxSpeed.',
+    )
+    autonomy_speed: float = Field(
+        default=0.875, gt=0.0, le=5.0,
+        description='Local-planner autonomy-mode cruise speed (m/s). -> autonomySpeed.',
+    )
+    cmd_vel_max_linear: float = Field(
+        default=0.8, gt=0.0, le=5.0,
+        description='cmd_vel_controller linear clamp (m/s, vx and vy).',
+    )
+    cmd_vel_max_angular: float = Field(
+        default=1.0, gt=0.0, le=10.0,
+        description='cmd_vel_controller angular clamp (rad/s).',
+    )
+    cmd_vel_min_angular: float = Field(
+        default=0.2, ge=0.0, le=10.0,
+        description='cmd_vel_controller angular deadband floor (rad/s).',
+    )
+
+    @model_validator(mode='after')
+    def _check_bounds(self) -> 'MotionConfig':
+        if self.cmd_vel_min_angular > self.cmd_vel_max_angular:
+            raise ValueError(
+                'motion.cmd_vel_min_angular must be <= motion.cmd_vel_max_angular'
+            )
+        if self.autonomy_speed > self.max_speed:
+            raise ValueError(
+                'motion.autonomy_speed must be <= motion.max_speed'
+            )
+        return self
+
+
 class RobotConfig(BaseModel):
     """Root model validated against robot.yaml."""
     model_config = ConfigDict(extra='forbid')
@@ -153,6 +226,9 @@ class RobotConfig(BaseModel):
     web_gateway: WebGatewayConfig = Field(default_factory=WebGatewayConfig)
     map: MapConfig = Field(default_factory=MapConfig)
     profiles: ProfilesConfig = Field(default_factory=ProfilesConfig)
+    vehicle: VehicleConfig = Field(default_factory=VehicleConfig)
+    sensors: SensorsConfig = Field(default_factory=SensorsConfig)
+    motion: MotionConfig = Field(default_factory=MotionConfig)
 
     dynamic: List[str] = Field(
         default_factory=lambda: [

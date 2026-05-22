@@ -4,6 +4,8 @@
   <arg name="sensorOffsetX" default="0.0"/>
   <arg name="sensorOffsetY" default="0.0"/>
   <arg name="cameraOffsetZ" default="0.0"/>
+  <arg name="vehicleLength" default="0.7"/>
+  <arg name="vehicleWidth" default="0.3"/>
   <arg name="twoWayDrive" default="false"/>
   <arg name="maxSpeed" default="1.375"/>
   <arg name="autonomyMode" default="false"/>
@@ -18,8 +20,8 @@
     <param from="$(find-pkg-share local_planner)/config/$(var config).yaml"/>
     <param name="pathFolder" value="$(find-pkg-share local_planner)/paths" />
     <param name="vehicleFrame" value="$(var vehicleFrame)" />
-    <param name="vehicleLength" value="0.7" />
-    <param name="vehicleWidth" value="0.3" />
+    <param name="vehicleLength" value="$(var vehicleLength)" />
+    <param name="vehicleWidth" value="$(var vehicleWidth)" />
     <param name="sensorOffsetX" value="$(var sensorOffsetX)" />
     <param name="sensorOffsetY" value="$(var sensorOffsetY)" />
     <param name="twoWayDrive" value="$(var twoWayDrive)" />

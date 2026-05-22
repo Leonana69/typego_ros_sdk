@@ -1,6 +1,18 @@
 # Single-source robot configuration. This file replaces docker/.env and
 # the scattered launch-arg defaults. Edit once, relaunch the stack.
 #
+# Sections:
+#   robot       - identity (id / type / name)
+#   autonomy    - base vs full autonomy + SLAM backend
+#   network     - DDS, robot IP, edge service, gstreamer
+#   web_gateway - HMI server + bag recording
+#   map         - which SLAM map to load
+#   profiles    - which per-tool tuning YAML to use (Nav2 / SLAM / planners)
+#   vehicle     - physical footprint
+#   sensors     - sensor mounting offsets
+#   motion      - speed / yaw limits
+#
+# Full key-by-key map of what each setting drives: doc/CONFIG.md
 # Schema: typego_config.schema.RobotConfig (see JSON Schema via
 #   `ros2 run typego_config typego-config schema`).
 
@@ -40,11 +52,27 @@ map:
   init_pose_from_file: true
 
 profiles:
-  nav2_params_file: nav2_params.yaml
-  slam_params_file: slam.yaml
-  local_planner_profile: dog
-  far_planner_profile: outdoor
-  tare_planner_profile: indoor_small
+  nav2_params_file: nav2_params.yaml      # under typego_sdk/config/
+  slam_params_file: slam.yaml             # under typego_sdk/config/
+  local_planner_profile: dog              # local_planner/config/<name>.yaml: dog | omniDir | standard
+  far_planner_profile: outdoor            # far_planner/config/<name>.yaml: indoor | outdoor
+  tare_planner_profile: indoor_small      # tare_planner/<name>.yaml: indoor_small | indoor_large | outdoor
+
+vehicle:
+  length: 0.7              # m  footprint length  -> local_planner vehicleLength
+  width: 0.4               # m  footprint width   -> local_planner vehicleWidth
+
+sensors:
+  lidar_offset_x: 0.05     # m  LiDAR X offset from base_link  -> sensorOffsetX
+  lidar_offset_y: 0.0      # m  LiDAR Y offset from base_link  -> sensorOffsetY
+  camera_offset_z: 0.25    # m  camera Z offset from base_link -> cameraOffsetZ
+
+motion:
+  max_speed: 1.375         # m/s   local-planner top speed        -> local_planner maxSpeed
+  autonomy_speed: 0.875    # m/s   autonomy-mode cruise speed     -> local_planner autonomySpeed
+  cmd_vel_max_linear: 0.8  # m/s   cmd_vel_controller clamp (vx & vy)
+  cmd_vel_max_angular: 1.0 # rad/s cmd_vel_controller yaw clamp
+  cmd_vel_min_angular: 0.2 # rad/s cmd_vel_controller yaw deadband floor
 
 # Dotted keys permitted for runtime mutation via ros2 param set /typego_config
 # and the /typego_config/reload service. Everything else is read-only.

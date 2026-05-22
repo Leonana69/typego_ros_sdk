@@ -18,6 +18,11 @@ def generate_launch_description():
   checkTerrainConn = LaunchConfiguration('checkTerrainConn')
   map_dir = LaunchConfiguration('map_dir')
   slam_backend = LaunchConfiguration('slam_backend')
+  local_planner_config = LaunchConfiguration('local_planner_config')
+  vehicleLength = LaunchConfiguration('vehicleLength')
+  vehicleWidth = LaunchConfiguration('vehicleWidth')
+  maxSpeed = LaunchConfiguration('maxSpeed')
+  autonomySpeed = LaunchConfiguration('autonomySpeed')
 
   declare_world_name = DeclareLaunchArgument('world_name', default_value='real_world', description='')
   declare_sensorOffsetX = DeclareLaunchArgument('sensorOffsetX', default_value='0.05', description='')
@@ -32,6 +37,13 @@ def generate_launch_description():
     default_value='arise',
     description='LIO backend: "arise" (arise_slam_mid360) or "lightning" (lightning-lm).'
   )
+  # Operator knobs sourced from robot.yaml via typego_bringup. Defaults match
+  # the values that used to be hardcoded here, so standalone launch is unchanged.
+  declare_local_planner_config = DeclareLaunchArgument('local_planner_config', default_value='dog', description='local_planner config profile')
+  declare_vehicleLength = DeclareLaunchArgument('vehicleLength', default_value='0.7', description='Vehicle footprint length (m)')
+  declare_vehicleWidth = DeclareLaunchArgument('vehicleWidth', default_value='0.3', description='Vehicle footprint width (m)')
+  declare_maxSpeed = DeclareLaunchArgument('maxSpeed', default_value='1.375', description='Local-planner top linear speed (m/s)')
+  declare_autonomySpeed = DeclareLaunchArgument('autonomySpeed', default_value='0.875', description='Local-planner autonomy cruise speed (m/s)')
 
   use_arise = IfCondition(PythonExpression(["'", slam_backend, "' == 'arise'"]))
   use_lightning = IfCondition(PythonExpression(["'", slam_backend, "' == 'lightning'"]))
@@ -46,7 +58,11 @@ def generate_launch_description():
       'cameraOffsetZ': cameraOffsetZ,
       'goalX': vehicleX,
       'goalY': vehicleY,
-      'config': 'dog',
+      'config': local_planner_config,
+      'maxSpeed': maxSpeed,
+      'autonomySpeed': autonomySpeed,
+      'vehicleLength': vehicleLength,
+      'vehicleWidth': vehicleWidth,
     }.items()
   )
 
@@ -124,6 +140,11 @@ def generate_launch_description():
   ld.add_action(declare_checkTerrainConn)
   ld.add_action(declare_map_dir)
   ld.add_action(declare_slam_backend)
+  ld.add_action(declare_local_planner_config)
+  ld.add_action(declare_vehicleLength)
+  ld.add_action(declare_vehicleWidth)
+  ld.add_action(declare_maxSpeed)
+  ld.add_action(declare_autonomySpeed)
 
   ld.add_action(start_local_planner)
   ld.add_action(start_terrain_analysis)
