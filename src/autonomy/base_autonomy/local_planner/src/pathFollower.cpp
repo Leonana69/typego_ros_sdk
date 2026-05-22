@@ -70,6 +70,7 @@ double inclThre = 45.0;
 double stopTime = 5.0;
 bool noRotAtStop = false;
 bool noRotAtGoal = true;
+bool omniDirDrive = false;
 bool manualMode = false;
 bool autonomyMode = false;
 double autonomySpeed = 1.0;
@@ -280,6 +281,7 @@ int main(int argc, char** argv)
   nh->declare_parameter<double>("stopTime", stopTime);
   nh->declare_parameter<bool>("noRotAtStop", noRotAtStop);
   nh->declare_parameter<bool>("noRotAtGoal", noRotAtGoal);
+  nh->declare_parameter<bool>("omniDirDrive", omniDirDrive);
   nh->declare_parameter<bool>("autonomyMode", autonomyMode);
   nh->declare_parameter<double>("autonomySpeed", autonomySpeed);
   nh->declare_parameter<double>("joyToSpeedDelay", joyToSpeedDelay);
@@ -313,6 +315,7 @@ int main(int argc, char** argv)
   nh->get_parameter("stopTime", stopTime);
   nh->get_parameter("noRotAtStop", noRotAtStop);
   nh->get_parameter("noRotAtGoal", noRotAtGoal);
+  nh->get_parameter("omniDirDrive", omniDirDrive);
   nh->get_parameter("autonomyMode", autonomyMode);
   nh->get_parameter("autonomySpeed", autonomySpeed);
   nh->get_parameter("joyToSpeedDelay", joyToSpeedDelay);
@@ -449,7 +452,7 @@ int main(int argc, char** argv)
         }
       }
 
-      if (twoWayDrive) {
+      if (twoWayDrive && !omniDirDrive) {
         double time = nh->now().seconds();
         if (fabs(dirDiff) > M_PI / 2 && navFwd && time - switchTime > switchTimeThre) {
           navFwd = false;
@@ -490,7 +493,18 @@ int main(int argc, char** argv)
       else if ((odomTime < slowInitTime + slowTime1 + slowTime2 && slowInitTime > 0) || slowDown == 2) joySpeed3 *= slowRate2;
       else if (slowDown == 3) joySpeed3 *= slowRate3;
 
-      if ((fabs(dirDiff) < dirDiffThre || (dis < omniDirGoalThre && fabs(dirDiff) < omniDirDiffThre)) && dis > stopDisThre) {
+      // In omnidirectional drive the robot translates toward the lookahead point
+      // regardless of heading error; rotation toward that direction is handled
+      // independently by vehicleYawRate above. Otherwise the robot must be
+      // (near-)aligned with the path before it is allowed to translate.
+      bool moveAllowed;
+      if (omniDirDrive) {
+        moveAllowed = dis > stopDisThre;
+      } else {
+        moveAllowed = (fabs(dirDiff) < dirDiffThre ||
+                       (dis < omniDirGoalThre && fabs(dirDiff) < omniDirDiffThre)) && dis > stopDisThre;
+      }
+      if (moveAllowed) {
         if (vehicleSpeed < joySpeed3) vehicleSpeed += maxAccel / 100.0;
         else if (vehicleSpeed > joySpeed3) vehicleSpeed -= maxAccel / 100.0;
       } else {
@@ -513,7 +527,10 @@ int main(int argc, char** argv)
         cmd_vel.angular.z = vehicleYawRate;
 
         if (fabs(vehicleSpeed) > maxAccel / 100.0) {
-          if (omniDirGoalThre > 0) {
+          if (omniDirDrive || omniDirGoalThre > 0) {
+            // Decompose the path-frame translation speed into the current body
+            // frame. dirDiff is the heading error, so this is the world-frame
+            // velocity toward the lookahead point expressed in body axes.
             cmd_vel.linear.x = cos(dirDiff) * vehicleSpeed;
             cmd_vel.linear.y = -sin(dirDiff) * vehicleSpeed;
           } else {

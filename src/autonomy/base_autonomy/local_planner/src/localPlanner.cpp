@@ -83,6 +83,7 @@ double vehicleWidth = 0.6;
 double sensorOffsetX = 0;
 double sensorOffsetY = 0;
 bool twoWayDrive = true;
+bool omniDirDrive = false;
 double laserVoxelSize = 0.05;
 double terrainVoxelSize = 0.2;
 bool useTerrainAnalysis = false;
@@ -834,6 +835,7 @@ int main(int argc, char** argv)
   nh->declare_parameter<double>("sensorOffsetX", sensorOffsetX);
   nh->declare_parameter<double>("sensorOffsetY", sensorOffsetY);
   nh->declare_parameter<bool>("twoWayDrive", twoWayDrive);
+  nh->declare_parameter<bool>("omniDirDrive", omniDirDrive);
   nh->declare_parameter<double>("laserVoxelSize", laserVoxelSize);
   nh->declare_parameter<double>("terrainVoxelSize", terrainVoxelSize);
   nh->declare_parameter<bool>("useTerrainAnalysis", useTerrainAnalysis);
@@ -889,6 +891,7 @@ int main(int argc, char** argv)
   nh->get_parameter("sensorOffsetX", sensorOffsetX);
   nh->get_parameter("sensorOffsetY", sensorOffsetY);
   nh->get_parameter("twoWayDrive", twoWayDrive);
+  nh->get_parameter("omniDirDrive", omniDirDrive);
   nh->get_parameter("laserVoxelSize", laserVoxelSize);
   nh->get_parameter("terrainVoxelSize", terrainVoxelSize);
   nh->get_parameter("useTerrainAnalysis", useTerrainAnalysis);
@@ -1239,11 +1242,14 @@ int main(int argc, char** argv)
         relativeGoalDis = sqrt(relativeGoalX * relativeGoalX + relativeGoalY * relativeGoalY);
         joyDir = atan2(relativeGoalY, relativeGoalX) * 180 / M_PI;
         
-        if (fabs(joyDir) > freezeAng && relativeGoalDis < goalBehindRange) {
+        // Behind-goal dead-zone: a one-way / forward-driving robot must not
+        // chase a goal directly behind it. An omnidirectional robot can step
+        // straight back into it, so the dead-zone is skipped in that mode.
+        if (fabs(joyDir) > freezeAng && relativeGoalDis < goalBehindRange && !omniDirDrive) {
           relativeGoalDis = 0;
           joyDir = 0;
         }
-        
+
         if (fabs(joyDir) > freezeAng && freezeStatus == 0) {
           freezeStartTime = odomTime;
           freezeStatus = 1;
@@ -1253,7 +1259,11 @@ int main(int argc, char** argv)
           freezeStatus = 0;
         }
 
-        if (!twoWayDrive) {
+        // One-way drive forces a hard in-place turn when the goal is behind.
+        // Omnidirectional drive instead keeps the true goal bearing so the
+        // planner emits a path pointing straight at the goal; the path
+        // follower turns the body toward it while translating.
+        if (!twoWayDrive && !omniDirDrive) {
           if (fabs(joyDir) > freezeAng) {
             if (behindGoalTurnSign == 0) {
               behindGoalTurnSign = joyDir >= 0.0f ? 1 : -1;
@@ -1276,7 +1286,7 @@ int main(int argc, char** argv)
         behindGoalTurnSign = 0;
       }
 
-      if (freezeStatus == 1 && autonomyMode) {
+      if (freezeStatus == 1 && autonomyMode && !omniDirDrive) {
         relativeGoalDis = 0;
         joyDir = 0;
       }

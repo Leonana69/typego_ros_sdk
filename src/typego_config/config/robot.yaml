@@ -10,7 +10,7 @@ robot:
   name: robot-alpha
 
 autonomy:
-  type: base         # base | full
+  type: full         # base | full
   slam_backend: arise  # arise | lightning  (only used when type=full)
 
 network:
