@@ -175,16 +175,20 @@ void DynamicGraph::UpdateNavGraph(const NodePtrStack& new_nodes,
                 if (cnode->is_odom || cnode->is_near_nodes || FARUtil::IsOutsideGoal(cnode) || FARUtil::IsTypeInStack(cnode, nav_ptr1->contour_connects)) continue;
                 if (this->IsValidConnect(nav_ptr1, cnode, false)) {
                     this->AddPolyEdge(nav_ptr1, cnode), this->AddEdge(nav_ptr1, cnode);
+                } else if (ShouldHoldPolyEdge(nav_ptr1, cnode)) {
+                    stats_.poly_edges_held ++;
                 } else {
                     this->ErasePolyEdge(nav_ptr1, cnode) ,this->EraseEdge(nav_ptr1, cnode);
                     outside_break_nodes.push_back(cnode);
-                } 
+                }
             }
             for (std::size_t j=0; j<near_nav_nodes_.size(); j++) {
                 const NavNodePtr nav_ptr2 = near_nav_nodes_[j];
                 if (i == j || j > i || nav_ptr2->is_odom) continue;
                 if (this->IsValidConnect(nav_ptr1, nav_ptr2, true)) {
                     this->AddPolyEdge(nav_ptr1, nav_ptr2), this->AddEdge(nav_ptr1, nav_ptr2);
+                } else if (ShouldHoldPolyEdge(nav_ptr1, nav_ptr2)) {
+                    stats_.poly_edges_held ++;
                 } else {
                     this->ErasePolyEdge(nav_ptr1, nav_ptr2), this->EraseEdge(nav_ptr1, nav_ptr2);
                 }
@@ -204,6 +208,8 @@ void DynamicGraph::UpdateNavGraph(const NodePtrStack& new_nodes,
             for (const auto& ob_node_ptr : outside_break_nodes) {
                 if (this->IsValidConnect(node_ptr, ob_node_ptr, false)) {
                     this->AddPolyEdge(node_ptr, ob_node_ptr), this->AddEdge(node_ptr, ob_node_ptr);
+                } else if (ShouldHoldPolyEdge(node_ptr, ob_node_ptr)) {
+                    stats_.poly_edges_held ++;
                 } else {
                     this->ErasePolyEdge(node_ptr, ob_node_ptr), this->EraseEdge(node_ptr, ob_node_ptr);
                 }
@@ -211,11 +217,13 @@ void DynamicGraph::UpdateNavGraph(const NodePtrStack& new_nodes,
         }
         // Analysisig frontier nodes
         for (const auto& node_ptr : near_nav_nodes_) {
+            const bool was_covered = node_ptr->is_covered;
             if (this->IsNodeFullyCovered(node_ptr)) {
                 node_ptr->is_covered = true;
             } else {
                 node_ptr->is_covered = false;
             }
+            if (!was_covered && node_ptr->is_covered) stats_.covered_nodes_new ++;
             if (this->IsFrontierNode(node_ptr)) {
                 node_ptr->is_frontier = true;
             } else {
@@ -223,6 +231,22 @@ void DynamicGraph::UpdateNavGraph(const NodePtrStack& new_nodes,
             }
         }
     }
+}
+
+void DynamicGraph::LogAndResetStats() {
+    if (FARUtil::IsDebug && nh_ != nullptr) {
+        RCLCPP_INFO(nh_->get_logger(),
+            "FAR graph update: poly +%d -%d (held %d), covered +%d, cleared %d, merged %d, odom_vote_erases %d, covered_lost_on_clear %d",
+            stats_.poly_edges_added,
+            stats_.poly_edges_erased,
+            stats_.poly_edges_held,
+            stats_.covered_nodes_new,
+            stats_.nodes_cleared,
+            stats_.nodes_merged,
+            stats_.odom_vote_erases,
+            stats_.covered_lost_on_clear);
+    }
+    stats_.reset();
 }
 
 bool DynamicGraph::IsValidConnect(const NavNodePtr& node_ptr1, 
@@ -244,7 +268,7 @@ bool DynamicGraph::IsValidConnect(const NavNodePtr& node_ptr1,
     }
     bool is_connect = false;
     /* check polygon connections */
-    const int vote_queue_size = (node_ptr1->is_odom || node_ptr2->is_odom) ? std::ceil(dg_params_.votes_size / 3.0f) : dg_params_.votes_size;
+    const int vote_queue_size = (node_ptr1->is_odom || node_ptr2->is_odom) ? dg_params_.odom_edge_votes_size : dg_params_.votes_size;
     if (IsConvexConnect(node_ptr1, node_ptr2) && this->IsInDirectConstraint(node_ptr1, node_ptr2) && ContourGraph::IsNavNodesConnectFreePolygon(node_ptr1, node_ptr2) && IsOnTerrainConnect(node_ptr1, node_ptr2, false)) {
         if (this->IsPolyMatchedForConnect(node_ptr1, node_ptr2)) {
             RecordPolygonVote(node_ptr1, node_ptr2, vote_queue_size);
@@ -255,11 +279,26 @@ bool DynamicGraph::IsValidConnect(const NavNodePtr& node_ptr1,
     if (this->IsPolygonEdgeVoteTrue(node_ptr1, node_ptr2)) {
         if (!this->IsSimilarConnectInDiection(node_ptr1, node_ptr2)) is_connect = true;
     } else if (node_ptr1->is_odom || node_ptr2->is_odom) {
-        node_ptr1->edge_votes.erase(node_ptr2->id);
-        node_ptr2->edge_votes.erase(node_ptr1->id);
-        // clear potential connections
-        FARUtil::EraseNodeFromStack(node_ptr2, node_ptr1->potential_edges);
-        FARUtil::EraseNodeFromStack(node_ptr1, node_ptr2->potential_edges);
+        // Only wipe odom-side vote history when the queue has matured into solid
+        // negative evidence AND no live poly/connect edge depends on it. Otherwise
+        // let the negative votes age naturally so a single bad frame doesn't drop
+        // all accumulated history (which used to cause freespace_vgraph flicker).
+        const auto it = node_ptr1->edge_votes.find(node_ptr2->id);
+        const bool queue_full_zero =
+            (it != node_ptr1->edge_votes.end()) &&
+            (int(it->second.size()) >= vote_queue_size) &&
+            (std::accumulate(it->second.begin(), it->second.end(), 0) == 0);
+        const bool has_live_edge =
+            FARUtil::IsTypeInStack(node_ptr2, node_ptr1->poly_connects) ||
+            FARUtil::IsTypeInStack(node_ptr2, node_ptr1->connect_nodes);
+        if (queue_full_zero && !has_live_edge) {
+            node_ptr1->edge_votes.erase(node_ptr2->id);
+            node_ptr2->edge_votes.erase(node_ptr1->id);
+            // clear potential connections
+            FARUtil::EraseNodeFromStack(node_ptr2, node_ptr1->potential_edges);
+            FARUtil::EraseNodeFromStack(node_ptr1, node_ptr2->potential_edges);
+            stats_.odom_vote_erases ++;
+        }
     }
     /* check if exsiting trajectory connection exist */
     if (!is_connect) {

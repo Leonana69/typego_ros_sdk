@@ -1,6 +1,8 @@
 #ifndef DYNAMIC_GRAPH_H
 #define DYNAMIC_GRAPH_H
 
+#include <numeric>
+
 #include "utility.h"
 #include "contour_graph.h"
 #include "terrain_planner.h"
@@ -13,13 +15,28 @@ struct DynamicGraphParams {
     int   finalize_thred;
     int   pool_size;
     int   votes_size;
+    int   edge_drop_votes_size;
+    int   odom_edge_votes_size;
+    bool  edge_drop_requires_all_negative;
     float kConnectAngleThred;
     float filter_pos_margin;
     float filter_dirs_margin;
     float frontier_perimeter_thred;
 };
 
-class DynamicGraph {  
+struct DynamicGraphStats {
+    int poly_edges_added = 0;
+    int poly_edges_erased = 0;
+    int poly_edges_held = 0;         // erase blocked by hysteresis
+    int covered_nodes_new = 0;
+    int nodes_cleared = 0;
+    int nodes_merged = 0;
+    int odom_vote_erases = 0;
+    int covered_lost_on_clear = 0;
+    void reset() { *this = DynamicGraphStats{}; }
+};
+
+class DynamicGraph {
 private:
     rclcpp::Node::SharedPtr nh_;
     Point3D robot_pos_;
@@ -33,6 +50,7 @@ private:
     float CONNECT_ANGLE_COS, NOISE_ANGLE_COS;
     bool is_bridge_internav_ = false;
     Point3D last_connect_pos_;
+    static DynamicGraphStats stats_;
 
     static DynamicGraphParams dg_params_;
     static std::size_t id_tracker_; // Global unique id start from "0" [per robot]
@@ -171,10 +189,18 @@ private:
     /* Define inline functions */
     inline bool SetNodeToClear(const NavNodePtr& node_ptr) {
         if (FARUtil::IsStaticNode(node_ptr)) return false;
+        // Historical free-space graph: a node confirmed covered (robot or an
+        // internav waypoint passed through and the polygon vote held) marks a
+        // location that was traversable at some point. Don't merge it out --
+        // doing so destroys its edges and forces a flicker when the node is
+        // recreated nearby with is_covered=false. Live obstacles are still the
+        // local planner's job.
+        if (node_ptr->is_covered) return false;
         node_ptr->clear_dumper_count ++;
         const int N = node_ptr->is_navpoint ? dg_params_.dumper_thred * 2 : dg_params_.dumper_thred;
         if (node_ptr->clear_dumper_count > N) {
             node_ptr->is_merged = true;
+            stats_.nodes_merged ++;
             return true;
         }
         return false;
@@ -409,6 +435,8 @@ private:
         // remove nodes
         for (auto it = globalGraphNodes_.begin(); it != globalGraphNodes_.end(); it ++) {
             if (IsMergedNode(*it)) {
+                if ((*it)->is_covered) stats_.covered_lost_on_clear ++;
+                stats_.nodes_cleared ++;
                 ClearNodeConnectInGraph(*it);
                 ClearContourConnectionInGraph(*it);
                 ClearTrajectoryConnectInGraph(*it);
@@ -434,6 +462,14 @@ public:
     ~DynamicGraph() = default;
 
     void Init(const rclcpp::Node::SharedPtr nh, const DynamicGraphParams& params);
+
+    /**
+     * Log accumulated per-cycle graph stats when FARUtil::IsDebug is true,
+     * then reset the counters. Called once per graph update cycle.
+     */
+    void LogAndResetStats();
+
+    static DynamicGraphStats& MutableStats() { return stats_; }
 
     /**
      *  Updtae robot pos and odom node 
@@ -618,18 +654,48 @@ public:
     static inline void AddPolyEdge(const NavNodePtr& node_ptr1, const NavNodePtr& node_ptr2) {
         if (node_ptr1 == node_ptr2) return;
         if (!FARUtil::IsTypeInStack(node_ptr2, node_ptr1->poly_connects) &&
-            !FARUtil::IsTypeInStack(node_ptr1, node_ptr2->poly_connects)) 
+            !FARUtil::IsTypeInStack(node_ptr1, node_ptr2->poly_connects))
         {
             node_ptr1->poly_connects.push_back(node_ptr2);
             node_ptr2->poly_connects.push_back(node_ptr1);
+            stats_.poly_edges_added ++;
         }
     }
 
     static inline void ErasePolyEdge(const NavNodePtr& node_ptr1, const NavNodePtr& node_ptr2) {
+        const bool had_edge = FARUtil::IsTypeInStack(node_ptr2, node_ptr1->poly_connects) ||
+                              FARUtil::IsTypeInStack(node_ptr1, node_ptr2->poly_connects);
         // clear node2 in node1's connection
         FARUtil::EraseNodeFromStack(node_ptr2, node_ptr1->poly_connects);
-        // clear node1 in node2's connection 
+        // clear node1 in node2's connection
         FARUtil::EraseNodeFromStack(node_ptr1, node_ptr2->poly_connects);
+        if (had_edge) stats_.poly_edges_erased ++;
+    }
+
+    /**
+     * Edge hysteresis: returns true if the live poly_connects edge between two
+     * nodes should be kept even though IsValidConnect() just failed this cycle.
+     * Odom edges follow the robot live and are never held by this check;
+     * historical edges are only erased once the vote queue is full enough and
+     * either contains no recent positive evidence or (if strict mode) is all-zero.
+     */
+    static inline bool ShouldHoldPolyEdge(const NavNodePtr& node_ptr1, const NavNodePtr& node_ptr2) {
+        if (node_ptr1->is_odom || node_ptr2->is_odom) return false;
+        if (FARUtil::IsOutsideGoal(node_ptr1) || FARUtil::IsOutsideGoal(node_ptr2)) return false;
+        // Only protect edges that are actually present right now.
+        if (!FARUtil::IsTypeInStack(node_ptr2, node_ptr1->poly_connects)) return false;
+        const auto it = node_ptr1->edge_votes.find(node_ptr2->id);
+        if (it == node_ptr1->edge_votes.end()) return false;
+        const auto& votes = it->second;
+        const int drop_size = dg_params_.edge_drop_votes_size;
+        // Vote queue not yet matured -> keep the edge while evidence is still being gathered.
+        if (int(votes.size()) < drop_size) return true;
+        const int positives = std::accumulate(votes.end() - drop_size, votes.end(), 0);
+        if (dg_params_.edge_drop_requires_all_negative) {
+            return positives > 0;
+        }
+        // Otherwise, use the standard balanced majority: keep unless majority negative.
+        return positives > int(drop_size) / 2;
     }
 
     /* Add edge for given two navigation nodes */

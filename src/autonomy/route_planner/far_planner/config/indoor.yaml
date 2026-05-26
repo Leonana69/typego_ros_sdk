@@ -39,10 +39,15 @@ far_planner:
     util/new_points_decay_time: 1.0   # Unit: second
 
     # Dynamic Graph Params
-    graph/connect_votes_size: 10        
+    graph/connect_votes_size: 10
     graph/clear_dumper_thred: 4
     graph/node_finalize_thred: 6
     graph/filter_pool_size: 12
+    # Edge hysteresis (Phase 1): keep live edges across brief vote dips.
+    # 0 falls back to connect_votes_size.
+    graph/edge_drop_votes_size: 0
+    graph/odom_edge_votes_size: 0
+    graph/edge_drop_requires_all_negative: true
 
     # Corner Detector Params
     c_detector/resize_ratio: 3.0

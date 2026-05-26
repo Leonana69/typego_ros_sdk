@@ -263,6 +263,7 @@ void FARMaster::MainLoopCallBack() {
   }
   /* Graph Updating */
   graph_manager_.UpdateNavGraph(new_nodes_, is_stop_update_, clear_nodes_);
+  graph_manager_.LogAndResetStats();
 
   runtimer_.data = FARUtil::Timer.end_time("Total V-Graph Update", is_graph_init_) / 1000.f; // Unit: second
   // runtimer_.data = FARUtil::Timer.end_time("Total V-Graph Update", is_graph_init_); // Unit: ms
@@ -637,6 +638,10 @@ void FARMaster::LoadROSParams() {
   nh_->declare_parameter<int>(graph_prefix   + "/filter_pool_size", 12);
   nh_->declare_parameter<float>(graph_prefix + "/connect_angle_thred", 10.0);
   nh_->declare_parameter<float>(graph_prefix + "/dirs_filter_margin", 10.0);
+  // Edge hysteresis: stop wiping live poly_connects on a single failed frame.
+  nh_->declare_parameter<int>(graph_prefix   + "/edge_drop_votes_size", 0);   // 0 -> use connect_votes_size
+  nh_->declare_parameter<int>(graph_prefix   + "/odom_edge_votes_size", 0);   // 0 -> use connect_votes_size
+  nh_->declare_parameter<bool>(graph_prefix  + "/edge_drop_requires_all_negative", true);
 
   nh_->get_parameter(graph_prefix + "/connect_votes_size", graph_params_.votes_size);
   nh_->get_parameter(graph_prefix + "/clear_dumper_thred", graph_params_.dumper_thred);
@@ -644,6 +649,11 @@ void FARMaster::LoadROSParams() {
   nh_->get_parameter(graph_prefix + "/filter_pool_size", graph_params_.pool_size);
   nh_->get_parameter(graph_prefix + "/connect_angle_thred", graph_params_.kConnectAngleThred);
   nh_->get_parameter(graph_prefix + "/dirs_filter_margin", graph_params_.filter_dirs_margin);
+  nh_->get_parameter(graph_prefix + "/edge_drop_votes_size", graph_params_.edge_drop_votes_size);
+  nh_->get_parameter(graph_prefix + "/odom_edge_votes_size", graph_params_.odom_edge_votes_size);
+  nh_->get_parameter(graph_prefix + "/edge_drop_requires_all_negative", graph_params_.edge_drop_requires_all_negative);
+  if (graph_params_.edge_drop_votes_size <= 0) graph_params_.edge_drop_votes_size = graph_params_.votes_size;
+  if (graph_params_.odom_edge_votes_size <= 0) graph_params_.odom_edge_votes_size = graph_params_.votes_size;
 
   graph_params_.filter_pos_margin        = FARUtil::kNavClearDist;
   graph_params_.filter_dirs_margin       = FARUtil::kAngleNoise;
@@ -921,6 +931,7 @@ TimeMeasure FARUtil::Timer;
 
 /* Global Graph */
 DynamicGraphParams DynamicGraph::dg_params_;
+DynamicGraphStats  DynamicGraph::stats_;
 NodePtrStack DynamicGraph::globalGraphNodes_;
 std::size_t  DynamicGraph::id_tracker_;
 std::unordered_map<std::size_t, NavNodePtr> DynamicGraph::idx_node_map_;
