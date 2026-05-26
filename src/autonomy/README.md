@@ -26,6 +26,25 @@ The LIO (lidar-inertial odometry) backend is selectable via the `slam_backend` l
 - **Control commands**: The planner generates drive commands consumed by the robot controller (outside this launch file).
 - **Visualization tools** (`visualization_tools`): Publishes overlays and debugging views for maps, paths, and robot state.
 
+### Saving a global map for re-use (FAR planner, etc.)
+`visualization_tools` exposes `/save_map` (`visualization_tools/srv/SaveMap`), which writes a one-shot snapshot of the accumulated `/registered_scan` cloud as a binary PCD in the `map` frame and, when FAR is running, asks `graph_decoder` to dump the current visibility graph next to the PCD. `scripts/save_map.py` uses this service for full-autonomy saves, so `make save_map FILE=<name>` stores both the SLAM localization map and the FAR graph when the route planner is active.
+
+```
+ros2 service call /save_map visualization_tools/srv/SaveMap \
+  "{file_path: '/tmp/floor_scan', voxel_size: 0.1, save_vgraph: true}"
+```
+
+Outputs (assuming everything is connected):
+- `/tmp/floor_scan.pcd` — global point cloud map, suitable as FAR planner's `/scan_cloud` (`/terrain_map`) input.
+- `/tmp/floor_scan_gravity.txt` — IMU gravity roll/pitch offsets, when received.
+- `/tmp/floor_scan.vgh` — FAR planner visibility graph dumped by `graph_decoder`. Each row encodes one node's id, free_direct, position, surface dirs, the `is_covered` / `is_frontier` / `is_navpoint` / `is_boundary` flags, and four `|`-separated neighbor lists (connect / poly / contour / trajectory). The **freespace_vgraph** is implicit: it is the poly-edge subset between `is_covered` nodes, so one `.vgh` save captures both the full vgraph and the freespace vgraph.
+
+The vgraph trigger publishes the destination path on `/save_file_dir` (consumed by `graph_decoder` from `far_planner.launch`). If FAR planner isn't running, only the PCD is written and the `vgraph_path` field in the response stays empty. Pass `save_vgraph: false` to skip the vgraph entirely; pass `voxel_size: 0.0` to fall back to the launch-time default; leave `file_path` empty to use the launch-time `exploredAreaFile` path with a timestamp suffix.
+
+To reload on a later route-planner run, choose the saved map name as usual. `typego_bringup.launch.py` passes `Map-<name>/<name>.pcd` to SLAM for localization and passes `Map-<name>/<name>.vgh` to `farVgraphLoader`, which publishes `/read_file_dir` after FAR and `graph_decoder` are up. If the `.vgh` file is absent, the loader logs a warning and FAR falls back to building a fresh graph from live terrain.
+
+The legacy `/save_explored_areas` service is preserved for backward compatibility but does not re-filter the snapshot and does not trigger the vgraph save.
+
 ## Data Flow (system_real_robot_with_exploration_planner.launch.py)
 This launch file adds the exploration planner to the real-robot pipeline. The detailed topic-level data flow below is based on the default configurations in:
 - `arise_slam_mid360/config/livox_mid360.yaml`

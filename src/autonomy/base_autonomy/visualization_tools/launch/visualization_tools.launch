@@ -13,6 +13,8 @@
     <param name="overallMapVoxelSize" value="0.1" />
     <param name="exploredAreaVoxelSize" value="0.05" />
     <param name="exploredVolumeVoxelSize" value="1.0" />
+    <!-- Default voxel size for /save_map snapshots; matches FAR planner indoor.yaml. -->
+    <param name="mapVoxelSize" value="0.1" />
     <param name="transInterval" value="0.1" />
     <param name="yawInterval" value="0.17" />
     <param name="overallMapDisplayInterval" value="2" />

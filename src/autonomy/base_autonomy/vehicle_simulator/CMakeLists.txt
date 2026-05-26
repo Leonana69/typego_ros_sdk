@@ -43,14 +43,17 @@ find_package(cv_bridge REQUIRED)
 
 add_executable(sim_image_repub src/sim_image_repub.cpp)
 add_executable(vehicleSimulator src/vehicleSimulator.cpp)
+add_executable(farVgraphLoader src/farVgraphLoader.cpp)
 ament_target_dependencies(vehicleSimulator rclcpp std_msgs sensor_msgs nav_msgs geometry_msgs tf2 tf2_ros tf2_geometry_msgs message_filters pcl_ros pcl_conversions)
 ament_target_dependencies(sim_image_repub rclcpp std_msgs sensor_msgs cv_bridge)
+ament_target_dependencies(farVgraphLoader rclcpp std_msgs)
 target_link_libraries(vehicleSimulator ${OpenCV_LIBRARIES} ${PCL_LIBRARIES})
 target_link_libraries(sim_image_repub ${OpenCV_LIBRARIES})
 
 install(TARGETS
   vehicleSimulator
   sim_image_repub
+  farVgraphLoader
   DESTINATION lib/${PROJECT_NAME})
 
 install(

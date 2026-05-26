@@ -1,0 +1,36 @@
+# Save a one-shot, backend-agnostic global point-cloud map suitable for
+# loading directly into a path planner (e.g. FAR planner via /scan_cloud).
+#
+# Source: the accumulated /registered_scan cloud in the map frame.
+# Works with both ARISE (arise_slam_mid360) and lightning-lm, since both
+# publish /registered_scan with their global-frame transform applied.
+
+# Output file path (without extension). If empty, the launch-time
+# exploredAreaFile path is used with a timestamp suffix.
+string file_path
+
+# Voxel leaf size, in meters, applied to the snapshot before writing.
+# 0 = use the launch-time mapVoxelSize default (0.1 m, matches FAR
+# indoor.yaml voxel_dim). Increase for sparser, planner-only maps;
+# decrease for denser maps for visualization.
+float64 voxel_size
+
+# Also save the FAR planner visibility graph as <file_path>.vgh, by
+# publishing the path on /save_file_dir. FAR planner's graph_decoder
+# writes one text file containing every node's position, free_direct,
+# surface dirs, is_covered/is_frontier/is_navpoint/is_boundary flags and
+# four neighbor lists (connect/poly/contour/trajectory). The freespace
+# vgraph is the poly-connect subset between is_covered nodes, so it is
+# already captured by this single save. Has no effect if graph_decoder
+# is not running (e.g. FAR planner not launched).
+bool save_vgraph true
+---
+bool success
+string message
+uint32 num_points
+# Path of the .vgh sibling that was requested on /save_file_dir. Empty
+# when save_vgraph is false, no path is derivable, or graph_decoder is
+# not subscribed. Note: the actual write is performed by graph_decoder
+# asynchronously, so a non-empty value here means the request was
+# published, not that the file exists.
+string vgraph_path

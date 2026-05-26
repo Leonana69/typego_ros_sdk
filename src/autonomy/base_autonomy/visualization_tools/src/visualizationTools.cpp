@@ -12,11 +12,13 @@
 #include "rclcpp/time.hpp"
 #include "builtin_interfaces/msg/time.hpp"
 #include "visualization_tools/srv/save_explored_areas.hpp"
+#include "visualization_tools/srv/save_map.hpp"
 
 #include "nav_msgs/msg/odometry.hpp"
 #include "sensor_msgs/msg/point_cloud2.hpp"
 #include <std_msgs/msg/float32.hpp>
 #include <std_msgs/msg/float64_multi_array.hpp>
+#include <std_msgs/msg/string.hpp>
 #include <geometry_msgs/msg/polygon_stamped.h>
 #include <geometry_msgs/msg/point_stamped.h>
 
@@ -48,6 +50,9 @@ string exploredAreaFile;
 double overallMapVoxelSize = 0.5;
 double exploredAreaVoxelSize = 0.05;
 double exploredVolumeVoxelSize = 0.5;
+// Default voxel size for /save_map snapshots. 0.1 m matches FAR planner's
+// indoor.yaml voxel_dim, giving a planning-ready cloud out of the box.
+double mapVoxelSize = 0.1;
 double transInterval = 0.2;
 double yawInterval = 10.0;
 int overallMapDisplayInterval = 2;
@@ -90,6 +95,11 @@ shared_ptr<rclcpp::Publisher<sensor_msgs::msg::PointCloud2>> pubTrajectoryPtr;
 
 shared_ptr<rclcpp::Publisher<std_msgs::msg::Float32>> pubExploredVolumePtr;
 
+// Publisher that triggers FAR planner's graph_decoder to write the live
+// visibility graph (covers the freespace_vgraph subset implicitly) when
+// /save_map is invoked with save_vgraph=true. Set in main().
+shared_ptr<rclcpp::Publisher<std_msgs::msg::String>> pubSaveFileDirPtr;
+
 shared_ptr<rclcpp::Publisher<std_msgs::msg::Float32>> pubTravelingDisPtr;
 
 shared_ptr<rclcpp::Publisher<std_msgs::msg::Float32>> pubTimeDurationPtr;
@@ -121,31 +131,50 @@ string getTimeString()
          to_string(ltm->tm_min) + "-" + to_string(ltm->tm_sec);
 }
 
-void saveExploredAreasHandler(
-  const std::shared_ptr<visualization_tools::srv::SaveExploredAreas::Request> request,
-  std::shared_ptr<visualization_tools::srv::SaveExploredAreas::Response> response)
+// Writes a snapshot of the accumulated /registered_scan cloud to disk as
+// binary PCD, plus a _gravity.txt companion file when offsets are known.
+// If voxelSize > 0, the snapshot is re-filtered at that leaf size first
+// so callers get a deterministic, planner-ready resolution regardless of
+// the accumulator's running state.
+//
+// On success: returns true and writes the resolved path back via outPath.
+// outNumPoints reports how many points landed in the saved file.
+// outMessage is set in both success and failure cases.
+bool writeMapSnapshot(const string &basePathWithExt,
+                      double voxelSize,
+                      string &outPath,
+                      uint32_t &outNumPoints,
+                      string &outMessage)
 {
+  outPath = basePathWithExt;
+  outNumPoints = 0;
+
   if (exploredAreaCloud->empty()) {
-    response->success = false;
-    response->message = "explored_areas is empty.";
-    return;
+    outMessage = "registered_scan accumulator is empty; nothing to save.";
+    return false;
   }
 
-  // Use caller-supplied path if provided, otherwise fall back to the default.
-  string exploredAreaFilePath = request->file_path.empty() ? exploredAreaFile + "_" + getTimeString() + ".pcd" : request->file_path + ".pcd";
+  pcl::PointCloud<pcl::PointXYZI>::Ptr snapshot(new pcl::PointCloud<pcl::PointXYZI>());
+  *snapshot = *exploredAreaCloud;
 
-  pcl::PointCloud<pcl::PointXYZI>::Ptr exploredSnapshot(new pcl::PointCloud<pcl::PointXYZI>());
-  *exploredSnapshot = *exploredAreaCloud;
-
-  if (pcl::io::savePCDFileBinary(exploredAreaFilePath, *exploredSnapshot) == -1) {
-    response->success = false;
-    response->message = "Failed to save explored_areas to " + exploredAreaFilePath;
-    return;
+  if (voxelSize > 0.0) {
+    pcl::VoxelGrid<pcl::PointXYZI> filter;
+    filter.setLeafSize(voxelSize, voxelSize, voxelSize);
+    filter.setInputCloud(snapshot);
+    pcl::PointCloud<pcl::PointXYZI>::Ptr filtered(new pcl::PointCloud<pcl::PointXYZI>());
+    filter.filter(*filtered);
+    snapshot = filtered;
   }
 
-  // Save gravity offsets companion file alongside the PCD
+  if (pcl::io::savePCDFileBinary(outPath, *snapshot) == -1) {
+    outMessage = "Failed to save map to " + outPath;
+    return false;
+  }
+  outNumPoints = static_cast<uint32_t>(snapshot->points.size());
+
+  string suffix;
   if (gravityOffsetsReceived) {
-    string gravityFilePath = exploredAreaFilePath;
+    string gravityFilePath = outPath;
     size_t pcdPos = gravityFilePath.rfind(".pcd");
     if (pcdPos != string::npos) {
       gravityFilePath.replace(pcdPos, 4, "_gravity.txt");
@@ -156,13 +185,73 @@ void saveExploredAreasHandler(
     if (ofs.is_open()) {
       ofs << std::fixed << std::setprecision(6)
           << gravityRollOffsetDeg << " " << gravityPitchOffsetDeg << std::endl;
-      ofs.close();
     }
-    response->success = true;
-    response->message = "Saved explored_areas to " + exploredAreaFilePath + " (with gravity offsets)";
+    suffix = " (with gravity offsets)";
   } else {
-    response->success = true;
-    response->message = "Saved explored_areas to " + exploredAreaFilePath + " (WARNING: no gravity offsets received)";
+    suffix = " (WARNING: no gravity offsets received)";
+  }
+
+  outMessage = "Saved " + std::to_string(outNumPoints) + " points to "
+             + outPath + suffix;
+  return true;
+}
+
+void saveExploredAreasHandler(
+  const std::shared_ptr<visualization_tools::srv::SaveExploredAreas::Request> request,
+  std::shared_ptr<visualization_tools::srv::SaveExploredAreas::Response> response)
+{
+  string basePath = request->file_path.empty()
+                  ? exploredAreaFile + "_" + getTimeString() + ".pcd"
+                  : request->file_path + ".pcd";
+  string outPath;
+  uint32_t numPoints = 0;
+  // Preserve historical behaviour: no extra re-filtering, snapshot is
+  // whatever the accumulator currently holds.
+  response->success = writeMapSnapshot(basePath, 0.0, outPath, numPoints, response->message);
+}
+
+// Backend-agnostic map snapshot suitable for direct use by FAR planner
+// (or any consumer that loads PCD). The source cloud (/registered_scan)
+// is published in the map frame by both ARISE and lightning-lm, so the
+// saved file is already in the planning frame. When request.save_vgraph
+// is true (default), also publishes the sibling .vgh path on
+// /save_file_dir so FAR planner's graph_decoder writes its visibility
+// graph (which includes the freespace_vgraph subset).
+void saveMapHandler(
+  const std::shared_ptr<visualization_tools::srv::SaveMap::Request> request,
+  std::shared_ptr<visualization_tools::srv::SaveMap::Response> response)
+{
+  string basePath = request->file_path.empty()
+                  ? exploredAreaFile + "_" + getTimeString() + ".pcd"
+                  : request->file_path + ".pcd";
+  double voxel = request->voxel_size > 0.0 ? request->voxel_size : mapVoxelSize;
+
+  string outPath;
+  uint32_t numPoints = 0;
+  response->success = writeMapSnapshot(basePath, voxel, outPath, numPoints, response->message);
+  response->num_points = numPoints;
+  response->vgraph_path = "";
+
+  // Trigger the FAR planner vgraph dump alongside the PCD. graph_decoder
+  // is a pure subscriber here, so only report a vgraph path when something
+  // is actually listening on the save trigger.
+  if (response->success && request->save_vgraph && pubSaveFileDirPtr) {
+    if (pubSaveFileDirPtr->get_subscription_count() == 0) {
+      response->message += "; skipped vgraph (no /save_file_dir subscribers)";
+    } else {
+      string vgraphPath = outPath;
+      size_t pcdPos = vgraphPath.rfind(".pcd");
+      if (pcdPos != string::npos) {
+        vgraphPath.replace(pcdPos, 4, ".vgh");
+      } else {
+        vgraphPath += ".vgh";
+      }
+      std_msgs::msg::String pathMsg;
+      pathMsg.data = vgraphPath;
+      pubSaveFileDirPtr->publish(pathMsg);
+      response->vgraph_path = vgraphPath;
+      response->message += "; requested vgraph -> " + vgraphPath;
+    }
   }
 }
 
@@ -324,6 +413,7 @@ int main(int argc, char** argv)
   nh->declare_parameter<double>("overallMapVoxelSize", overallMapVoxelSize);
   nh->declare_parameter<double>("exploredAreaVoxelSize", exploredAreaVoxelSize);
   nh->declare_parameter<double>("exploredVolumeVoxelSize", exploredVolumeVoxelSize);
+  nh->declare_parameter<double>("mapVoxelSize", mapVoxelSize);
   nh->declare_parameter<double>("transInterval", transInterval);
   nh->declare_parameter<double>("yawInterval", yawInterval);
   nh->declare_parameter<int>("overallMapDisplayInterval", overallMapDisplayInterval);
@@ -340,6 +430,7 @@ int main(int argc, char** argv)
   nh->get_parameter("overallMapVoxelSize", overallMapVoxelSize);
   nh->get_parameter("exploredAreaVoxelSize", exploredAreaVoxelSize);
   nh->get_parameter("exploredVolumeVoxelSize", exploredVolumeVoxelSize);
+  nh->get_parameter("mapVoxelSize", mapVoxelSize);
   nh->get_parameter("transInterval", transInterval);
   nh->get_parameter("yawInterval", yawInterval);
   nh->get_parameter("overallMapDisplayInterval", overallMapDisplayInterval);
@@ -381,6 +472,16 @@ int main(int argc, char** argv)
   auto saveExploredAreasService =
     nh->create_service<visualization_tools::srv::SaveExploredAreas>("/save_explored_areas", saveExploredAreasHandler);
   (void)saveExploredAreasService;
+
+  // Publisher to FAR planner's graph_decoder save trigger. QoS(5) matches
+  // graph_decoder's subscription so messages aren't dropped on connect.
+  pubSaveFileDirPtr =
+    nh->create_publisher<std_msgs::msg::String>("/save_file_dir", rclcpp::QoS(5));
+
+  // Backend-agnostic planning-grade map saver (ARISE + lightning-lm).
+  auto saveMapService =
+    nh->create_service<visualization_tools::srv::SaveMap>("/save_map", saveMapHandler);
+  (void)saveMapService;
 
   overallMapDwzFilter.setLeafSize(overallMapVoxelSize, overallMapVoxelSize, overallMapVoxelSize);
   exploredAreaDwzFilter.setLeafSize(exploredAreaVoxelSize, exploredAreaVoxelSize, exploredAreaVoxelSize);

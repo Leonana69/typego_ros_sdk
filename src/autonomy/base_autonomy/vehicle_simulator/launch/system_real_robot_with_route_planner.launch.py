@@ -18,6 +18,7 @@ def generate_launch_description():
   vehicleY = LaunchConfiguration('vehicleY')
   checkTerrainConn = LaunchConfiguration('checkTerrainConn')
   map_dir = LaunchConfiguration('map_dir')
+  vgraph_dir = LaunchConfiguration('vgraph_dir')
   slam_backend = LaunchConfiguration('slam_backend')
   local_planner_config = LaunchConfiguration('local_planner_config')
   vehicleLength = LaunchConfiguration('vehicleLength')
@@ -34,6 +35,7 @@ def generate_launch_description():
   declare_vehicleY = DeclareLaunchArgument('vehicleY', default_value='0.0', description='')
   declare_checkTerrainConn = DeclareLaunchArgument('checkTerrainConn', default_value='true', description='')
   declare_map_dir = DeclareLaunchArgument('map_dir', default_value='', description='Path to the map PCD file')
+  declare_vgraph_dir = DeclareLaunchArgument('vgraph_dir', default_value='', description='Path to the saved FAR visibility graph')
   declare_slam_backend = DeclareLaunchArgument(
     'slam_backend',
     default_value='arise',
@@ -139,6 +141,22 @@ def generate_launch_description():
     }.items()
   )
 
+  restore_saved_vgraph = TimerAction(
+    period=8.0,
+    actions=[
+      Node(
+        package='vehicle_simulator',
+        executable='farVgraphLoader',
+        name='far_vgraph_loader',
+        output='screen',
+        condition=IfCondition(PythonExpression(["'", vgraph_dir, "' != ''"])),
+        parameters=[{
+          'vgraph_file': vgraph_dir,
+        }],
+      )
+    ],
+  )
+
   ld = LaunchDescription()
 
   # Add the actions
@@ -151,6 +169,7 @@ def generate_launch_description():
   ld.add_action(declare_vehicleY)
   ld.add_action(declare_checkTerrainConn)
   ld.add_action(declare_map_dir)
+  ld.add_action(declare_vgraph_dir)
   ld.add_action(declare_slam_backend)
   ld.add_action(declare_local_planner_config)
   ld.add_action(declare_vehicleLength)
@@ -167,5 +186,6 @@ def generate_launch_description():
   ld.add_action(start_visualization_tools)
   ld.add_action(start_joy)
   ld.add_action(start_far_planner)
+  ld.add_action(restore_saved_vgraph)
 
   return ld

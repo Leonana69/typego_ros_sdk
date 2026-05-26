@@ -391,9 +391,12 @@ def generate_launch_description():
             full_launch_file = full_mode_launch_files.get(
                 full_mode, 'system_real_robot.launch.py')
             autonomy_pkg = get_package_share_directory('vehicle_simulator')
+            full_map_prefix = os.path.join(
+                typego_sdk_pkg, 'resource', f'Map-{slam_map_name}', slam_map_name)
+            full_map_pcd = f'{full_map_prefix}.pcd' if slam_map_name != 'empty_map' else ''
             # Common args every system_real_robot*.launch.py declares.
             full_launch_args = {
-                'map_dir': os.path.join(typego_sdk_pkg, 'resource', f'Map-{slam_map_name}', f'{slam_map_name}.pcd') if slam_map_name != 'empty_map' else '',
+                'map_dir': full_map_pcd,
                 'slam_backend': slam_backend,
                 'sensorOffsetX': sensor_offset_x,
                 'sensorOffsetY': sensor_offset_y,
@@ -407,6 +410,9 @@ def generate_launch_description():
             # Mode-specific args — only pass an arg the chosen file declares.
             if full_mode == '1':
                 full_launch_args['route_planner_config'] = far_planner_profile
+                full_launch_args['vgraph_dir'] = (
+                    f'{full_map_prefix}.vgh' if slam_map_name != 'empty_map' else ''
+                )
             elif full_mode == '2':
                 full_launch_args['exploration_planner_config'] = tare_planner_profile
             autonomy_launch = IncludeLaunchDescription(

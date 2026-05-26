@@ -2,7 +2,7 @@
 """Save the current SLAM map to src/typego_sdk/resource/Map-<name>/.
 
 Supports both autonomy modes:
-  full: ARISE SLAM           (/save_slam_map + /save_explored_areas)
+  full: ARISE SLAM           (/save_slam_map + /save_map)
   base: slam_toolbox         (/slam_toolbox/serialize_map, writes + init_pose.json)
 
 Paths are host-relative: the SLAM node (wherever it's running — host via
@@ -39,6 +39,7 @@ INSTALL_MAP_RESOURCE_DIR = PROJECT_ROOT / "install/typego_sdk/share/typego_sdk/r
 RUNTIME_ENV = Path("/tmp/typego-runtime.env")
 SERVICE_TIMEOUT_S = 120.0
 TF_TIMEOUT_S = 5.0
+VGRAPH_TIMEOUT_S = 30.0
 
 
 def _load_runtime_env_if_missing() -> None:
@@ -101,9 +102,18 @@ def _call_service(node: Node, srv_type, name: str, request, label: str):
     return future.result()
 
 
+def _wait_for_file(path: Path, timeout_s: float) -> bool:
+    deadline = time.monotonic() + timeout_s
+    while time.monotonic() < deadline:
+        if path.is_file() and path.stat().st_size > 0:
+            return True
+        time.sleep(0.1)
+    return path.is_file() and path.stat().st_size > 0
+
+
 def _save_full(node: Node, name: str, map_dir: Path) -> None:
     from arise_slam_mid360_msgs.srv import SaveSlamMap
-    from visualization_tools.srv import SaveExploredAreas
+    from visualization_tools.srv import SaveMap
 
     slam_prefix = str(map_dir / name)
 
@@ -114,12 +124,26 @@ def _save_full(node: Node, name: str, map_dir: Path) -> None:
     if not resp.success:
         raise SystemExit(1)
 
-    resp = _call_service(node, SaveExploredAreas, "/save_explored_areas",
-                         SaveExploredAreas.Request(file_path=slam_prefix),
-                         label="/save_explored_areas")
-    print(f"=> /save_explored_areas: success={resp.success} ({resp.message})")
+    resp = _call_service(node, SaveMap, "/save_map",
+                         SaveMap.Request(file_path=slam_prefix,
+                                         voxel_size=0.0,
+                                         save_vgraph=True),
+                         label="/save_map")
+    print(f"=> /save_map: success={resp.success} ({resp.message})")
     if not resp.success:
         raise SystemExit(1)
+    if resp.vgraph_path:
+        vgraph_path = Path(resp.vgraph_path)
+        if _wait_for_file(vgraph_path, VGRAPH_TIMEOUT_S):
+            print(f"=> FAR vgraph: wrote {vgraph_path}")
+        else:
+            raise SystemExit(
+                f"FAR vgraph was requested at {vgraph_path}, but it did not "
+                f"appear within {VGRAPH_TIMEOUT_S:.0f}s. Check that FAR has "
+                "initialized a non-empty visibility graph."
+            )
+    else:
+        print("=> FAR vgraph: skipped (graph_decoder was not subscribed)")
 
     # Full autonomy ships a stock waypoints.csv with the empty_map; reuse it.
     src_wp = INSTALL_MAP_RESOURCE_DIR / "Map-empty_map/waypoints.csv"
