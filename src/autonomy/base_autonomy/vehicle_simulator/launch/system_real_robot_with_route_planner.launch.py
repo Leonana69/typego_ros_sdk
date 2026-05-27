@@ -9,6 +9,7 @@ from launch_ros.actions import Node
 from launch.substitutions import LaunchConfiguration, PythonExpression
 
 def generate_launch_description():
+  route_planner_backend = LaunchConfiguration('route_planner_backend')
   route_planner_config = LaunchConfiguration('route_planner_config')
   world_name = LaunchConfiguration('world_name')
   sensorOffsetX = LaunchConfiguration('sensorOffsetX')
@@ -26,6 +27,11 @@ def generate_launch_description():
   maxSpeed = LaunchConfiguration('maxSpeed')
   autonomySpeed = LaunchConfiguration('autonomySpeed')
 
+  declare_route_planner_backend = DeclareLaunchArgument(
+    'route_planner_backend',
+    default_value='far',
+    description='Global route backend: "far" or "pcd_grid".'
+  )
   declare_route_planner_config = DeclareLaunchArgument('route_planner_config', default_value='outdoor', description='FAR planner config profile')
   declare_world_name = DeclareLaunchArgument('world_name', default_value='real_world', description='')
   declare_sensorOffsetX = DeclareLaunchArgument('sensorOffsetX', default_value='0.05', description='')
@@ -51,6 +57,13 @@ def generate_launch_description():
 
   use_arise = IfCondition(PythonExpression(["'", slam_backend, "' == 'arise'"]))
   use_lightning = IfCondition(PythonExpression(["'", slam_backend, "' == 'lightning'"]))
+  use_far = IfCondition(PythonExpression(["'", route_planner_backend, "' == 'far'"]))
+  use_pcd_grid = IfCondition(PythonExpression([
+    "'", route_planner_backend, "' == 'pcd_grid' and '", map_dir, "' != ''"
+  ]))
+  local_action_server = PythonExpression([
+    "'false' if '", route_planner_backend, "' == 'pcd_grid' else 'true'"
+  ])
   
   start_local_planner = IncludeLaunchDescription(
     FrontendLaunchDescriptionSource(os.path.join(
@@ -68,6 +81,7 @@ def generate_launch_description():
       'autonomySpeed': autonomySpeed,
       'vehicleLength': vehicleLength,
       'vehicleWidth': vehicleWidth,
+      'enableActionServer': local_action_server,
     }.items()
   )
 
@@ -138,7 +152,20 @@ def generate_launch_description():
       [get_package_share_directory('far_planner'), '/launch/far_planner.launch']),
     launch_arguments={
       'config': route_planner_config,
-    }.items()
+    }.items(),
+    condition=use_far,
+  )
+
+  start_pcd_grid_planner = IncludeLaunchDescription(
+    PythonLaunchDescriptionSource(os.path.join(
+      get_package_share_directory('pcd_grid_planner'), 'launch', 'pcd_grid_planner.launch.py')
+    ),
+    launch_arguments={
+      'map_file': map_dir,
+      'vehicleLength': vehicleLength,
+      'vehicleWidth': vehicleWidth,
+    }.items(),
+    condition=use_pcd_grid,
   )
 
   restore_saved_vgraph = TimerAction(
@@ -149,7 +176,9 @@ def generate_launch_description():
         executable='farVgraphLoader',
         name='far_vgraph_loader',
         output='screen',
-        condition=IfCondition(PythonExpression(["'", vgraph_dir, "' != ''"])),
+        condition=IfCondition(PythonExpression([
+          "'", route_planner_backend, "' == 'far' and '", vgraph_dir, "' != ''"
+        ])),
         parameters=[{
           'vgraph_file': vgraph_dir,
         }],
@@ -160,6 +189,7 @@ def generate_launch_description():
   ld = LaunchDescription()
 
   # Add the actions
+  ld.add_action(declare_route_planner_backend)
   ld.add_action(declare_route_planner_config)
   ld.add_action(declare_world_name)
   ld.add_action(declare_sensorOffsetX)
@@ -186,6 +216,7 @@ def generate_launch_description():
   ld.add_action(start_visualization_tools)
   ld.add_action(start_joy)
   ld.add_action(start_far_planner)
+  ld.add_action(start_pcd_grid_planner)
   ld.add_action(restore_saved_vgraph)
 
   return ld

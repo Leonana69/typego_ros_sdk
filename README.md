@@ -183,8 +183,8 @@ make console
 `make console` is a TUI that:
 
 1. Asks for autonomy mode (`base` / `full`).
-2. For full autonomy, asks which layer — `0` plain, `1` FAR route planner, `2` TARE exploration planner (matches `src/autonomy/real_robot.sh`'s `MODE`).
-3. Lists the maps on disk filtered by mode (base: `.posegraph`; full: `.pcd`) plus **new map** to start from empty.
+2. For full autonomy, asks which layer — `0` plain, `1` FAR route planner, `2` PCD roadmap planner, `3` TARE exploration planner.
+3. Lists the maps on disk filtered by mode (base: `.posegraph`; full: `.pcd`) plus **new map** to start from empty. The PCD roadmap option only allows saved PCD maps because it plans from an existing map.
 4. Spawns `ros2 launch typego_sdk typego_bringup.launch.py …` with the right args and streams its logs in the top pane.
 5. In a new-map session, type `s` → enter a name → map is saved and the console returns to the menu; the new map is ready to pick on the next run.
 
@@ -196,7 +196,7 @@ Bottom-pane shortcuts while running: `q` quit, `m` back to menu, `s` save (new-m
 make rviz
 ```
 
-Same TUI shape: asks for mode, for full mode asks which config (vehicle simulator / FAR / TARE), then streams rviz logs. `q` to quit, `m` to pick a different config.
+Same TUI shape: asks for mode, for full mode asks which config (vehicle simulator / FAR / TARE / PCD roadmap), then streams rviz logs. `q` to quit, `m` to pick a different config.
 
 ### Headless / scripted launch
 

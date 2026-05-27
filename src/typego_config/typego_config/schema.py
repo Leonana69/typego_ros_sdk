@@ -17,6 +17,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 RobotType = Literal['go2', 'kami']
 AutonomyType = Literal['base', 'full']
 SlamBackend = Literal['arise', 'lightning']
+RoutePlannerBackend = Literal['far', 'pcd_grid']
 Rmw = Literal[
     'rmw_cyclonedds_cpp',
     'rmw_fastrtps_cpp',
@@ -132,6 +133,10 @@ class ProfilesConfig(BaseModel):
     local_planner_profile: str = Field(
         default='dog',
         description='Picks local_planner/config/<name>.yaml.',
+    )
+    route_planner_backend: RoutePlannerBackend = Field(
+        default='far',
+        description='Global route backend for full_mode=1.',
     )
     far_planner_profile: str = Field(
         default='outdoor',

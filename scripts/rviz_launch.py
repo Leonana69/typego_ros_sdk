@@ -7,6 +7,7 @@ config to load (mirrors MODE=0/1/2 in src/autonomy/real_robot.sh):
     0  base_autonomy        vehicle_simulator.rviz
     1  route_planner         far_planner/default.rviz
     2  exploration_planner   tare_planner_ground.rviz
+    3  PCD route planner     pcd_grid_planner/default.rviz
 
 Base mode runs plain rviz (no -d). Once launched, rviz's stdout/stderr
 streams into the log pane; type `q` + Enter to quit, or `m` + Enter to go
@@ -47,6 +48,8 @@ FULL_CONFIGS = [
      AUTONOMY / "route_planner/far_planner/rviz/default.rviz"),
     ("2", "TARE exploration planner",
      AUTONOMY / "exploration_planner/tare_planner/rviz/tare_planner_ground.rviz"),
+    ("3", "PCD grid planner",
+     AUTONOMY / "route_planner/pcd_grid_planner/rviz/default.rviz"),
 ]
 
 
@@ -128,7 +131,7 @@ class RvizConsole(App):
         self.log_pane.write("")
         self.log_pane.write("  [bold]b[/bold]  back       [bold]q[/bold]  quit")
         self._set_status("Select rviz config")
-        self.prompt.placeholder = "Type 0, 1, or 2 (or b / q), then Enter"
+        self.prompt.placeholder = "Type 0, 1, 2, or 3 (or b / q), then Enter"
         self.prompt.value = ""
 
     def _set_status(self, text: str) -> None:

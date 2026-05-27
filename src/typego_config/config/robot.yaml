@@ -55,6 +55,7 @@ profiles:
   nav2_params_file: nav2_params.yaml      # under typego_sdk/config/
   slam_params_file: slam.yaml             # under typego_sdk/config/
   local_planner_profile: dog              # local_planner/config/<name>.yaml: dog | omniDir | standard
+  route_planner_backend: far              # full_mode 1 backend: far | pcd_grid
   far_planner_profile: outdoor            # far_planner/config/<name>.yaml: indoor | outdoor
   tare_planner_profile: indoor_small      # tare_planner/<name>.yaml: indoor_small | indoor_large | outdoor
 

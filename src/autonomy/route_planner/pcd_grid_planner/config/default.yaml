@@ -1,0 +1,23 @@
+pcd_grid_planner:
+  ros__parameters:
+    map_frame: map
+
+    map_voxel_size: 0.08
+    grid_resolution: 0.20
+    grid_padding: 0.2
+    grid_obstacle_inflation_radius: -1.0   # -1 → fall back to clearance_radius
+    grid_max_cells: 2000000
+
+    max_slope_deg: 25.0
+    max_step_height: 0.18
+
+    min_clearance: 0.35
+    obstacle_height: 0.15
+    vehicle_height: 1.0
+
+    start_snap_radius: 6.0
+    goal_snap_radius: 2.0
+    lookahead_distance: 2.5
+    waypoint_reach_radius: 0.6
+    goal_tolerance: 0.35
+    waypoint_rate: 5.0

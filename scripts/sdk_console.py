@@ -16,7 +16,7 @@ import signal
 import sys
 from datetime import datetime
 from pathlib import Path
-from typing import Optional, TextIO
+from typing import NamedTuple, Optional, TextIO
 
 try:
     from rich.text import Text
@@ -38,12 +38,27 @@ LOG_DIR = PROJECT_ROOT / "logs"
 LAUNCH_CMD = ["ros2", "launch", "typego_sdk", "typego_bringup.launch.py"]
 EMPTY_MAP = "empty_map"
 
-# Full-autonomy sub-modes: (key, short-label, launch-arg-value).
-# Mirrors typego_bringup.launch.py's full_mode mapping.
+# Full-autonomy menu options. PCD grid shares full_mode=1 with FAR and is
+# selected by passing route_planner_backend:=pcd_grid.
+class FullSubOption(NamedTuple):
+    key: str
+    label: str
+    full_mode: str
+    extra_args: tuple[str, ...] = ()
+    requires_existing_map: bool = False
+
+
 FULL_SUB_OPTIONS = [
-    ("0", "plain (vehicle simulator)"),
-    ("1", "FAR route planner"),
-    ("2", "TARE exploration planner"),
+    FullSubOption("0", "plain (vehicle simulator)", "0"),
+    FullSubOption("1", "FAR route planner", "1", ("route_planner_backend:=far",)),
+    FullSubOption(
+        "2",
+        "PCD grid planner",
+        "1",
+        ("route_planner_backend:=pcd_grid",),
+        True,
+    ),
+    FullSubOption("3", "TARE exploration planner", "2"),
 ]
 
 
@@ -97,8 +112,10 @@ class TypegoConsole(App):
         super().__init__()
         self.state: str = "mode"
         self.mode: Optional[str] = None
-        self.full_mode_key: str = "0"         # full-autonomy sub-mode: "0" / "1" / "2"
+        self.full_mode_key: str = "0"         # typego_bringup full_mode launch value
         self.full_mode_label: str = ""        # short label for status line
+        self.full_extra_launch_args: list[str] = []
+        self.full_requires_existing_map: bool = False
         self.map_options: list[str] = []
         self.selected_map: Optional[str] = None  # None means "build new"
         self.launch_proc: Optional[asyncio.subprocess.Process] = None
@@ -129,6 +146,8 @@ class TypegoConsole(App):
         self.state = "mode"
         self.mode = None
         self.full_mode_label = ""
+        self.full_extra_launch_args = []
+        self.full_requires_existing_map = False
         self.selected_map = None
         self._banner("Typego SDK Console")
         self.log_pane.write("Choose autonomy mode:")
@@ -143,12 +162,12 @@ class TypegoConsole(App):
         self.state = "full_sub"
         self._banner("Mode: full")
         self.log_pane.write("Full-autonomy layer:")
-        for key, label in FULL_SUB_OPTIONS:
-            self.log_pane.write(f"  [bold]{key}[/bold]  {label}")
+        for option in FULL_SUB_OPTIONS:
+            self.log_pane.write(f"  [bold]{option.key}[/bold]  {option.label}")
         self.log_pane.write("")
         self.log_pane.write("  [bold]b[/bold]  back       [bold]q[/bold]  quit")
         self._set_status("Select full-autonomy layer")
-        self.prompt.placeholder = "Type 0, 1, or 2 (or b / q), then Enter"
+        self.prompt.placeholder = "Type 0, 1, 2, or 3 (or b / q), then Enter"
         self.prompt.value = ""
 
     def _show_map_menu(self) -> None:
@@ -159,13 +178,22 @@ class TypegoConsole(App):
         self.log_pane.write("Choose a map:")
         for i, name in enumerate(self.map_options, start=1):
             self.log_pane.write(f"  [bold]{i}[/bold]  {name}")
+        show_new_map = not (self.mode == "full" and self.full_requires_existing_map)
         new_idx = len(self.map_options) + 1
-        self.log_pane.write(f"  [bold]{new_idx}[/bold]  [green]new map[/green]  (start mapping from empty)")
+        if show_new_map:
+            self.log_pane.write(f"  [bold]{new_idx}[/bold]  [green]new map[/green]  (start mapping from empty)")
+        elif not self.map_options:
+            self.log_pane.write("[yellow]No saved PCD maps found. PCD roadmap planner needs an existing full map.[/yellow]")
         self.log_pane.write("")
         self.log_pane.write("  [bold]b[/bold]  back      [bold]q[/bold]  quit")
         self._set_status(f"Mode: {self.mode}  —  select map")
-        upper = max(new_idx, 1)
-        self.prompt.placeholder = f"Type 1-{upper} (or b / q), then Enter"
+        if show_new_map:
+            upper = max(new_idx, 1)
+            self.prompt.placeholder = f"Type 1-{upper} (or b / q), then Enter"
+        elif self.map_options:
+            self.prompt.placeholder = f"Type 1-{len(self.map_options)} (or b / q), then Enter"
+        else:
+            self.prompt.placeholder = "Type b or q, then Enter"
         self.prompt.value = ""
 
     def _mode_label(self) -> str:
@@ -221,10 +249,12 @@ class TypegoConsole(App):
         if raw in ("b", "back"):
             self._show_mode_menu()
             return
-        for key, label in FULL_SUB_OPTIONS:
-            if key == raw:
-                self.full_mode_key = key
-                self.full_mode_label = label
+        for option in FULL_SUB_OPTIONS:
+            if option.key == raw:
+                self.full_mode_key = option.full_mode
+                self.full_mode_label = option.label
+                self.full_extra_launch_args = list(option.extra_args)
+                self.full_requires_existing_map = option.requires_existing_map
                 self._show_map_menu()
                 return
         self.log_pane.write(f"[red]Unknown option: {raw!r}[/red]")
@@ -248,7 +278,7 @@ class TypegoConsole(App):
         if 1 <= idx <= len(self.map_options):
             self.selected_map = self.map_options[idx - 1]
             await self._start_launch()
-        elif idx == new_idx:
+        elif idx == new_idx and not (self.mode == "full" and self.full_requires_existing_map):
             self.selected_map = None
             await self._start_launch()
         else:
@@ -333,6 +363,7 @@ class TypegoConsole(App):
         ]
         if self.mode == "full":
             cmd.append(f"full_mode:={self.full_mode_key}")
+            cmd.extend(self.full_extra_launch_args)
         self._banner(f"Launching: {' '.join(cmd)}")
         self._open_log_file(cmd)
         if self.log_path is not None:

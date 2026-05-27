@@ -14,6 +14,7 @@
   <arg name="vehicleFrame" default="base_link"/>
   <arg name="goalX" default="0.0"/>
   <arg name="goalY" default="0.0"/>
+  <arg name="enableActionServer" default="true"/>
   <arg name="use_sim_time" default="false"/>
 
   <node pkg="local_planner" exec="localPlanner" name="localPlanner" output="screen">
@@ -70,6 +71,7 @@
     <param name="freezeTime" value="0.0" />
     <param name="goalX" value="$(var goalX)" />
     <param name="goalY" value="$(var goalY)" />
+    <param name="enableActionServer" value="$(var enableActionServer)" />
     <param name="use_sim_time" value="$(var use_sim_time)" />
   </node>
 

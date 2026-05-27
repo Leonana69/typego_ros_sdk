@@ -22,6 +22,11 @@ def generate_launch_description():
         default_value='base',
         description='Autonomy type: "base" (Twist) or "full" (TwistStamped + CustomMsg)'
     )
+    robot_ip_arg = DeclareLaunchArgument(
+        'robot_ip',
+        default_value='',
+        description='Robot LAN IP. If empty, nodes fall back to $ROBOT_IP.'
+    )
     cmd_vel_max_linear_arg = DeclareLaunchArgument(
         'cmd_vel_max_linear', default_value='0.8',
         description='cmd_vel linear clamp, m/s (robot.yaml motion.cmd_vel_max_linear)'
@@ -39,6 +44,7 @@ def generate_launch_description():
         robot_id = LaunchConfiguration('robot_id').perform(context)
         move_bridge = LaunchConfiguration('move_bridge').perform(context).lower() == 'true'
         autonomy_type = LaunchConfiguration('autonomy_type').perform(context)
+        robot_ip = LaunchConfiguration('robot_ip').perform(context)
         cmd_vel_max_linear = float(LaunchConfiguration('cmd_vel_max_linear').perform(context))
         cmd_vel_max_angular = float(LaunchConfiguration('cmd_vel_max_angular').perform(context))
         cmd_vel_min_angular = float(LaunchConfiguration('cmd_vel_min_angular').perform(context))
@@ -94,6 +100,7 @@ def generate_launch_description():
                 executable='cmd_vel_controller_node',
                 name='cmd_vel_controller_node',
                 parameters=[{
+                    'robot_ip': robot_ip,
                     'accept_cmd_vel': True,
                     'cmd_vel_type': 'Twist',  # Use 'Twist' or 'TwistStamped'
                     'cmd_vel_max_linear': cmd_vel_max_linear,
@@ -110,6 +117,7 @@ def generate_launch_description():
         robot_id_arg,
         autonomy_type_arg,
         move_bridge_arg,
+        robot_ip_arg,
         cmd_vel_max_linear_arg,
         cmd_vel_max_angular_arg,
         cmd_vel_min_angular_arg,

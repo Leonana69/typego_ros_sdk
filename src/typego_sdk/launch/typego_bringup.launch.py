@@ -33,10 +33,14 @@ _DEFAULT_FALLBACKS = {
     'slam_map_name': 'empty_map',
     'launch_web_gateway': 'true',
     'web_gateway_port': '8080',
+    'robot_ip': '',
+    'edge_service_ip': '127.0.0.1',
+    'edge_service_port': '50049',
     'nav2_params_file': 'nav2_params.yaml',
     'slam_params_file': 'slam.yaml',
     # profiles.* — which per-tool tuning YAML each planner loads
     'local_planner_profile': 'dog',
+    'route_planner_backend': 'far',
     'far_planner_profile': 'outdoor',
     'tare_planner_profile': 'indoor_small',
     # sensors.* — sensor mounting offsets
@@ -127,9 +131,13 @@ def _load_defaults():
         'slam_map_name': ('map', 'slam_map_name'),
         'launch_web_gateway': ('web_gateway', 'enabled'),
         'web_gateway_port': ('web_gateway', 'port'),
+        'robot_ip': ('network', 'robot_ip'),
+        'edge_service_ip': ('network', 'edge_service', 'ip'),
+        'edge_service_port': ('network', 'edge_service', 'port'),
         'nav2_params_file': ('profiles', 'nav2_params_file'),
         'slam_params_file': ('profiles', 'slam_params_file'),
         'local_planner_profile': ('profiles', 'local_planner_profile'),
+        'route_planner_backend': ('profiles', 'route_planner_backend'),
         'far_planner_profile': ('profiles', 'far_planner_profile'),
         'tare_planner_profile': ('profiles', 'tare_planner_profile'),
         'sensor_offset_x': ('sensors', 'lidar_offset_x'),
@@ -203,6 +211,21 @@ ARGUMENTS = [
         description='TCP port for the web gateway HTTP+WebSocket server.'
     ),
     DeclareLaunchArgument(
+        'robot_ip',
+        default_value=_DEFAULTS['robot_ip'],
+        description='Robot LAN IP (network.robot_ip).'
+    ),
+    DeclareLaunchArgument(
+        'edge_service_ip',
+        default_value=_DEFAULTS['edge_service_ip'],
+        description='Edge service IP (network.edge_service.ip).'
+    ),
+    DeclareLaunchArgument(
+        'edge_service_port',
+        default_value=_DEFAULTS['edge_service_port'],
+        description='Edge service TCP port (network.edge_service.port).'
+    ),
+    DeclareLaunchArgument(
         'nav2_params_file',
         default_value=_DEFAULTS['nav2_params_file'],
         description='Nav2 parameter file (profiles.nav2_params_file in robot.yaml).'
@@ -217,6 +240,11 @@ ARGUMENTS = [
         default_value=_DEFAULTS['local_planner_profile'],
         description='local_planner config profile (profiles.local_planner_profile): '
                     'dog | omniDir | standard.'
+    ),
+    DeclareLaunchArgument(
+        'route_planner_backend',
+        default_value=_DEFAULTS['route_planner_backend'],
+        description='Route-planner backend for full_mode 1: far | pcd_grid.'
     ),
     DeclareLaunchArgument(
         'far_planner_profile',
@@ -302,12 +330,20 @@ def generate_launch_description():
             LaunchConfiguration('launch_web_gateway')).lower() == 'true'
         web_gateway_port = context.perform_substitution(
             LaunchConfiguration('web_gateway_port'))
+        robot_ip = context.perform_substitution(
+            LaunchConfiguration('robot_ip'))
+        edge_service_ip = context.perform_substitution(
+            LaunchConfiguration('edge_service_ip'))
+        edge_service_port = context.perform_substitution(
+            LaunchConfiguration('edge_service_port'))
         nav2_params_file = context.perform_substitution(
             LaunchConfiguration('nav2_params_file'))
         slam_params_file = context.perform_substitution(
             LaunchConfiguration('slam_params_file'))
         local_planner_profile = context.perform_substitution(
             LaunchConfiguration('local_planner_profile'))
+        route_planner_backend = context.perform_substitution(
+            LaunchConfiguration('route_planner_backend'))
         far_planner_profile = context.perform_substitution(
             LaunchConfiguration('far_planner_profile'))
         tare_planner_profile = context.perform_substitution(
@@ -335,6 +371,7 @@ def generate_launch_description():
         launch_config_service = context.perform_substitution(
             LaunchConfiguration('launch_config_service')).lower() == 'true'
 
+        map_name = slam_map_name[4:] if slam_map_name.startswith('Map-') else slam_map_name
         robot_index = f'robot{robot_id}' if robot_id else ''
         tf_prefix = f'/{robot_index}' if robot_index else ''
 
@@ -356,6 +393,7 @@ def generate_launch_description():
             launch_arguments={
                 'autonomy_type': autonomy_type,
                 'robot_id': robot_id,
+                'robot_ip': robot_ip,
                 # motion.* — cmd_vel_controller clamps (applies to base + full)
                 'cmd_vel_max_linear': cmd_vel_max_linear,
                 'cmd_vel_max_angular': cmd_vel_max_angular,
@@ -377,7 +415,9 @@ def generate_launch_description():
             output='screen',
             remappings=waypoints_remappings,
             parameters=[{
-                'slam_map_name': slam_map_name,
+                'slam_map_name': map_name,
+                'edge_service_ip': edge_service_ip,
+                'edge_service_port': int(edge_service_port),
             }],
         )
 
@@ -392,8 +432,8 @@ def generate_launch_description():
                 full_mode, 'system_real_robot.launch.py')
             autonomy_pkg = get_package_share_directory('vehicle_simulator')
             full_map_prefix = os.path.join(
-                typego_sdk_pkg, 'resource', f'Map-{slam_map_name}', slam_map_name)
-            full_map_pcd = f'{full_map_prefix}.pcd' if slam_map_name != 'empty_map' else ''
+                typego_sdk_pkg, 'resource', f'Map-{map_name}', map_name)
+            full_map_pcd = f'{full_map_prefix}.pcd' if map_name != 'empty_map' else ''
             # Common args every system_real_robot*.launch.py declares.
             full_launch_args = {
                 'map_dir': full_map_pcd,
@@ -409,9 +449,10 @@ def generate_launch_description():
             }
             # Mode-specific args — only pass an arg the chosen file declares.
             if full_mode == '1':
+                full_launch_args['route_planner_backend'] = route_planner_backend
                 full_launch_args['route_planner_config'] = far_planner_profile
                 full_launch_args['vgraph_dir'] = (
-                    f'{full_map_prefix}.vgh' if slam_map_name != 'empty_map' else ''
+                    f'{full_map_prefix}.vgh' if map_name != 'empty_map' else ''
                 )
             elif full_mode == '2':
                 full_launch_args['exploration_planner_config'] = tare_planner_profile
@@ -429,14 +470,14 @@ def generate_launch_description():
                 ),
                 launch_arguments={
                     'robot_id': robot_id,
-                    'slam_map_name': slam_map_name,
+                    'slam_map_name': map_name,
                     'nav2_params_file': nav2_params_file,
                     'slam_params_file': slam_params_file,
                 }.items(),
             )
 
         actions = [
-            LogInfo(msg=f'Robot namespace: "{robot_index or "<none>"}", SLAM map: "{slam_map_name}"'),
+            LogInfo(msg=f'Robot namespace: "{robot_index or "<none>"}", SLAM map: "{map_name}"'),
             iox_roudi,
             robot_sdk_launch,
             autonomy_launch,

@@ -45,6 +45,19 @@ To reload on a later route-planner run, choose the saved map name as usual. `typ
 
 The legacy `/save_explored_areas` service is preserved for backward compatibility but does not re-filter the snapshot and does not trigger the vgraph save.
 
+### Saved-PCD 2D grid route backend
+For saved-map navigation that should not depend on FAR's live `freespace_vgraph`, launch full route mode with the PCD grid backend:
+
+```
+ros2 launch typego_sdk typego_bringup.launch.py \
+  autonomy_type:=full full_mode:=1 slam_map_name:=<map-name> \
+  route_planner_backend:=pcd_grid
+```
+
+`pcd_grid_planner` loads `Map-<name>/<name>.pcd`, projects it into a conservative 2D occupancy grid in the `map` frame, serves `/navigate_to_pose`, and streams lookahead goals to the existing `local_planner` on `/way_point`. The published `/pcd_2d_map` and `/pcd_grid_markers` topics show the exact grid used for path search.
+
+For RViz, run `make rviz`, choose `full`, then choose `PCD grid planner`. The included RViz config shows `/pcd_2d_map`, `/pcd_grid_markers`, `/pcd_grid_route`, and `/pcd_grid_path`, and its standard goal tool publishes `geometry_msgs/PoseStamped` on `/goal_pose`. The planner subscribes to `/goal_pose` and turns that click into the same `/way_point` stream used by the local planner. Direct action clients can still send `nav2_msgs/action/NavigateToPose` goals to `/navigate_to_pose`.
+
 ## Data Flow (system_real_robot_with_exploration_planner.launch.py)
 This launch file adds the exploration planner to the real-robot pipeline. The detailed topic-level data flow below is based on the default configurations in:
 - `arise_slam_mid360/config/livox_mid360.yaml`

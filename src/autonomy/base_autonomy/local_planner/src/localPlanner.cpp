@@ -68,6 +68,7 @@ rclcpp::Publisher<sensor_msgs::msg::Joy>::SharedPtr pubJoy_;
 rclcpp::Publisher<std_msgs::msg::Float32MultiArray>::SharedPtr pubSpeedConfig_;
 bool has_active_goal_ = false;
 double goal_tolerance_ = 0.3;  // meters
+bool enableActionServer = true;
 
 // Waypoint marker visualization: shows the active goal in RViz and removes it
 // shortly after the robot arrives.
@@ -883,6 +884,7 @@ int main(int argc, char** argv)
   nh->declare_parameter<double>("goalX", goalX);
   nh->declare_parameter<double>("goalY", goalY);
   nh->declare_parameter<double>("goalTolerance", goal_tolerance_);
+  nh->declare_parameter<bool>("enableActionServer", enableActionServer);
 
   nh->get_parameter("pathFolder", pathFolder);
   nh->get_parameter("vehicleFrame", vehicleFrame);
@@ -939,6 +941,7 @@ int main(int argc, char** argv)
   nh->get_parameter("goalX", goalX);
   nh->get_parameter("goalY", goalY);
   nh->get_parameter("goalTolerance", goal_tolerance_);
+  nh->get_parameter("enableActionServer", enableActionServer);
 
   // Validate safety-critical parameters
   if (maxSpeed <= 0) {
@@ -1021,15 +1024,20 @@ int main(int argc, char** argv)
   pubGoalMarker_ = nh->create_publisher<visualization_msgs::msg::Marker>(
       "/way_point_marker", rclcpp::QoS(1).transient_local());
 
-  // Create action server for NavigateToPose
-  action_server_ = rclcpp_action::create_server<NavigateToPose>(
-    nh,
-    "navigate_to_pose",
-    handle_goal,
-    handle_cancel,
-    handle_accepted);
+  // Create action server for NavigateToPose unless a global planner owns it.
+  if (enableActionServer) {
+    action_server_ = rclcpp_action::create_server<NavigateToPose>(
+      nh,
+      "navigate_to_pose",
+      handle_goal,
+      handle_cancel,
+      handle_accepted);
 
-  RCLCPP_INFO(nh->get_logger(), "NavigateToPose action server created");
+    RCLCPP_INFO(nh->get_logger(), "NavigateToPose action server created");
+  } else {
+    RCLCPP_INFO(nh->get_logger(),
+        "NavigateToPose action server disabled; waiting for /way_point goals.");
+  }
 
   auto setSpeedService = nh->create_service<typego_interface::srv::SetSpeed>(
     "/typego/set_speed", setSpeedHandler);
