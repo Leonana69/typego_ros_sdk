@@ -101,6 +101,17 @@ public:
   }
 
 private:
+  enum class CellState : std::uint8_t
+  {
+    UNKNOWN = 0,
+    FREE = 1,
+    BLOCKED = 2,
+  };
+
+  // GridCell mixes build-time accumulators (count/low_count/obstacle_count,
+  // min_z/max_z/low_sum_z) with finalized runtime state (state/z/sdf).
+  // P8 in the rollout plan will split these into separate vectors so the
+  // post-build footprint is much smaller.
   struct GridCell
   {
     int count = 0;
@@ -110,9 +121,8 @@ private:
     double max_z = -std::numeric_limits<double>::infinity();
     double low_sum_z = 0.0;
     double z = 0.0;
-    bool raw_free = false;
-    bool traversable = false;
-    bool inflated = false;
+    double sdf = 0.0;      // meters to nearest non-FREE cell
+    CellState state = CellState::UNKNOWN;
   };
 
   struct GridCandidate
@@ -129,8 +139,13 @@ private:
     declare_parameter<double>("map_voxel_size", 0.08);
     declare_parameter<double>("grid_resolution", 0.20);
     declare_parameter<double>("grid_padding", 0.2);
-    declare_parameter<double>("grid_obstacle_inflation_radius", -1.0);
     declare_parameter<int>("grid_max_cells", 2000000);
+    // -1 → auto-derive from (grid_resolution / map_voxel_size)^2 * fill.
+    // Calibrate against the actual saved maps once you have them under
+    // typego_sdk/resource/Map-* — build-time log reports the resulting
+    // free/unknown/blocked counts.
+    declare_parameter<int>("grid_min_support_points", -1);
+    declare_parameter<double>("grid_min_support_fill", 0.20);
 
     declare_parameter<double>("max_slope_deg", 25.0);
     declare_parameter<double>("max_step_height", 0.18);
@@ -140,6 +155,10 @@ private:
     declare_parameter<double>("vehicle_height", 1.0);
     declare_parameter<double>("vehicle_length", 0.7);
     declare_parameter<double>("vehicle_width", 0.3);
+    // Min SDF along a connector line (start/goal snap + edge check). A bit
+    // less than clearance_radius so the planner can recover when the robot
+    // is already wedged near an obstacle.
+    declare_parameter<double>("line_clearance", -1.0);
 
     declare_parameter<double>("start_snap_radius", 6.0);
     declare_parameter<double>("goal_snap_radius", 2.0);
@@ -154,8 +173,9 @@ private:
     get_parameter("map_voxel_size", map_voxel_size_);
     get_parameter("grid_resolution", grid_resolution_);
     get_parameter("grid_padding", grid_padding_);
-    get_parameter("grid_obstacle_inflation_radius", grid_obstacle_inflation_radius_);
     get_parameter("grid_max_cells", grid_max_cells_);
+    get_parameter("grid_min_support_points", grid_min_support_points_);
+    get_parameter("grid_min_support_fill", grid_min_support_fill_);
 
     get_parameter("max_slope_deg", max_slope_deg_);
     get_parameter("max_step_height", max_step_height_);
@@ -165,6 +185,7 @@ private:
     get_parameter("vehicle_height", vehicle_height_);
     get_parameter("vehicle_length", vehicle_length_);
     get_parameter("vehicle_width", vehicle_width_);
+    get_parameter("line_clearance", line_clearance_);
 
     get_parameter("start_snap_radius", start_snap_radius_);
     get_parameter("goal_snap_radius", goal_snap_radius_);
@@ -175,14 +196,23 @@ private:
 
     max_slope_rad_ = max_slope_deg_ * M_PI / 180.0;
     clearance_radius_ = std::max(min_clearance_, 0.5 * std::hypot(vehicle_length_, vehicle_width_));
+    if (line_clearance_ < 0.0)
+    {
+      line_clearance_ = std::max(0.5 * grid_resolution_, clearance_radius_ - grid_resolution_);
+    }
 
     waypoint_rate_ = std::max(0.5, waypoint_rate_);
     grid_resolution_ = std::max(0.05, grid_resolution_);
     grid_padding_ = std::max(0.0, grid_padding_);
     grid_max_cells_ = std::max(1000, grid_max_cells_);
-    if (grid_obstacle_inflation_radius_ < 0.0)
+
+    if (grid_min_support_points_ < 0)
     {
-      grid_obstacle_inflation_radius_ = clearance_radius_;
+      const double voxel = std::max(0.01, map_voxel_size_);
+      const double ratio = grid_resolution_ / voxel;
+      const double fill = std::clamp(grid_min_support_fill_, 0.0, 1.0);
+      grid_min_support_points_ =
+          std::max(1, static_cast<int>(std::ceil(ratio * ratio * fill)));
     }
   }
 
@@ -335,9 +365,9 @@ private:
       }
     }
 
-    std::vector<int> obstacle_cells;
-    obstacle_cells.reserve(grid_.size() / 8);
-    std::size_t raw_free_count = 0;
+    std::size_t free_count = 0;
+    std::size_t blocked_count = 0;
+    std::size_t unknown_count = 0;
     for (std::size_t i = 0; i < grid_.size(); ++i)
     {
       GridCell& cell = grid_[i];
@@ -350,70 +380,180 @@ private:
         cell.z = cell.min_z;
       }
 
-      const bool has_obstacle = cell.obstacle_count > 0;
-      if (has_obstacle)
+      if (cell.obstacle_count > 0)
       {
-        obstacle_cells.push_back(static_cast<int>(i));
+        cell.state = CellState::BLOCKED;
+        blocked_count++;
       }
-
-      cell.raw_free = !has_obstacle;
-      if (cell.raw_free)
+      else if (cell.low_count >= grid_min_support_points_)
       {
-        raw_free_count++;
+        cell.state = CellState::FREE;
+        free_count++;
+      }
+      else
+      {
+        cell.state = CellState::UNKNOWN;
+        unknown_count++;
       }
     }
 
-    const int inflate_cells = static_cast<int>(
-        std::ceil(grid_obstacle_inflation_radius_ / grid_resolution_));
-    for (int obstacle_index : obstacle_cells)
+    // Mark boundary-touching cells as UNKNOWN: a FREE cell at the grid edge
+    // has no neighbor on one side, so negative-obstacle protection is gone.
+    auto demote_to_unknown_if_free = [&](int idx) {
+      GridCell& cell = grid_[idx];
+      if (cell.state == CellState::FREE)
+      {
+        cell.state = CellState::UNKNOWN;
+        free_count--;
+        unknown_count++;
+      }
+    };
+    for (int gx = 0; gx < grid_width_; ++gx)
     {
-      const int ox = obstacle_index % grid_width_;
-      const int oy = obstacle_index / grid_width_;
-      for (int dy = -inflate_cells; dy <= inflate_cells; ++dy)
-      {
-        for (int dx = -inflate_cells; dx <= inflate_cells; ++dx)
-        {
-          const int nx = ox + dx;
-          const int ny = oy + dy;
-          if (!inGrid(nx, ny))
-          {
-            continue;
-          }
-          const double dist = std::hypot(dx * grid_resolution_, dy * grid_resolution_);
-          if (dist <= grid_obstacle_inflation_radius_)
-          {
-            grid_[gridIndex(nx, ny)].inflated = true;
-          }
-        }
-      }
+      demote_to_unknown_if_free(gridIndex(gx, 0));
+      demote_to_unknown_if_free(gridIndex(gx, grid_height_ - 1));
     }
+    for (int gy = 0; gy < grid_height_; ++gy)
+    {
+      demote_to_unknown_if_free(gridIndex(0, gy));
+      demote_to_unknown_if_free(gridIndex(grid_width_ - 1, gy));
+    }
+
+    buildStaticSdf();
 
     std::size_t traversable_count = 0;
-    std::size_t inflated_free_count = 0;
-    for (GridCell& cell : grid_)
+    for (const GridCell& cell : grid_)
     {
-      cell.traversable = cell.raw_free && !cell.inflated;
-      if (cell.traversable)
+      if (cell.state == CellState::FREE && cell.sdf >= clearance_radius_)
       {
         traversable_count++;
-      }
-      else if (cell.raw_free && cell.inflated)
-      {
-        inflated_free_count++;
       }
     }
 
     RCLCPP_INFO(
         get_logger(),
-        "Built 2D PCD grid: %dx%d cells, res=%.2fm, raw_free=%zu, traversable=%zu, obstacle_cells=%zu, inflated_free=%zu.",
-        grid_width_, grid_height_, grid_resolution_, raw_free_count, traversable_count,
-        obstacle_cells.size(), inflated_free_count);
+        "Built 2D PCD grid: %dx%d cells, res=%.2fm, support>=%d, "
+        "free=%zu blocked=%zu unknown=%zu traversable(sdf>=%.2fm)=%zu.",
+        grid_width_, grid_height_, grid_resolution_, grid_min_support_points_,
+        free_count, blocked_count, unknown_count, clearance_radius_, traversable_count);
     if (traversable_count == 0)
     {
-      RCLCPP_ERROR(get_logger(), "2D PCD grid has no traversable cells.");
+      RCLCPP_ERROR(
+          get_logger(),
+          "2D PCD grid has no traversable cells. "
+          "If free=%zu is reasonable but traversable=0, clearance_radius=%.2fm "
+          "may be too large for this map's corridor widths.",
+          free_count, clearance_radius_);
       return false;
     }
     return true;
+  }
+
+  // Felzenszwalb-Huttenlocher 1D squared-distance transform along a strip.
+  // f_in/f_out are squared distances; samples f_in[i] = 0 are sources.
+  // Pre-allocated scratch v[] (index of parabola in lower envelope) and
+  // zb[] (boundaries) are sized to >= n+1 by the caller.
+  static void edt1d(
+      const double* f_in, double* f_out, int n, int* v, double* zb)
+  {
+    constexpr double kInf = std::numeric_limits<double>::infinity();
+    int k = 0;
+    v[0] = 0;
+    zb[0] = -kInf;
+    zb[1] = kInf;
+    for (int q = 1; q < n; ++q)
+    {
+      double s = 0.0;
+      while (true)
+      {
+        const double vk = static_cast<double>(v[k]);
+        const double qd = static_cast<double>(q);
+        // Intersection of parabolas rooted at v[k] and q.
+        s = ((f_in[q] + qd * qd) - (f_in[v[k]] + vk * vk)) / (2.0 * (qd - vk));
+        if (s > zb[k])
+        {
+          break;
+        }
+        --k;
+      }
+      ++k;
+      v[k] = q;
+      zb[k] = s;
+      zb[k + 1] = kInf;
+    }
+    k = 0;
+    for (int q = 0; q < n; ++q)
+    {
+      while (zb[k + 1] < static_cast<double>(q))
+      {
+        ++k;
+      }
+      const double dq = static_cast<double>(q - v[k]);
+      f_out[q] = dq * dq + f_in[v[k]];
+    }
+  }
+
+  void buildStaticSdf()
+  {
+    const std::size_t cells = grid_.size();
+    if (cells == 0)
+    {
+      return;
+    }
+
+    // Large finite sentinel — avoids inf - inf = NaN inside the parabola
+    // intersection arithmetic. Must dominate any real squared distance in
+    // *cell units*, which is bounded by `width^2 + height^2`. Multiply by
+    // a safety factor; even a 2 M-cell grid stays well under 1e15.
+    const double sentinel =
+        static_cast<double>(grid_width_) * grid_width_ +
+        static_cast<double>(grid_height_) * grid_height_ + 1.0;
+
+    // Squared distance in *cell units*; scale to meters at the very end.
+    std::vector<double> squared(cells);
+    for (std::size_t i = 0; i < cells; ++i)
+    {
+      squared[i] = grid_[i].state == CellState::FREE ? sentinel : 0.0;
+    }
+
+    const int n = std::max(grid_width_, grid_height_);
+    std::vector<double> row_in(n);
+    std::vector<double> row_out(n);
+    std::vector<int> v(n + 1);
+    std::vector<double> zb(n + 2);
+
+    // Row pass.
+    for (int gy = 0; gy < grid_height_; ++gy)
+    {
+      for (int gx = 0; gx < grid_width_; ++gx)
+      {
+        row_in[gx] = squared[gridIndex(gx, gy)];
+      }
+      edt1d(row_in.data(), row_out.data(), grid_width_, v.data(), zb.data());
+      for (int gx = 0; gx < grid_width_; ++gx)
+      {
+        squared[gridIndex(gx, gy)] = row_out[gx];
+      }
+    }
+
+    // Column pass.
+    for (int gx = 0; gx < grid_width_; ++gx)
+    {
+      for (int gy = 0; gy < grid_height_; ++gy)
+      {
+        row_in[gy] = squared[gridIndex(gx, gy)];
+      }
+      edt1d(row_in.data(), row_out.data(), grid_height_, v.data(), zb.data());
+      for (int gy = 0; gy < grid_height_; ++gy)
+      {
+        squared[gridIndex(gx, gy)] = row_out[gy];
+      }
+    }
+
+    for (std::size_t i = 0; i < cells; ++i)
+    {
+      grid_[i].sdf = std::sqrt(squared[i]) * grid_resolution_;
+    }
   }
 
   void odomCallback(const nav_msgs::msg::Odometry::SharedPtr msg)
@@ -649,9 +789,15 @@ private:
     return point;
   }
 
+  bool gridFree(int index) const
+  {
+    return index >= 0 && index < static_cast<int>(grid_.size()) &&
+           grid_[index].state == CellState::FREE;
+  }
+
   bool gridTraversable(int index) const
   {
-    return index >= 0 && index < static_cast<int>(grid_.size()) && grid_[index].traversable;
+    return gridFree(index) && grid_[index].sdf >= clearance_radius_;
   }
 
   bool gridMoveAllowed(int from_idx, int to_idx) const
@@ -666,6 +812,23 @@ private:
     const int ty = to_idx / grid_width_;
     const int dx = tx - fx;
     const int dy = ty - fy;
+
+    // Slope + step. Both z values are valid (cell.state == FREE implies
+    // low_count >= grid_min_support_points, so z was averaged from
+    // observations).
+    const double dz = std::abs(grid_[from_idx].z - grid_[to_idx].z);
+    if (dz > max_step_height_)
+    {
+      return false;
+    }
+    const double step_xy = std::hypot(
+        static_cast<double>(dx) * grid_resolution_,
+        static_cast<double>(dy) * grid_resolution_);
+    if (step_xy > 1e-6 && dz > step_xy * std::tan(max_slope_rad_))
+    {
+      return false;
+    }
+
     if (std::abs(dx) == 1 && std::abs(dy) == 1)
     {
       const int side_a = gridIndex(fx + dx, fy);
@@ -678,47 +841,18 @@ private:
     return true;
   }
 
+  // Line-of-sight check using the SDF. The line is traversable if every
+  // sample along it stays at least `min_sdf` away from any non-FREE cell.
+  // `min_sdf < 0` defaults to line_clearance_.
   bool gridLineTraversableWorld(
       const geometry_msgs::msg::Point& from,
-      const geometry_msgs::msg::Point& to) const
-  {
-    const double length = pointDistXY(from, to);
-    const int steps = std::max(1, static_cast<int>(std::ceil(length / (0.5 * grid_resolution_))));
-    int previous_idx = -1;
-    for (int i = 1; i <= steps; ++i)
-    {
-      const double t = static_cast<double>(i) / static_cast<double>(steps);
-      const geometry_msgs::msg::Point sample = lerpPoint(from, to, t);
-      int gx = 0;
-      int gy = 0;
-      if (!worldToGrid(sample.x, sample.y, gx, gy))
-      {
-        return false;
-      }
-      const int idx = gridIndex(gx, gy);
-      if (!gridTraversable(idx))
-      {
-        return false;
-      }
-      if (previous_idx >= 0 && previous_idx != idx && !gridMoveAllowed(previous_idx, idx))
-      {
-        return false;
-      }
-      previous_idx = idx;
-    }
-    return true;
-  }
-
-  bool gridLineReachableFromPose(
-      const geometry_msgs::msg::Point& from,
       const geometry_msgs::msg::Point& to,
-      double allowed_initial_inflation) const
+      double min_sdf = -1.0) const
   {
+    const double margin = min_sdf < 0.0 ? line_clearance_ : min_sdf;
     const double length = pointDistXY(from, to);
     const int steps = std::max(1, static_cast<int>(std::ceil(length / (0.5 * grid_resolution_))));
-    int previous_idx = -1;
-    bool previous_traversable = false;
-    for (int i = 1; i <= steps; ++i)
+    for (int i = 0; i <= steps; ++i)
     {
       const double t = static_cast<double>(i) / static_cast<double>(steps);
       const geometry_msgs::msg::Point sample = lerpPoint(from, to, t);
@@ -729,78 +863,78 @@ private:
         return false;
       }
       const int idx = gridIndex(gx, gy);
-      const double distance_from_pose = pointDistXY(from, sample);
-      const bool traversable = gridTraversable(idx);
-      const bool allowed_initial_cell =
-          distance_from_pose <= allowed_initial_inflation &&
-          grid_[idx].raw_free &&
-          grid_[idx].inflated &&
-          grid_[idx].obstacle_count == 0;
-      if (!traversable && !allowed_initial_cell)
+      if (grid_[idx].state != CellState::FREE || grid_[idx].sdf < margin)
       {
         return false;
       }
-      if (previous_idx >= 0 && previous_idx != idx && previous_traversable && traversable &&
-          !gridMoveAllowed(previous_idx, idx))
-      {
-        return false;
-      }
-      previous_idx = idx;
-      previous_traversable = traversable;
     }
     return true;
   }
 
+  // Expanding-ring snap. Accept the first `max_candidates` FREE cells with
+  // sdf >= sdf_floor that have a clear line-of-sight to the query point
+  // (line min-sdf >= line_clearance_). Stops as soon as we have enough
+  // candidates and the current ring is outside `radius`.
   std::vector<GridCandidate> gridSnapCandidates(
       const geometry_msgs::msg::Point& point,
       double radius,
+      double sdf_floor,
       std::size_t max_candidates) const
   {
-    int center_x = 0;
-    int center_y = 0;
-    if (!worldToGrid(point.x, point.y, center_x, center_y))
-    {
-      center_x = static_cast<int>(std::floor((point.x - grid_origin_x_) / grid_resolution_));
-      center_y = static_cast<int>(std::floor((point.y - grid_origin_y_) / grid_resolution_));
-      center_x = std::max(0, std::min(grid_width_ - 1, center_x));
-      center_y = std::max(0, std::min(grid_height_ - 1, center_y));
-    }
+    int center_x = static_cast<int>(std::floor((point.x - grid_origin_x_) / grid_resolution_));
+    int center_y = static_cast<int>(std::floor((point.y - grid_origin_y_) / grid_resolution_));
+    center_x = std::max(0, std::min(grid_width_ - 1, center_x));
+    center_y = std::max(0, std::min(grid_height_ - 1, center_y));
 
+    const int max_ring = static_cast<int>(std::ceil(radius / grid_resolution_));
     std::vector<GridCandidate> candidates;
-    const int radius_cells = static_cast<int>(std::ceil(radius / grid_resolution_));
-    for (int dy = -radius_cells; dy <= radius_cells; ++dy)
-    {
-      for (int dx = -radius_cells; dx <= radius_cells; ++dx)
+    candidates.reserve(max_candidates ? max_candidates : 16);
+
+    auto try_cell = [&](int gx, int gy) {
+      if (!inGrid(gx, gy))
       {
-        const int gx = center_x + dx;
-        const int gy = center_y + dy;
-        if (!inGrid(gx, gy))
-        {
-          continue;
-        }
-        const int idx = gridIndex(gx, gy);
-        if (!gridTraversable(idx))
-        {
-          continue;
-        }
-
-        const geometry_msgs::msg::Point candidate_point = gridCenter(idx);
-        const double candidate_dist = pointDistXY(point, candidate_point);
-        if (candidate_dist > radius)
-        {
-          continue;
-        }
-
-        GridCandidate candidate;
-        candidate.index = idx;
-        candidate.distance = candidate_dist;
-        candidates.push_back(candidate);
+        return;
       }
-    }
+      const int idx = gridIndex(gx, gy);
+      if (grid_[idx].state != CellState::FREE || grid_[idx].sdf < sdf_floor)
+      {
+        return;
+      }
+      const geometry_msgs::msg::Point cell_pt = gridCenter(idx);
+      const double dist = pointDistXY(point, cell_pt);
+      if (dist > radius)
+      {
+        return;
+      }
+      if (!gridLineTraversableWorld(point, cell_pt))
+      {
+        return;
+      }
+      candidates.push_back(GridCandidate{idx, dist});
+    };
 
-    if (candidates.empty())
+    // Ring 0 = the cell containing `point` itself.
+    try_cell(center_x, center_y);
+    for (int ring = 1; ring <= max_ring; ++ring)
     {
-      return candidates;
+      const int x_min = center_x - ring;
+      const int x_max = center_x + ring;
+      const int y_min = center_y - ring;
+      const int y_max = center_y + ring;
+      for (int gx = x_min; gx <= x_max; ++gx)
+      {
+        try_cell(gx, y_min);
+        try_cell(gx, y_max);
+      }
+      for (int gy = y_min + 1; gy <= y_max - 1; ++gy)
+      {
+        try_cell(x_min, gy);
+        try_cell(x_max, gy);
+      }
+      if (max_candidates > 0 && candidates.size() >= max_candidates)
+      {
+        break;
+      }
     }
 
     std::sort(
@@ -946,33 +1080,24 @@ private:
       std::vector<geometry_msgs::msg::Point>& route,
       std::string& error)
   {
-    const std::vector<GridCandidate> raw_start_candidates =
-        gridSnapCandidates(start, start_snap_radius_, 96);
-    std::vector<GridCandidate> start_candidates;
-    start_candidates.reserve(raw_start_candidates.size());
-    const double start_connector_tolerance = clearance_radius_ + grid_resolution_;
-    for (const GridCandidate& candidate : raw_start_candidates)
-    {
-      if (gridLineReachableFromPose(start, gridCenter(candidate.index), start_connector_tolerance))
-      {
-        start_candidates.push_back(candidate);
-      }
-    }
-    if (start_candidates.size() > 16)
-    {
-      start_candidates.resize(16);
-    }
-    const std::vector<GridCandidate> goal_candidates =
-        gridSnapCandidates(requested_goal, goal_snap_radius_, 32);
+    // Start may be wedged near an obstacle (robot footprint > clearance).
+    // Permit a lower SDF floor for snapping; the line-of-sight check still
+    // requires line_clearance_ along the connector.
+    const double start_sdf_floor = std::max(0.5 * grid_resolution_,
+                                            std::min(line_clearance_, clearance_radius_));
+    std::vector<GridCandidate> start_candidates =
+        gridSnapCandidates(start, start_snap_radius_, start_sdf_floor, 16);
+    std::vector<GridCandidate> goal_candidates =
+        gridSnapCandidates(requested_goal, goal_snap_radius_, clearance_radius_, 32);
 
     if (start_candidates.empty())
     {
-      error = "No traversable 2D grid cell with a clear connector near current pose.";
+      error = "No FREE 2D grid cell with a clear connector near current pose.";
       return false;
     }
     if (goal_candidates.empty())
     {
-      error = "No traversable 2D grid cell near requested goal.";
+      error = "No FREE 2D grid cell within clearance near requested goal.";
       return false;
     }
 
@@ -1166,6 +1291,9 @@ private:
     path_marker_pub_->publish(array);
   }
 
+  // Publishes the *reusable* static world map: 0 FREE, 100 BLOCKED, -1
+  // UNKNOWN per the OccupancyGrid spec. Robot-specific clearance does NOT
+  // appear here — other robots can subscribe and apply their own footprint.
   void publishGridMap()
   {
     if (grid_.empty())
@@ -1183,17 +1311,15 @@ private:
     map.info.origin.position.y = grid_origin_y_;
     map.info.origin.position.z = 0.0;
     map.info.origin.orientation.w = 1.0;
-    map.data.resize(grid_.size(), 0);
+    map.data.resize(grid_.size());
 
     for (std::size_t i = 0; i < grid_.size(); ++i)
     {
-      if (grid_[i].obstacle_count > 0 || (grid_[i].raw_free && grid_[i].inflated))
+      switch (grid_[i].state)
       {
-        map.data[i] = 100;
-      }
-      else
-      {
-        map.data[i] = 0;
+        case CellState::FREE:    map.data[i] = 0;   break;
+        case CellState::BLOCKED: map.data[i] = 100; break;
+        case CellState::UNKNOWN: map.data[i] = -1;  break;
       }
     }
 
@@ -1209,55 +1335,61 @@ private:
 
     visualization_msgs::msg::MarkerArray array;
 
-    visualization_msgs::msg::Marker free_marker;
-    free_marker.header.frame_id = map_frame_;
-    free_marker.header.stamp = now();
-    free_marker.ns = "pcd_grid_free";
-    free_marker.id = 0;
-    free_marker.type = visualization_msgs::msg::Marker::CUBE_LIST;
-    free_marker.action = visualization_msgs::msg::Marker::ADD;
-    free_marker.pose.orientation.w = 1.0;
-    free_marker.scale.x = grid_resolution_;
-    free_marker.scale.y = grid_resolution_;
-    free_marker.scale.z = 0.03;
-    free_marker.color.r = 0.1f;
-    free_marker.color.g = 0.8f;
-    free_marker.color.b = 0.55f;
-    free_marker.color.a = 0.28f;
+    auto make_marker = [&](const char* ns, int id, float r, float g, float b,
+                           float a, double scale_z) {
+      visualization_msgs::msg::Marker m;
+      m.header.frame_id = map_frame_;
+      m.header.stamp = now();
+      m.ns = ns;
+      m.id = id;
+      m.type = visualization_msgs::msg::Marker::CUBE_LIST;
+      m.action = visualization_msgs::msg::Marker::ADD;
+      m.pose.orientation.w = 1.0;
+      m.scale.x = grid_resolution_;
+      m.scale.y = grid_resolution_;
+      m.scale.z = scale_z;
+      m.color.r = r;
+      m.color.g = g;
+      m.color.b = b;
+      m.color.a = a;
+      return m;
+    };
 
-    visualization_msgs::msg::Marker blocked_marker;
-    blocked_marker.header = free_marker.header;
-    blocked_marker.ns = "pcd_grid_blocked";
-    blocked_marker.id = 1;
-    blocked_marker.type = visualization_msgs::msg::Marker::CUBE_LIST;
-    blocked_marker.action = visualization_msgs::msg::Marker::ADD;
-    blocked_marker.pose.orientation.w = 1.0;
-    blocked_marker.scale.x = grid_resolution_;
-    blocked_marker.scale.y = grid_resolution_;
-    blocked_marker.scale.z = 0.05;
-    blocked_marker.color.r = 1.0f;
-    blocked_marker.color.g = 0.25f;
-    blocked_marker.color.b = 0.05f;
-    blocked_marker.color.a = 0.35f;
+    auto traversable = make_marker("pcd_grid_free",     0, 0.10f, 0.80f, 0.55f, 0.28f, 0.03);
+    auto near_obs    = make_marker("pcd_grid_near_obs", 1, 1.00f, 0.80f, 0.10f, 0.32f, 0.04);
+    auto blocked     = make_marker("pcd_grid_blocked",  2, 1.00f, 0.25f, 0.05f, 0.35f, 0.05);
 
     for (std::size_t i = 0; i < grid_.size(); ++i)
     {
-      if (grid_[i].traversable)
+      const GridCell& cell = grid_[i];
+      geometry_msgs::msg::Point point = gridCenter(static_cast<int>(i));
+      switch (cell.state)
       {
-        geometry_msgs::msg::Point point = gridCenter(static_cast<int>(i));
-        point.z += 0.02;
-        free_marker.points.push_back(point);
-      }
-      else if (grid_[i].obstacle_count > 0 || (grid_[i].raw_free && grid_[i].inflated))
-      {
-        geometry_msgs::msg::Point point = gridCenter(static_cast<int>(i));
-        point.z += 0.04;
-        blocked_marker.points.push_back(point);
+        case CellState::BLOCKED:
+          point.z += 0.04;
+          blocked.points.push_back(point);
+          break;
+        case CellState::FREE:
+          if (cell.sdf >= clearance_radius_)
+          {
+            point.z += 0.02;
+            traversable.points.push_back(point);
+          }
+          else
+          {
+            point.z += 0.03;
+            near_obs.points.push_back(point);
+          }
+          break;
+        case CellState::UNKNOWN:
+          // Skip UNKNOWN — RViz already renders these from /pcd_2d_map.
+          break;
       }
     }
 
-    array.markers.push_back(free_marker);
-    array.markers.push_back(blocked_marker);
+    array.markers.push_back(traversable);
+    array.markers.push_back(near_obs);
+    array.markers.push_back(blocked);
     grid_marker_pub_->publish(array);
   }
 
@@ -1267,8 +1399,9 @@ private:
   double map_voxel_size_ = 0.08;
   double grid_resolution_ = 0.20;
   double grid_padding_ = 0.2;
-  double grid_obstacle_inflation_radius_ = -1.0;
   int grid_max_cells_ = 2000000;
+  int grid_min_support_points_ = -1;     // -1 → auto-derive from voxel/cell ratio
+  double grid_min_support_fill_ = 0.20;
   double max_slope_deg_ = 25.0;
   double max_slope_rad_ = 25.0 * M_PI / 180.0;
   double max_step_height_ = 0.18;
@@ -1278,6 +1411,7 @@ private:
   double vehicle_length_ = 0.7;
   double vehicle_width_ = 0.3;
   double clearance_radius_ = 0.35;
+  double line_clearance_ = -1.0;         // -1 → derived from clearance_radius_
 
   double start_snap_radius_ = 6.0;
   double goal_snap_radius_ = 2.0;
