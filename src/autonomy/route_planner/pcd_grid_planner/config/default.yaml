@@ -23,3 +23,16 @@ pcd_grid_planner:
     waypoint_reach_radius: 0.6
     goal_tolerance: 0.35
     waypoint_rate: 5.0
+
+    # Live obstacle layer (rasterized from /terrain_map).
+    live_layer_enabled: true
+    live_topic: "/terrain_map"
+    live_timeout_sec: 6.0            # FRESH→STALE at half, STALE→CLEAR at full
+    live_input_timeout_sec: 3.0      # if input silent for >this, drop live layer
+    live_decay_rate_hz: 2.0
+    live_publish_rate_hz: 5.0
+    stale_step_penalty: 1.0          # extra A* cost multiplier for STALE cells
+
+    replan_period_sec: 0.5
+    replan_horizon_m: 4.0
+    max_replan_attempts: 20
