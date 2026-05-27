@@ -90,7 +90,10 @@ public:
     if (map_ready_)
     {
       publishGridMap();
-      publishGridMarkers();
+      if (publish_debug_markers_)
+      {
+        publishGridMarkers();
+      }
 
       // Initialize live layer aligned to grid_, and seed the fused
       // snapshot from the static SDF so the first plan (cold start, no
@@ -139,7 +142,44 @@ public:
     RCLCPP_INFO(get_logger(), "PCD grid planner also accepts RViz goals on /goal_pose");
   }
 
+  ~PcdGridPlanner() override
+  {
+    // The worker checks rclcpp::ok() each loop iteration and exits when
+    // shutdown is signaled; joining here makes sure the destructor doesn't
+    // race the worker against member teardown.
+    std::lock_guard<std::mutex> lock(worker_mutex_);
+    if (worker_.joinable())
+    {
+      worker_.join();
+    }
+  }
+
 private:
+  // Clears `executing_` on destruction. Replaces a dozen scattered
+  // executing_.store(false) calls; every return path from runNavigation
+  // funnels through it.
+  struct ExecutingGuard
+  {
+    std::atomic_bool& flag;
+    explicit ExecutingGuard(std::atomic_bool& f) : flag(f) {}
+    ~ExecutingGuard() { flag.store(false); }
+    ExecutingGuard(const ExecutingGuard&) = delete;
+    ExecutingGuard& operator=(const ExecutingGuard&) = delete;
+  };
+
+  // Spawns the navigation worker. Joins any previous worker first so we
+  // never have two workers, and the std::thread member stays joinable
+  // for the destructor.
+  void startWorker(std::function<void()> task)
+  {
+    std::lock_guard<std::mutex> lock(worker_mutex_);
+    if (worker_.joinable())
+    {
+      worker_.join();
+    }
+    worker_ = std::thread(std::move(task));
+  }
+
   enum class CellState : std::uint8_t
   {
     UNKNOWN = 0,
@@ -158,11 +198,18 @@ private:
     STALE = 2,
   };
 
-  // GridCell mixes build-time accumulators (count/low_count/obstacle_count,
-  // min_z/max_z/low_sum_z) with finalized runtime state (state/z/sdf).
-  // P8 in the rollout plan will split these into separate vectors so the
-  // post-build footprint is much smaller.
+  // Runtime cell. Build-only accumulators (count, low_count, obstacle_count,
+  // min_z, max_z, low_sum_z) live in a temporary BuildAccumulator vector
+  // that's destroyed at the end of buildGridMap2D, so the per-cell runtime
+  // footprint stays small (z + sdf + state, ~24 bytes with padding).
   struct GridCell
+  {
+    double z = 0.0;
+    double sdf = 0.0;      // meters to nearest non-FREE cell
+    CellState state = CellState::UNKNOWN;
+  };
+
+  struct BuildAccumulator
   {
     int count = 0;
     int low_count = 0;
@@ -170,9 +217,6 @@ private:
     double min_z = std::numeric_limits<double>::infinity();
     double max_z = -std::numeric_limits<double>::infinity();
     double low_sum_z = 0.0;
-    double z = 0.0;
-    double sdf = 0.0;      // meters to nearest non-FREE cell
-    CellState state = CellState::UNKNOWN;
   };
 
   struct GridCandidate
@@ -227,6 +271,8 @@ private:
     declare_parameter<double>("waypoint_reach_radius", 0.6);
     declare_parameter<double>("goal_tolerance", 0.35);
     declare_parameter<double>("waypoint_rate", 5.0);
+    declare_parameter<bool>("smoothing_enabled", true);
+    declare_parameter<bool>("publish_debug_markers", false);
 
     // Live obstacle layer.
     declare_parameter<bool>("live_layer_enabled", true);
@@ -268,6 +314,8 @@ private:
     get_parameter("waypoint_reach_radius", waypoint_reach_radius_);
     get_parameter("goal_tolerance", goal_tolerance_);
     get_parameter("waypoint_rate", waypoint_rate_);
+    get_parameter("smoothing_enabled", smoothing_enabled_);
+    get_parameter("publish_debug_markers", publish_debug_markers_);
 
     get_parameter("live_layer_enabled", live_layer_enabled_);
     get_parameter("live_topic", live_topic_);
@@ -419,6 +467,10 @@ private:
     grid_.clear();
     grid_.resize(static_cast<std::size_t>(cell_count));
 
+    // Build-only counters; destroyed when buildGridMap2D returns so they
+    // don't sit in memory through the lifetime of the node.
+    std::vector<BuildAccumulator> accum(static_cast<std::size_t>(cell_count));
+
     for (const auto& point : map_cloud_->points)
     {
       int gx = 0;
@@ -427,10 +479,10 @@ private:
       {
         continue;
       }
-      GridCell& cell = grid_[gridIndex(gx, gy)];
-      cell.count++;
-      cell.min_z = std::min(cell.min_z, static_cast<double>(point.z));
-      cell.max_z = std::max(cell.max_z, static_cast<double>(point.z));
+      BuildAccumulator& a = accum[gridIndex(gx, gy)];
+      a.count++;
+      a.min_z = std::min(a.min_z, static_cast<double>(point.z));
+      a.max_z = std::max(a.max_z, static_cast<double>(point.z));
     }
 
     for (const auto& point : map_cloud_->points)
@@ -441,21 +493,21 @@ private:
       {
         continue;
       }
-      GridCell& cell = grid_[gridIndex(gx, gy)];
-      if (cell.count == 0 || !std::isfinite(cell.min_z))
+      BuildAccumulator& a = accum[gridIndex(gx, gy)];
+      if (a.count == 0 || !std::isfinite(a.min_z))
       {
         continue;
       }
 
-      const double dz = point.z - cell.min_z;
+      const double dz = point.z - a.min_z;
       if (dz <= max_step_height_)
       {
-        cell.low_count++;
-        cell.low_sum_z += point.z;
+        a.low_count++;
+        a.low_sum_z += point.z;
       }
       if (dz > obstacle_height_ && dz < vehicle_height_)
       {
-        cell.obstacle_count++;
+        a.obstacle_count++;
       }
     }
 
@@ -465,21 +517,22 @@ private:
     for (std::size_t i = 0; i < grid_.size(); ++i)
     {
       GridCell& cell = grid_[i];
-      if (cell.low_count > 0)
+      const BuildAccumulator& a = accum[i];
+      if (a.low_count > 0)
       {
-        cell.z = cell.low_sum_z / static_cast<double>(cell.low_count);
+        cell.z = a.low_sum_z / static_cast<double>(a.low_count);
       }
-      else if (std::isfinite(cell.min_z))
+      else if (std::isfinite(a.min_z))
       {
-        cell.z = cell.min_z;
+        cell.z = a.min_z;
       }
 
-      if (cell.obstacle_count > 0)
+      if (a.obstacle_count > 0)
       {
         cell.state = CellState::BLOCKED;
         blocked_count++;
       }
-      else if (cell.low_count >= grid_min_support_points_)
+      else if (a.low_count >= grid_min_support_points_)
       {
         cell.state = CellState::FREE;
         free_count++;
@@ -987,7 +1040,8 @@ private:
     RCLCPP_INFO(
         get_logger(), "Accepted RViz /goal_pose x=%.2f y=%.2f z=%.2f",
         msg->pose.position.x, msg->pose.position.y, msg->pose.position.z);
-    std::thread{std::bind(&PcdGridPlanner::executeTopicGoal, this, *msg)}.detach();
+    const auto goal_pose = *msg;
+    startWorker([this, goal_pose] { executeTopicGoal(goal_pose); });
   }
 
   bool currentPosition(geometry_msgs::msg::Point& point, geometry_msgs::msg::PoseStamped& pose)
@@ -1018,7 +1072,10 @@ private:
       RCLCPP_WARN(get_logger(), "Rejecting navigation goal: no /state_estimation received yet.");
       return rclcpp_action::GoalResponse::REJECT;
     }
-    if (executing_.load())
+    // Atomic claim: if another goal is already in flight, reject without
+    // touching executing_. Two simultaneous goals can no longer both pass
+    // admission and start workers.
+    if (executing_.exchange(true))
     {
       RCLCPP_WARN(get_logger(), "Rejecting navigation goal: another goal is active.");
       return rclcpp_action::GoalResponse::REJECT;
@@ -1040,19 +1097,37 @@ private:
 
   void handleAccepted(const std::shared_ptr<GoalHandleNavigateToPose> goal_handle)
   {
-    executing_.store(true);
-    std::thread{std::bind(&PcdGridPlanner::executeGoal, this, goal_handle)}.detach();
+    // executing_ already set true by handleGoal (atomic claim). Spawn worker.
+    startWorker([this, goal_handle] { executeGoal(goal_handle); });
   }
 
   void executeGoal(const std::shared_ptr<GoalHandleNavigateToPose> goal_handle)
   {
-    const auto goal = goal_handle->get_goal();
-    geometry_msgs::msg::Point final_goal = goal->pose.pose.position;
+    runNavigation(
+        goal_handle->get_goal()->pose.pose.position,
+        "PCD-grid",
+        goal_handle);
+  }
+
+  void executeTopicGoal(const geometry_msgs::msg::PoseStamped goal_pose)
+  {
+    runNavigation(goal_pose.pose.position, "RViz /goal_pose", nullptr);
+  }
+
+  // Unified navigation loop. goal_handle may be null (topic flow) — then
+  // cancel checks and action-server callbacks are skipped, but the rest
+  // of the logic (plan, lookahead, replan) is identical.
+  void runNavigation(
+      const geometry_msgs::msg::Point& final_goal,
+      const std::string& label,
+      std::shared_ptr<GoalHandleNavigateToPose> goal_handle)
+  {
+    ExecutingGuard executing_guard(executing_);
     geometry_msgs::msg::Point current;
     geometry_msgs::msg::PoseStamped current_pose;
     if (!currentPosition(current, current_pose))
     {
-      abortGoal(goal_handle, "No current pose available.");
+      reportAbort(goal_handle, label, "No current pose available.");
       return;
     }
 
@@ -1060,7 +1135,7 @@ private:
     std::string error;
     if (!planGridRoute(current, final_goal, route, error))
     {
-      abortGoal(goal_handle, error);
+      reportAbort(goal_handle, label, error);
       return;
     }
 
@@ -1073,33 +1148,34 @@ private:
 
     while (rclcpp::ok())
     {
-      if (goal_handle->is_canceling())
+      if (goal_handle && goal_handle->is_canceling())
       {
         auto result = std::make_shared<NavigateToPose::Result>();
         goal_handle->canceled(result);
-        executing_.store(false);
-        RCLCPP_INFO(get_logger(), "PCD-grid navigation canceled.");
+        RCLCPP_INFO(get_logger(), "%s navigation canceled.", label.c_str());
         return;
       }
 
       if (!currentPosition(current, current_pose))
       {
-        abortGoal(goal_handle, "Lost current pose.");
+        reportAbort(goal_handle, label, "Lost current pose.");
         return;
       }
 
       if (pointDistXY(current, route.back()) <= goal_tolerance_)
       {
         publishWaypoint(route.back());
-        auto result = std::make_shared<NavigateToPose::Result>();
-        goal_handle->succeed(result);
-        executing_.store(false);
-        RCLCPP_INFO(get_logger(), "PCD-grid navigation succeeded.");
+        if (goal_handle)
+        {
+          auto result = std::make_shared<NavigateToPose::Result>();
+          goal_handle->succeed(result);
+        }
+        RCLCPP_INFO(get_logger(), "%s navigation succeeded.", label.c_str());
         return;
       }
 
-      // Live replanning: throttled, only when the upcoming route segment
-      // is currently blocked by the live layer.
+      // Throttled live replanning. Only triggers when the upcoming route
+      // segment is currently blocked by the fused live layer.
       if (live_layer_enabled_ &&
           (now() - last_replan_check).seconds() >= replan_period_sec_)
       {
@@ -1114,18 +1190,20 @@ private:
             route_index = route.size() > 1 ? 1 : 0;
             replan_failures = 0;
             publishRoute(route);
-            RCLCPP_INFO(get_logger(), "Replanned around live obstacle.");
+            RCLCPP_INFO(get_logger(),
+                        "%s replanned around live obstacle.", label.c_str());
           }
           else
           {
             ++replan_failures;
             RCLCPP_WARN_THROTTLE(
                 get_logger(), *get_clock(), 2000,
-                "Live replan failed (%d/%d): %s",
-                replan_failures, max_replan_attempts_, replan_error.c_str());
+                "%s live replan failed (%d/%d): %s",
+                label.c_str(), replan_failures, max_replan_attempts_,
+                replan_error.c_str());
             if (max_replan_attempts_ > 0 && replan_failures >= max_replan_attempts_)
             {
-              abortGoal(goal_handle, "Live replanning failed repeatedly.");
+              reportAbort(goal_handle, label, "Live replanning failed repeatedly.");
               return;
             }
           }
@@ -1134,97 +1212,28 @@ private:
 
       const geometry_msgs::msg::Point waypoint = selectWaypoint(current, route, route_index);
       publishWaypoint(waypoint);
-      publishFeedback(goal_handle, current_pose, route, route_index, start_time);
+      if (goal_handle)
+      {
+        publishFeedback(goal_handle, current_pose, route, route_index, start_time);
+      }
       rate.sleep();
     }
 
-    abortGoal(goal_handle, "ROS shutdown during navigation.");
+    reportAbort(goal_handle, label, "ROS shutdown during navigation.");
   }
 
-  void executeTopicGoal(const geometry_msgs::msg::PoseStamped goal_pose)
+  void reportAbort(
+      const std::shared_ptr<GoalHandleNavigateToPose>& goal_handle,
+      const std::string& label,
+      const std::string& message)
   {
-    geometry_msgs::msg::Point final_goal = goal_pose.pose.position;
-    geometry_msgs::msg::Point current;
-    geometry_msgs::msg::PoseStamped current_pose;
-    if (!currentPosition(current, current_pose))
+    if (goal_handle && goal_handle->is_active())
     {
-      executing_.store(false);
-      RCLCPP_ERROR(get_logger(), "RViz /goal_pose aborted: no current pose available.");
-      return;
+      auto result = std::make_shared<NavigateToPose::Result>();
+      goal_handle->abort(result);
     }
-
-    std::vector<geometry_msgs::msg::Point> route;
-    std::string error;
-    if (!planGridRoute(current, final_goal, route, error))
-    {
-      executing_.store(false);
-      RCLCPP_ERROR(get_logger(), "RViz /goal_pose aborted: %s", error.c_str());
-      return;
-    }
-
-    publishRoute(route);
-    std::size_t route_index = route.size() > 1 ? 1 : 0;
-    rclcpp::Time last_replan_check = now();
-    int replan_failures = 0;
-    rclcpp::Rate rate(waypoint_rate_);
-
-    while (rclcpp::ok())
-    {
-      if (!currentPosition(current, current_pose))
-      {
-        executing_.store(false);
-        RCLCPP_ERROR(get_logger(), "RViz /goal_pose aborted: lost current pose.");
-        return;
-      }
-
-      if (pointDistXY(current, route.back()) <= goal_tolerance_)
-      {
-        publishWaypoint(route.back());
-        executing_.store(false);
-        RCLCPP_INFO(get_logger(), "RViz /goal_pose navigation succeeded.");
-        return;
-      }
-
-      if (live_layer_enabled_ &&
-          (now() - last_replan_check).seconds() >= replan_period_sec_)
-      {
-        last_replan_check = now();
-        if (isRouteBlocked(route, route_index))
-        {
-          std::vector<geometry_msgs::msg::Point> new_route;
-          std::string replan_error;
-          if (planGridRoute(current, final_goal, new_route, replan_error))
-          {
-            route = std::move(new_route);
-            route_index = route.size() > 1 ? 1 : 0;
-            replan_failures = 0;
-            publishRoute(route);
-            RCLCPP_INFO(get_logger(), "Replanned RViz /goal_pose route around live obstacle.");
-          }
-          else
-          {
-            ++replan_failures;
-            RCLCPP_WARN_THROTTLE(
-                get_logger(), *get_clock(), 2000,
-                "RViz /goal_pose live replan failed (%d/%d): %s",
-                replan_failures, max_replan_attempts_, replan_error.c_str());
-            if (max_replan_attempts_ > 0 && replan_failures >= max_replan_attempts_)
-            {
-              executing_.store(false);
-              RCLCPP_ERROR(get_logger(),
-                           "RViz /goal_pose aborted: replanning failed repeatedly.");
-              return;
-            }
-          }
-        }
-      }
-
-      const geometry_msgs::msg::Point waypoint = selectWaypoint(current, route, route_index);
-      publishWaypoint(waypoint);
-      rate.sleep();
-    }
-
-    executing_.store(false);
+    RCLCPP_ERROR(get_logger(), "%s navigation aborted: %s",
+                 label.c_str(), message.c_str());
   }
 
   bool inGrid(int gx, int gy) const
@@ -1665,22 +1674,49 @@ private:
       route.push_back(final_point);
     }
 
+    const std::size_t pre_smooth = route.size();
+    if (smoothing_enabled_)
+    {
+      route = smoothRoute(route, snap);
+    }
+
     RCLCPP_INFO(
         get_logger(),
-        "2D PCD grid route planned: %zu waypoints, cells=%zu, start_snap=%.2fm, goal_snap=%.2fm.",
-        route.size(), cell_path.size(), start_snap, goal_snap);
+        "2D PCD grid route planned: %zu waypoints (pre-smooth=%zu), cells=%zu, "
+        "start_snap=%.2fm, goal_snap=%.2fm.",
+        route.size(), pre_smooth, cell_path.size(), start_snap, goal_snap);
     return route.size() >= 2;
   }
 
-  void abortGoal(const std::shared_ptr<GoalHandleNavigateToPose>& goal_handle, const std::string& message)
+  // Greedy line-of-sight compaction. Walk the route from each anchor and
+  // advance the lookahead while the straight line stays clear of the
+  // inflation boundary (line_clearance_ from the fused SDF). Keeps the
+  // anchor's z but reuses route[0].z for the rest so the waypoint stream
+  // doesn't get z bounces from neighboring cells.
+  std::vector<geometry_msgs::msg::Point> smoothRoute(
+      const std::vector<geometry_msgs::msg::Point>& in,
+      const FusedSnapshot& snap) const
   {
-    auto result = std::make_shared<NavigateToPose::Result>();
-    if (goal_handle->is_active())
+    if (in.size() <= 2)
     {
-      goal_handle->abort(result);
+      return in;
     }
-    executing_.store(false);
-    RCLCPP_ERROR(get_logger(), "PCD-grid navigation aborted: %s", message.c_str());
+    std::vector<geometry_msgs::msg::Point> out;
+    out.reserve(in.size());
+    out.push_back(in.front());
+    std::size_t anchor = 0;
+    while (anchor + 1 < in.size())
+    {
+      std::size_t lookahead = anchor + 1;
+      while (lookahead + 1 < in.size() &&
+             gridLineTraversableWorld(in[anchor], in[lookahead + 1], snap))
+      {
+        ++lookahead;
+      }
+      out.push_back(in[lookahead]);
+      anchor = lookahead;
+    }
+    return out;
   }
 
   geometry_msgs::msg::Point selectWaypoint(
@@ -1915,6 +1951,8 @@ private:
   double waypoint_reach_radius_ = 0.6;
   double goal_tolerance_ = 0.35;
   double waypoint_rate_ = 5.0;
+  bool smoothing_enabled_ = true;
+  bool publish_debug_markers_ = false;
 
   // Live layer.
   bool live_layer_enabled_ = true;
@@ -1935,6 +1973,11 @@ private:
   bool map_ready_ = false;
   std::atomic_bool has_odom_{false};
   std::atomic_bool executing_{false};
+
+  // One joinable worker, never detached. Replaced before each run; joined
+  // in the destructor.
+  std::thread worker_;
+  std::mutex worker_mutex_;
 
   pcl::PointCloud<pcl::PointXYZI>::Ptr map_cloud_;
 

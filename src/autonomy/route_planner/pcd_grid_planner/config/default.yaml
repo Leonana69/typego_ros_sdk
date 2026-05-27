@@ -23,6 +23,8 @@ pcd_grid_planner:
     waypoint_reach_radius: 0.6
     goal_tolerance: 0.35
     waypoint_rate: 5.0
+    smoothing_enabled: true                # greedy line-of-sight compaction post-A*
+    publish_debug_markers: false           # /pcd_2d_map already shows the grid in RViz
 
     # Live obstacle layer (rasterized from /terrain_map).
     live_layer_enabled: true
