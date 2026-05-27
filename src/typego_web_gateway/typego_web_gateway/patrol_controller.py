@@ -1,13 +1,13 @@
 """Patrol loop ported from scripts/patrol.py into an asyncio task.
 
-Loads waypoints from ``src/typego_sdk/resource/Map-<name>/waypoints.csv``
+Loads waypoints from ``src/typego_sdk/resource/Map-<name>/waypoints.json``
 (same path convention as patrol.py) and drives NavigateToPose goals in a
 loop. Exposes start / stop / status for the REST layer.
 """
 from __future__ import annotations
 
 import asyncio
-import csv
+import json
 import os
 import time
 from dataclasses import dataclass, field
@@ -28,25 +28,25 @@ class PatrolState:
 
 
 def _resolve_waypoints_path(map_name: str) -> str:
-    """Resolve Map-<name>/waypoints.csv.
+    """Resolve Map-<name>/waypoints.json.
 
     Search order:
-      1. $TYPEGO_MAPS_DIR (if set) / Map-<name>/waypoints.csv
-      2. <pkg_share>/../typego_sdk/resource/Map-<name>/waypoints.csv
+      1. $TYPEGO_MAPS_DIR (if set) / Map-<name>/waypoints.json
+      2. <pkg_share>/../typego_sdk/resource/Map-<name>/waypoints.json
          (typical colcon install layout)
-      3. <repo_root>/src/typego_sdk/resource/Map-<name>/waypoints.csv
+      3. <repo_root>/src/typego_sdk/resource/Map-<name>/waypoints.json
          (matches scripts/patrol.py:26-31)
     """
     candidates = []
     override = os.environ.get('TYPEGO_MAPS_DIR')
     if override:
-        candidates.append(os.path.join(override, f'Map-{map_name}', 'waypoints.csv'))
+        candidates.append(os.path.join(override, f'Map-{map_name}', 'waypoints.json'))
 
     # share/typego_sdk/resource (installed) — shares the same ament_index root
     try:
         from ament_index_python.packages import get_package_share_directory
         share = get_package_share_directory('typego_sdk')
-        candidates.append(os.path.join(share, 'resource', f'Map-{map_name}', 'waypoints.csv'))
+        candidates.append(os.path.join(share, 'resource', f'Map-{map_name}', 'waypoints.json'))
     except Exception:
         pass
 
@@ -54,32 +54,26 @@ def _resolve_waypoints_path(map_name: str) -> str:
         os.path.dirname(os.path.abspath(__file__)))))
     candidates.append(os.path.join(
         repo_root, 'src', 'typego_sdk', 'resource',
-        f'Map-{map_name}', 'waypoints.csv',
+        f'Map-{map_name}', 'waypoints.json',
     ))
 
     for path in candidates:
         if os.path.isfile(path):
             return path
     raise FileNotFoundError(
-        f'waypoints.csv for map "{map_name}" not found; searched: {candidates}'
+        f'waypoints.json for map "{map_name}" not found; searched: {candidates}'
     )
 
 
 def load_waypoints(map_name: str) -> Dict[int, Tuple[float, float]]:
-    """Load ``Map-<name>/waypoints.csv`` as {index: (x, y)}.
-
-    CSV rows are ``<index> <x> <y> <label>`` — matches the format expected
-    by scripts/patrol.py:38-46.
-    """
+    """Load ``Map-<name>/waypoints.json`` as {index: (x, y)}."""
     path = _resolve_waypoints_path(map_name)
     out: Dict[int, Tuple[float, float]] = {}
-    with open(path, newline='') as f:
-        reader = csv.reader(f, delimiter=' ')
-        for row in reader:
-            row = [c for c in row if c]
-            if len(row) < 3:
-                continue
-            out[int(row[0])] = (float(row[1]), float(row[2]))
+    with open(path) as f:
+        doc = json.load(f)
+    items = doc.get('waypoints', doc) if isinstance(doc, dict) else doc
+    for item in items:
+        out[int(item['id'])] = (float(item['x']), float(item['y']))
     if not out:
         raise ValueError(f'waypoints file {path} produced no entries')
     return out

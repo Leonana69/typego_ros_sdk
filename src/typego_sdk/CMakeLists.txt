@@ -43,6 +43,7 @@ set_target_properties(waypoints_service_node PROPERTIES
 target_link_libraries(waypoints_service_node PUBLIC
   ${geometry_msgs_TARGETS}
   ${nav_msgs_TARGETS}
+  ${sensor_msgs_TARGETS}
   ${typego_interface_TARGETS}
   ${visualization_msgs_TARGETS}
   rclcpp::rclcpp

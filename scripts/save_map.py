@@ -145,10 +145,10 @@ def _save_full(node: Node, name: str, map_dir: Path) -> None:
     else:
         print("=> FAR vgraph: skipped (graph_decoder was not subscribed)")
 
-    # Full autonomy ships a stock waypoints.csv with the empty_map; reuse it.
-    src_wp = INSTALL_MAP_RESOURCE_DIR / "Map-empty_map/waypoints.csv"
+    # Full autonomy may ship stock semantic waypoints with the empty_map; reuse them.
+    src_wp = INSTALL_MAP_RESOURCE_DIR / "Map-empty_map/waypoints.json"
     if src_wp.is_file():
-        shutil.copy(src_wp, map_dir / "waypoints.csv")
+        shutil.copy(src_wp, map_dir / "waypoints.json")
 
     # Make the new map visible to launch without a rebuild.
     install_map = INSTALL_MAP_RESOURCE_DIR / f"Map-{name}"
@@ -183,10 +183,10 @@ def _save_base(node: Node, name: str, map_dir: Path, robot_id: str | None) -> No
         )
     print(f"=> {service}: wrote {target_prefix}.posegraph + .data")
 
-    # Stock waypoints ship with Map-empty_map.
-    src_wp = INSTALL_MAP_RESOURCE_DIR / "Map-empty_map/waypoints.csv"
+    # Stock semantic waypoints may ship with Map-empty_map.
+    src_wp = INSTALL_MAP_RESOURCE_DIR / "Map-empty_map/waypoints.json"
     if src_wp.is_file():
-        shutil.copy(src_wp, map_dir / "waypoints.csv")
+        shutil.copy(src_wp, map_dir / "waypoints.json")
 
 
 def main() -> int:

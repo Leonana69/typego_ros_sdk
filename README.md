@@ -266,6 +266,19 @@ Send goals via any of these methods:
 - **Patrol script:** `python3 scripts/patrol.py --map_name <name> --patrol_list 0,1,2`
 - **Keyboard:** `teleop_keyboard_controller`
 
+### Semantic Waypoints
+
+The waypoint service is designed to publish robot goals that an LLM controller can reason about, not only evenly spaced navigation breadcrumbs. It stores rich records in `waypoints.json`. The live `typego_interface/msg/WayPoint` message includes `yaw`, `semantic_context`, `confidence`, `source`, `clearance_m`, and `generation_reason`.
+
+Waypoint generation now combines:
+
+- obstacle-aware spacing from the occupancy grid, with Euclidean fallback when no grid is available
+- turn and context-change triggers, so doorways, intersections, frontiers, and heading changes can become decision points
+- map-derived context such as clearance, free/unknown ratio, and open-sector groups, with periodic refresh as the map matures
+- configurable visual semantics through `semantic_labels` and optional matching `semantic_queries`
+
+Useful `waypoints_service_node` parameters include `waypoint_min_spacing_m`, `waypoint_turn_spacing_m`, `waypoint_heading_change_rad`, `waypoint_context_radius_m`, `semantic_confidence_threshold`, `semantic_labels`, `semantic_queries`, `semantic_queue_depth`, and `enable_visual_semantics`.
+
 ## Makefile Reference
 
 | Target | Description |

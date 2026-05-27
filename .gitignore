@@ -11,6 +11,9 @@ __pycache__/
 ./src/autonomy/base_autonomy/vehicle_simulator/mesh/
 temp/
 src/typego_sdk/resource/Map-*/
+!src/typego_sdk/resource/Map-*/
+src/typego_sdk/resource/Map-*/*
+!src/typego_sdk/resource/Map-*/waypoints.json
 
 # OR-Tools: fetched by `make or-tools` per-arch. Keep the small Makefile and
 # README.md tracked as placeholders; the headers, libraries, and executables

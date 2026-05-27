@@ -140,7 +140,13 @@ class RosBridge(Node):
         with self._lock:
             self._waypoints = [
                 {'id': int(wp.id), 'x': float(wp.x), 'y': float(wp.y),
-                 'label': str(wp.label)}
+                 'label': str(wp.label),
+                 'yaw': float(getattr(wp, 'yaw', 0.0)),
+                 'semantic_context': str(getattr(wp, 'semantic_context', '')),
+                 'confidence': float(getattr(wp, 'confidence', 0.0)),
+                 'source': str(getattr(wp, 'source', '')),
+                 'clearance_m': float(getattr(wp, 'clearance_m', 0.0)),
+                 'generation_reason': str(getattr(wp, 'generation_reason', ''))}
                 for wp in msg.waypoints
             ]
 
