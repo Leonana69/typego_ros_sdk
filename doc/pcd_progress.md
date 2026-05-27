@@ -4,6 +4,29 @@ Companion to [`pcd_fix.md`](pcd_fix.md). That doc holds the design rationale
 and the priority-ordered list of fixes (P1–P8); this one tracks the PR rollout
 and what still needs to ship.
 
+## Status snapshot (branch `pcd-grid-planner`)
+
+All four PRs from the plan are implemented and committed on this branch.
+The behavior is unverified on a real saved map — the build is clean and the
+EDT math has unit tests, but the end-to-end smoke verification listed under
+each PR is still to do.
+
+| PR  | Status        | Commit    |
+|-----|---------------|-----------|
+| PR 1 | ✅ implemented | `521f17b` |
+| PR 2 | ✅ implemented | `ce1bd20` |
+| PR 3 | ✅ implemented | `0d13111` |
+| PR 4 | ✅ implemented | `cfefe3a` |
+
+Outstanding work, in order:
+1. **Smoke verification** on `Map-<name>.pcd` for each verification case
+   listed below (cold start, slope, support sparsity, skim, fused
+   clearance, action race, RViz load).
+2. **Calibration of `grid_min_support_points`** against the actual saved
+   maps. Today it auto-derives from `(grid_resolution/map_voxel_size)^2 *
+   grid_min_support_fill` (default fill=0.20). Worth tuning per profile
+   if outdoor maps come out too sparse.
+
 ## Completed: PR 1 — Mechanical refactor (no behavior change)
 
 Covers plan items **P1** (delete dead PRM code, rename package) and the **P7**
@@ -75,7 +98,7 @@ no `roadmap_update_mode` field).
   Mechanical-only PR — behavior should be identical to pre-rename, but
   worth a 5-minute run before treating PR 1 as done.
 
-## Remaining work
+## PRs
 
 ### PR 2 — Correctness (plan items P2 + P3)
 
