@@ -8,3 +8,5 @@ float64 confidence
 string source
 float64 clearance_m
 string generation_reason
+string place_id
+string waypoint_role
