@@ -144,9 +144,10 @@ public:
 
   ~PcdGridPlanner() override
   {
-    // The worker checks rclcpp::ok() each loop iteration and exits when
-    // shutdown is signaled; joining here makes sure the destructor doesn't
-    // race the worker against member teardown.
+    // Signal the worker to stop, then join. Relying on rclcpp::ok() alone
+    // would block forever if the node is destroyed while the ROS context
+    // is still valid; stop_requested_ breaks the navigation loop directly.
+    stop_requested_.store(true);
     std::lock_guard<std::mutex> lock(worker_mutex_);
     if (worker_.joinable())
     {
@@ -593,6 +594,12 @@ private:
           free_count, clearance_radius_);
       return false;
     }
+
+    // The point cloud is no longer needed — the grid + SDF capture
+    // everything the planner uses. Free it (can be hundreds of MB); the
+    // empty cloud object stays valid.
+    map_cloud_->clear();
+    map_cloud_->points.shrink_to_fit();
     return true;
   }
 
@@ -1146,7 +1153,7 @@ private:
     int replan_failures = 0;
     rclcpp::Rate rate(waypoint_rate_);
 
-    while (rclcpp::ok())
+    while (rclcpp::ok() && !stop_requested_.load())
     {
       if (goal_handle && goal_handle->is_canceling())
       {
@@ -1283,27 +1290,19 @@ private:
     return snap.sdf[index] >= clearance_radius_;
   }
 
-  bool gridMoveAllowed(int from_idx, int to_idx, const FusedSnapshot& snap) const
+  // Slope + step constraint between two cells (static, snapshot-independent).
+  // Both z values are valid when the caller has already confirmed the cells
+  // are FREE (FREE implies low_count >= grid_min_support_points, so z was
+  // averaged from observations).
+  bool stepWithinSlope(int from_idx, int to_idx) const
   {
-    if (!gridTraversable(from_idx, snap) || !gridTraversable(to_idx, snap))
-    {
-      return false;
-    }
-    const int fx = from_idx % grid_width_;
-    const int fy = from_idx / grid_width_;
-    const int tx = to_idx % grid_width_;
-    const int ty = to_idx / grid_width_;
-    const int dx = tx - fx;
-    const int dy = ty - fy;
-
-    // Slope + step. Both z values are valid (cell.state == FREE implies
-    // low_count >= grid_min_support_points, so z was averaged from
-    // observations).
     const double dz = std::abs(grid_[from_idx].z - grid_[to_idx].z);
     if (dz > max_step_height_)
     {
       return false;
     }
+    const int dx = (to_idx % grid_width_) - (from_idx % grid_width_);
+    const int dy = (to_idx / grid_width_) - (from_idx / grid_width_);
     const double step_xy = std::hypot(
         static_cast<double>(dx) * grid_resolution_,
         static_cast<double>(dy) * grid_resolution_);
@@ -1311,7 +1310,24 @@ private:
     {
       return false;
     }
+    return true;
+  }
 
+  bool gridMoveAllowed(int from_idx, int to_idx, const FusedSnapshot& snap) const
+  {
+    if (!gridTraversable(from_idx, snap) || !gridTraversable(to_idx, snap))
+    {
+      return false;
+    }
+    if (!stepWithinSlope(from_idx, to_idx))
+    {
+      return false;
+    }
+
+    const int fx = from_idx % grid_width_;
+    const int fy = from_idx / grid_width_;
+    const int dx = (to_idx % grid_width_) - fx;
+    const int dy = (to_idx / grid_width_) - fy;
     if (std::abs(dx) == 1 && std::abs(dy) == 1)
     {
       const int side_a = gridIndex(fx + dx, fy);
@@ -1324,9 +1340,14 @@ private:
     return true;
   }
 
-  // Line-of-sight check using the fused SDF. The line is traversable if
-  // every sample along it stays at least `min_sdf` away from any non-FREE
-  // or FRESH_BLOCKED cell. `min_sdf < 0` defaults to line_clearance_.
+  // Walks the grid cells the straight segment passes through (Amanatides-Woo
+  // DDA, 4-connected) and validates the full motion model along the line:
+  //   - every cell is FREE, not FRESH_BLOCKED, sdf >= margin, AND
+  //   - every consecutive (orthogonally adjacent) transition respects
+  //     step height + slope.
+  // The slope/step check is what stops smoothing from cutting a straight
+  // shortcut across a terrain discontinuity that the grid search routed
+  // around. `min_sdf < 0` defaults to line_clearance_.
   bool gridLineTraversableWorld(
       const geometry_msgs::msg::Point& from,
       const geometry_msgs::msg::Point& to,
@@ -1334,25 +1355,75 @@ private:
       double min_sdf = -1.0) const
   {
     const double margin = min_sdf < 0.0 ? line_clearance_ : min_sdf;
-    const double length = pointDistXY(from, to);
-    const int steps = std::max(1, static_cast<int>(std::ceil(length / (0.5 * grid_resolution_))));
-    for (int i = 0; i <= steps; ++i)
+
+    auto cell_clear = [&](int idx) {
+      return grid_[idx].state == CellState::FREE &&
+             snap.live_state[idx] != LiveState::FRESH_BLOCKED &&
+             snap.sdf[idx] >= margin;
+    };
+
+    // Continuous grid coordinates (cell units).
+    const double fx = (from.x - grid_origin_x_) / grid_resolution_;
+    const double fy = (from.y - grid_origin_y_) / grid_resolution_;
+    const double tx = (to.x - grid_origin_x_) / grid_resolution_;
+    const double ty = (to.y - grid_origin_y_) / grid_resolution_;
+
+    int cx = static_cast<int>(std::floor(fx));
+    int cy = static_cast<int>(std::floor(fy));
+    const int ex = static_cast<int>(std::floor(tx));
+    const int ey = static_cast<int>(std::floor(ty));
+
+    if (!inGrid(cx, cy) || !cell_clear(gridIndex(cx, cy)))
     {
-      const double t = static_cast<double>(i) / static_cast<double>(steps);
-      const geometry_msgs::msg::Point sample = lerpPoint(from, to, t);
-      int gx = 0;
-      int gy = 0;
-      if (!worldToGrid(sample.x, sample.y, gx, gy))
+      return false;
+    }
+    if (!inGrid(ex, ey))
+    {
+      return false;
+    }
+
+    const double dx = tx - fx;
+    const double dy = ty - fy;
+    const int step_x = dx > 0.0 ? 1 : (dx < 0.0 ? -1 : 0);
+    const int step_y = dy > 0.0 ? 1 : (dy < 0.0 ? -1 : 0);
+
+    constexpr double kInf = std::numeric_limits<double>::infinity();
+    const double inv_dx = step_x != 0 ? 1.0 / std::abs(dx) : kInf;
+    const double inv_dy = step_y != 0 ? 1.0 / std::abs(dy) : kInf;
+    // Distance (in t, 0..1 of the segment) to the first x/y cell boundary.
+    double t_max_x = step_x > 0 ? (static_cast<double>(cx + 1) - fx) * inv_dx
+                   : step_x < 0 ? (fx - static_cast<double>(cx)) * inv_dx
+                                : kInf;
+    double t_max_y = step_y > 0 ? (static_cast<double>(cy + 1) - fy) * inv_dy
+                   : step_y < 0 ? (fy - static_cast<double>(cy)) * inv_dy
+                                : kInf;
+    const double t_delta_x = inv_dx;
+    const double t_delta_y = inv_dy;
+
+    int prev_idx = gridIndex(cx, cy);
+    const int max_iter = grid_width_ + grid_height_ + 4;
+    for (int iter = 0; (cx != ex || cy != ey) && iter < max_iter; ++iter)
+    {
+      if (t_max_x < t_max_y)
+      {
+        cx += step_x;
+        t_max_x += t_delta_x;
+      }
+      else
+      {
+        cy += step_y;
+        t_max_y += t_delta_y;
+      }
+      if (!inGrid(cx, cy))
       {
         return false;
       }
-      const int idx = gridIndex(gx, gy);
-      if (grid_[idx].state != CellState::FREE ||
-          snap.live_state[idx] == LiveState::FRESH_BLOCKED ||
-          snap.sdf[idx] < margin)
+      const int idx = gridIndex(cx, cy);
+      if (!cell_clear(idx) || !stepWithinSlope(prev_idx, idx))
       {
         return false;
       }
+      prev_idx = idx;
     }
     return true;
   }
@@ -1438,9 +1509,18 @@ private:
     return candidates;
   }
 
+  // Multi-source, multi-goal A*. Sources are the start snap candidates
+  // (seeded with their snap distance as g); goals are the goal snap
+  // candidates (snap distance added when finalizing). The heuristic toward
+  // `goal_point` is admissible: step costs are >= the straight-line XY
+  // distance (stale penalty only inflates them), and every goal candidate
+  // is within goal_snap_radius_ of goal_point, so subtracting that radius
+  // never overestimates remaining cost. Early-terminates once the cheapest
+  // open node can't beat the best goal found.
   bool searchGridToCandidates(
       const std::vector<GridCandidate>& start_candidates,
       const std::vector<GridCandidate>& goal_candidates,
+      const geometry_msgs::msg::Point& goal_point,
       const FusedSnapshot& snap,
       std::vector<int>& cell_path,
       GridCandidate& selected_start,
@@ -1457,7 +1537,25 @@ private:
     std::vector<int> source(cell_count, -1);
     std::vector<bool> closed(cell_count, false);
 
-    typedef std::pair<double, int> QueueItem;
+    // Per-cell goal snap cost (inf = not a goal candidate).
+    std::vector<double> goal_snap(cell_count, std::numeric_limits<double>::infinity());
+    std::vector<int> goal_cand_of_cell(cell_count, -1);
+    for (std::size_t i = 0; i < goal_candidates.size(); ++i)
+    {
+      const GridCandidate& c = goal_candidates[i];
+      if (gridTraversable(c.index, snap) && c.distance < goal_snap[c.index])
+      {
+        goal_snap[c.index] = c.distance;
+        goal_cand_of_cell[c.index] = static_cast<int>(i);
+      }
+    }
+
+    auto heuristic = [&](int idx) {
+      const double d = pointDistXY(gridCenter(idx), goal_point);
+      return std::max(0.0, d - goal_snap_radius_);
+    };
+
+    typedef std::pair<double, int> QueueItem;  // (f = g + h, cell)
     std::priority_queue<QueueItem, std::vector<QueueItem>, std::greater<QueueItem>> open;
     for (std::size_t i = 0; i < start_candidates.size(); ++i)
     {
@@ -1468,22 +1566,42 @@ private:
       }
       g_score[candidate.index] = candidate.distance;
       source[candidate.index] = static_cast<int>(i);
-      open.push(QueueItem(g_score[candidate.index], candidate.index));
+      open.push(QueueItem(candidate.distance + heuristic(candidate.index), candidate.index));
     }
 
     const int dirs[8][2] = {
         {1, 0}, {-1, 0}, {0, 1}, {0, -1},
         {1, 1}, {1, -1}, {-1, 1}, {-1, -1}};
 
+    double best_total = std::numeric_limits<double>::infinity();
+    int best_goal_cell = -1;
+
     while (!open.empty())
     {
+      const double f_curr = open.top().first;
       const int current = open.top().second;
       open.pop();
+      // No open node can beat the best finalized goal: f is a lower bound
+      // on any goal cost reachable through `current`.
+      if (f_curr >= best_total)
+      {
+        break;
+      }
       if (closed[current])
       {
         continue;
       }
       closed[current] = true;
+
+      if (goal_cand_of_cell[current] >= 0)
+      {
+        const double total = g_score[current] + goal_snap[current];
+        if (total < best_total)
+        {
+          best_total = total;
+          best_goal_cell = current;
+        }
+      }
 
       const int cx = current % grid_width_;
       const int cy = current / grid_width_;
@@ -1516,34 +1634,17 @@ private:
           parent[next] = current;
           source[next] = source[current];
           g_score[next] = tentative;
-          open.push(QueueItem(tentative, next));
+          open.push(QueueItem(tentative + heuristic(next), next));
         }
       }
     }
 
-    double best_score = std::numeric_limits<double>::infinity();
-    int best_goal_idx = -1;
-    for (std::size_t i = 0; i < goal_candidates.size(); ++i)
-    {
-      const GridCandidate& candidate = goal_candidates[i];
-      if (!gridTraversable(candidate.index, snap) || !std::isfinite(g_score[candidate.index]))
-      {
-        continue;
-      }
-      const double score = g_score[candidate.index] + candidate.distance;
-      if (score < best_score)
-      {
-        best_score = score;
-        best_goal_idx = static_cast<int>(i);
-      }
-    }
-
-    if (best_goal_idx < 0)
+    if (best_goal_cell < 0)
     {
       return false;
     }
 
-    selected_goal = goal_candidates[best_goal_idx];
+    selected_goal = goal_candidates[goal_cand_of_cell[best_goal_cell]];
     const int selected_source = source[selected_goal.index];
     if (selected_source < 0 || selected_source >= static_cast<int>(start_candidates.size()))
     {
@@ -1608,8 +1709,8 @@ private:
     std::vector<int> cell_path;
     GridCandidate selected_start;
     GridCandidate selected_goal;
-    if (!searchGridToCandidates(start_candidates, goal_candidates, snap, cell_path,
-                                selected_start, selected_goal))
+    if (!searchGridToCandidates(start_candidates, goal_candidates, requested_goal, snap,
+                                cell_path, selected_start, selected_goal))
     {
       error = "No reachable 2D grid path from current pose to requested goal.";
       return false;
@@ -1620,40 +1721,7 @@ private:
 
     route.clear();
     route.push_back(start);
-    int last_dx = 0;
-    int last_dy = 0;
-    for (std::size_t i = 0; i < cell_path.size(); ++i)
-    {
-      bool keep = i == 0 || i + 1 == cell_path.size();
-      if (i > 0 && i + 1 < cell_path.size())
-      {
-        const int curr = cell_path[i];
-        const int next = cell_path[i + 1];
-        const int curr_dx = (next % grid_width_) - (curr % grid_width_);
-        const int curr_dy = (next / grid_width_) - (curr / grid_width_);
-        if (i == 1)
-        {
-          const int prev = cell_path[i - 1];
-          last_dx = (curr % grid_width_) - (prev % grid_width_);
-          last_dy = (curr / grid_width_) - (prev / grid_width_);
-        }
-        if (curr_dx != last_dx || curr_dy != last_dy)
-        {
-          keep = true;
-        }
-        last_dx = curr_dx;
-        last_dy = curr_dy;
-      }
-      if (keep)
-      {
-        geometry_msgs::msg::Point point = gridCenter(cell_path[i]);
-        point.z = start.z;
-        if (route.empty() || pointDistXY(route.back(), point) > 1e-3)
-        {
-          route.push_back(point);
-        }
-      }
-    }
+    compactTurns(cell_path, start.z, route);
 
     geometry_msgs::msg::Point final_point = gridCenter(goal_idx);
     final_point.z = start.z;
@@ -1686,6 +1754,52 @@ private:
         "start_snap=%.2fm, goal_snap=%.2fm.",
         route.size(), pre_smooth, cell_path.size(), start_snap, goal_snap);
     return route.size() >= 2;
+  }
+
+  // Appends one waypoint per direction change in the cell path to `route`
+  // (drops the collinear interior cells). All waypoints take `z` so the
+  // stream doesn't bounce on neighboring-cell elevation noise. Without
+  // smoothing this keeps the route from being one point per cell; with
+  // smoothing it's a cheap first pass before line-of-sight compaction.
+  void compactTurns(
+      const std::vector<int>& cell_path,
+      double z,
+      std::vector<geometry_msgs::msg::Point>& route) const
+  {
+    int last_dx = 0;
+    int last_dy = 0;
+    for (std::size_t i = 0; i < cell_path.size(); ++i)
+    {
+      bool keep = i == 0 || i + 1 == cell_path.size();
+      if (i > 0 && i + 1 < cell_path.size())
+      {
+        const int curr = cell_path[i];
+        const int next = cell_path[i + 1];
+        const int curr_dx = (next % grid_width_) - (curr % grid_width_);
+        const int curr_dy = (next / grid_width_) - (curr / grid_width_);
+        if (i == 1)
+        {
+          const int prev = cell_path[i - 1];
+          last_dx = (curr % grid_width_) - (prev % grid_width_);
+          last_dy = (curr / grid_width_) - (prev / grid_width_);
+        }
+        if (curr_dx != last_dx || curr_dy != last_dy)
+        {
+          keep = true;
+        }
+        last_dx = curr_dx;
+        last_dy = curr_dy;
+      }
+      if (keep)
+      {
+        geometry_msgs::msg::Point point = gridCenter(cell_path[i]);
+        point.z = z;
+        if (route.empty() || pointDistXY(route.back(), point) > 1e-3)
+        {
+          route.push_back(point);
+        }
+      }
+    }
   }
 
   // Greedy line-of-sight compaction. Walk the route from each anchor and
@@ -1973,6 +2087,7 @@ private:
   bool map_ready_ = false;
   std::atomic_bool has_odom_{false};
   std::atomic_bool executing_{false};
+  std::atomic_bool stop_requested_{false};
 
   // One joinable worker, never detached. Replaced before each run; joined
   // in the destructor.
