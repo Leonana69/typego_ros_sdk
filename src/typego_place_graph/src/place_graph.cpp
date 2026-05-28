@@ -88,6 +88,10 @@ PlaceGraphSnapshot build_place_graph(const MapSnapshot& map,
         p.kind = cores.cores[ci].kind;
         p.place_id = mint(p.kind);
         p.clearance_m = cores.cores[ci].clearance_m;
+        p.peak.x = cell_to_world_x(cores.cores[ci].seed_x, seg.origin_x,
+                                   seg.resolution_m);
+        p.peak.y = cell_to_world_y(cores.cores[ci].seed_y, seg.origin_y,
+                                   seg.resolution_m);
         out.places.push_back(p);
         core_to_place[ci] = static_cast<int>(out.places.size()) - 1;
     }
@@ -114,6 +118,7 @@ PlaceGraphSnapshot build_place_graph(const MapSnapshot& map,
         p.width_m = cc.width_m;
         p.clearance_m = cc.clearance_m;
         p.centroid = cc.centroid;
+        p.peak = cc.centroid;
         std::unordered_set<std::string> adj_set;
         for (int core_idx : cc.endpoint_cores) {
             const auto& parent = out.places[core_to_place[core_idx]];

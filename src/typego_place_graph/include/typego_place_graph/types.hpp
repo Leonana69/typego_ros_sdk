@@ -96,6 +96,11 @@ struct PlaceRegion {
     std::vector<CellCoord> cell_region;
 
     Point2d centroid;
+    // Most-interior point (distance-transform maximum) in world meters. A
+    // better navigation target than centroid for concave/L-shaped places,
+    // whose cell-average centroid can fall outside the region. Defaults to
+    // centroid when no distance-transform seed is available.
+    Point2d peak;
     double area_m2 = 0.0;
     double clearance_m = 0.0;
     double frontier_ratio = 0.0;

@@ -137,6 +137,39 @@ TEST(Pipeline, TightClosetGetsFallbackSeed) {
     EXPECT_GE(rooms, 1);
 }
 
+TEST(Pipeline, LShapedRoomPeakInsideRegion) {
+    // An L-shaped room: vertical arm + horizontal arm sharing a corner.
+    // The cell-average centroid falls in the cut-out (top-right) quadrant,
+    // i.e. outside the room, while the distance-transform peak stays on an
+    // arm. This is exactly the case `peak` exists for.
+    auto m = tpg::test::make_blank(80, 80, 0.10, tpg::CellState::kOccupied);
+    tpg::test::fill_rect(m, 10, 10, 30, 70, tpg::CellState::kFree);  // vertical
+    tpg::test::fill_rect(m, 10, 10, 70, 30, tpg::CellState::kFree);  // horizontal
+    tpg::Config cfg;
+    auto g = tpg::build_place_graph(m, cfg);
+
+    const tpg::PlaceRegion* room = nullptr;
+    for (const auto& p : g.places) {
+        if (p.kind == tpg::PlaceKind::kRoom ||
+            p.kind == tpg::PlaceKind::kOpenArea ||
+            p.kind == tpg::PlaceKind::kCorridor) {
+            room = &p;
+            break;
+        }
+    }
+    ASSERT_NE(room, nullptr);
+
+    // peak resolves to the room's own cells.
+    const auto* at_peak = g.place_at_world(room->peak.x, room->peak.y);
+    ASSERT_NE(at_peak, nullptr);
+    EXPECT_EQ(at_peak->place_id, room->place_id);
+
+    // the cell-average centroid lands in the cut-out quadrant (no place).
+    const auto* at_centroid =
+        g.place_at_world(room->centroid.x, room->centroid.y);
+    EXPECT_EQ(at_centroid, nullptr);
+}
+
 TEST(Pipeline, WideGapEmitsOpenTransition) {
     auto m = tpg::test::wide_gap_two_core(0.10);
     tpg::Config cfg;
