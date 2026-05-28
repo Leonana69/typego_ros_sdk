@@ -2,20 +2,23 @@ pcd_grid_planner:
   ros__parameters:
     map_frame: map
 
-    map_voxel_size: 0.08
     grid_resolution: 0.20
-    grid_padding: 0.2
     grid_max_cells: 2000000
-    grid_min_support_points: -1            # -1 → derive from voxel/cell ratio
-    grid_min_support_fill: 0.20            # fill fraction used when auto-deriving
+
+    # Fixed live-map extent, recentered on the robot's first odometry.
+    live_map_width_m: 80.0
+    live_map_height_m: 80.0
+    live_map_center_x: 0.0                  # used only if recenter is false
+    live_map_center_y: 0.0
+    live_map_recenter_on_first_odom: true
 
     max_slope_deg: 25.0
     max_step_height: 0.18
 
     min_clearance: 0.35
-    obstacle_height: 0.15
-    vehicle_height: 1.0
-    line_clearance: -1.0                   # -1 → clearance_radius - grid_resolution
+    obstacle_height: 0.15                   # intensity < this → free; >= → obstacle
+    vehicle_height: 1.0                     # reserved; unused in v1
+    line_clearance: -1.0                    # -1 → clearance_radius - grid_resolution
 
     start_snap_radius: 6.0
     goal_snap_radius: 2.0
@@ -23,17 +26,19 @@ pcd_grid_planner:
     waypoint_reach_radius: 0.6
     goal_tolerance: 0.35
     waypoint_rate: 5.0
-    smoothing_enabled: true                # greedy line-of-sight compaction post-A*
-    publish_debug_markers: false           # /pcd_2d_map already shows the grid in RViz
+    smoothing_enabled: true                 # greedy line-of-sight compaction post-A*
+    publish_debug_markers: false            # /pcd_2d_map already shows the grid in RViz
 
-    # Live obstacle layer (rasterized from /terrain_map).
-    live_layer_enabled: true
-    live_topic: "/terrain_map"
-    live_timeout_sec: 6.0            # FRESH→STALE at half, STALE→CLEAR at full
-    live_input_timeout_sec: 3.0      # if input silent for >this, drop live layer
-    live_decay_rate_hz: 2.0
-    live_publish_rate_hz: 5.0
-    stale_step_penalty: 1.0          # extra A* cost multiplier for STALE cells
+    # Live occupancy mapping (log-odds accumulation from terrain analysis).
+    live_topic: "/terrain_map_ext"
+    mapping_rate_hz: 2.0                     # reclassify + SDF + publish rate
+    blockage_ceiling: 1.6                   # >= terrain vehicleHeight (1.5) to catch no-data
+    live_l_hit: 0.85                        # per-tick log-odds increment (obstacle)
+    live_l_miss: 0.40                       # per-tick log-odds decrement (free)
+    live_l_min: -2.0                        # shallow FREE floor → faster new-obstacle flip
+    live_l_max: 4.0
+    live_l_occ_thr: 1.5                     # >= → BLOCKED
+    live_l_free_thr: -1.0                   # <= → FREE (sticky once FREE)
 
     replan_period_sec: 0.5
     replan_horizon_m: 4.0

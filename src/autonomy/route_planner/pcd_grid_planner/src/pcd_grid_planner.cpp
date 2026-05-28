@@ -1,8 +1,8 @@
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <cmath>
 #include <cstdint>
-#include <fstream>
 #include <functional>
 #include <limits>
 #include <memory>
@@ -26,9 +26,6 @@
 #include <visualization_msgs/msg/marker.hpp>
 #include <visualization_msgs/msg/marker_array.hpp>
 
-#include <pcl/filters/filter.h>
-#include <pcl/filters/voxel_grid.h>
-#include <pcl/io/pcd_io.h>
 #include <pcl/point_cloud.h>
 #include <pcl/point_types.h>
 #include <pcl_conversions/pcl_conversions.h>
@@ -55,6 +52,11 @@ geometry_msgs::msg::Point lerpPoint(
 }
 }  // namespace
 
+// Live-mapping 2D grid planner. The grid is built at runtime by accumulating
+// terrain_analysis output (already ground-segmented + ceiling-filtered, in the
+// map frame) into a per-cell log-odds occupancy filter, instead of projecting a
+// saved PCD. The planning pipeline (SDF, A*, snap, line-of-sight smoothing,
+// replan) is unchanged; only the source of the grid differs.
 class PcdGridPlanner : public rclcpp::Node
 {
 public:
@@ -62,8 +64,7 @@ public:
   using GoalHandleNavigateToPose = rclcpp_action::ServerGoalHandle<NavigateToPose>;
 
   PcdGridPlanner()
-      : Node("pcd_grid_planner"),
-        map_cloud_(new pcl::PointCloud<pcl::PointXYZI>())
+      : Node("pcd_grid_planner")
   {
     readParameters();
 
@@ -73,63 +74,32 @@ public:
     goal_pose_sub_ = create_subscription<geometry_msgs::msg::PoseStamped>(
         "/goal_pose", 1,
         std::bind(&PcdGridPlanner::goalPoseCallback, this, std::placeholders::_1));
+    terrain_sub_ = create_subscription<sensor_msgs::msg::PointCloud2>(
+        live_topic_, rclcpp::SensorDataQoS(),
+        std::bind(&PcdGridPlanner::terrainCallback, this, std::placeholders::_1));
 
     waypoint_pub_ = create_publisher<geometry_msgs::msg::PointStamped>("/way_point", 5);
     path_pub_ = create_publisher<nav_msgs::msg::Path>(
         "/pcd_grid_path", rclcpp::QoS(1).transient_local());
     grid_map_pub_ = create_publisher<nav_msgs::msg::OccupancyGrid>(
         "/pcd_2d_map", rclcpp::QoS(1).transient_local());
-    live_grid_map_pub_ = create_publisher<nav_msgs::msg::OccupancyGrid>(
-        "/pcd_2d_map_live", rclcpp::QoS(1).reliable());
     grid_marker_pub_ = create_publisher<visualization_msgs::msg::MarkerArray>(
         "/pcd_grid_markers", rclcpp::QoS(1).transient_local());
     path_marker_pub_ = create_publisher<visualization_msgs::msg::MarkerArray>(
         "/pcd_grid_route", rclcpp::QoS(1).transient_local());
 
-    map_ready_ = loadMap() && buildGridMap2D();
-    if (map_ready_)
+    // Allocate immediately unless we're waiting for the first odom to center
+    // the grid on the robot.
+    if (!live_map_recenter_on_first_odom_)
     {
-      publishGridMap();
-      if (publish_debug_markers_)
-      {
-        publishGridMarkers();
-      }
-
-      // Initialize live layer aligned to grid_, and seed the fused
-      // snapshot from the static SDF so the first plan (cold start, no
-      // /terrain_map yet) is not blocked on perception input.
-      const std::size_t cells = grid_.size();
-      live_state_.assign(cells, LiveState::CLEAR);
-      live_stamp_.assign(cells, 0.0);
-      auto seed = std::make_shared<FusedSnapshot>();
-      seed->live_state.assign(cells, LiveState::CLEAR);
-      seed->sdf.resize(cells);
-      for (std::size_t i = 0; i < cells; ++i)
-      {
-        seed->sdf[i] = grid_[i].sdf;
-      }
-      {
-        std::lock_guard<std::mutex> lock(fused_mutex_);
-        fused_snapshot_ = std::move(seed);
-      }
-
-      if (live_layer_enabled_)
-      {
-        terrain_sub_ = create_subscription<sensor_msgs::msg::PointCloud2>(
-            live_topic_, rclcpp::SensorDataQoS(),
-            std::bind(&PcdGridPlanner::terrainCallback, this, std::placeholders::_1));
-
-        const auto decay_period = std::chrono::milliseconds(
-            static_cast<int>(1000.0 / live_decay_rate_hz_));
-        live_decay_timer_ = create_wall_timer(
-            decay_period, std::bind(&PcdGridPlanner::onLiveDecayTick, this));
-
-        const auto publish_period = std::chrono::milliseconds(
-            static_cast<int>(1000.0 / live_publish_rate_hz_));
-        live_publish_timer_ = create_wall_timer(
-            publish_period, std::bind(&PcdGridPlanner::publishLiveMap, this));
-      }
+      grid_allocated_.store(true);
+      allocateLiveGrid(live_map_center_x_, live_map_center_y_);
     }
+
+    const auto mapping_period = std::chrono::milliseconds(
+        static_cast<int>(1000.0 / mapping_rate_hz_));
+    mapping_timer_ = create_wall_timer(
+        mapping_period, std::bind(&PcdGridPlanner::onMappingTick, this));
 
     action_server_ = rclcpp_action::create_server<NavigateToPose>(
         this,
@@ -138,8 +108,11 @@ public:
         std::bind(&PcdGridPlanner::handleCancel, this, std::placeholders::_1),
         std::bind(&PcdGridPlanner::handleAccepted, this, std::placeholders::_1));
 
-    RCLCPP_INFO(get_logger(), "PCD grid planner action server ready on /navigate_to_pose");
-    RCLCPP_INFO(get_logger(), "PCD grid planner also accepts RViz goals on /goal_pose");
+    RCLCPP_INFO(
+        get_logger(),
+        "PCD grid planner (live mapping from %s) ready; action server on "
+        "/navigate_to_pose, RViz goals on /goal_pose.",
+        live_topic_.c_str());
   }
 
   ~PcdGridPlanner() override
@@ -188,21 +161,9 @@ private:
     BLOCKED = 2,
   };
 
-  // Live layer per-cell state. CLEAR cells fall through to the static
-  // classification; FRESH_BLOCKED count as obstacles for both planning and
-  // the fused SDF; STALE cells stay traversable but the planner adds a
-  // soft cost penalty (recent evidence of an obstacle, but ageing out).
-  enum class LiveState : std::uint8_t
-  {
-    CLEAR = 0,
-    FRESH_BLOCKED = 1,
-    STALE = 2,
-  };
-
-  // Runtime cell. Build-only accumulators (count, low_count, obstacle_count,
-  // min_z, max_z, low_sum_z) live in a temporary BuildAccumulator vector
-  // that's destroyed at the end of buildGridMap2D, so the per-cell runtime
-  // footprint stays small (z + sdf + state, ~24 bytes with padding).
+  // Runtime cell — the current best map, owned by the executor thread
+  // (mapping tick + publishers). The navigation worker never reads this
+  // directly; it reads an immutable FusedSnapshot copy instead.
   struct GridCell
   {
     double z = 0.0;
@@ -210,14 +171,17 @@ private:
     CellState state = CellState::UNKNOWN;
   };
 
-  struct BuildAccumulator
+  // Per-cell log-odds accumulator. obs_count/free_count are raw evidence
+  // tallied by terrainCallback (100 Hz) and collapsed to one log-odds vote
+  // per mapping tick (decoupling the filter rate from the sensor rate).
+  // logodds + ground_sum/ground_count persist across ticks; the counts reset.
+  struct LiveAccum
   {
-    int count = 0;
-    int low_count = 0;
-    int obstacle_count = 0;
-    double min_z = std::numeric_limits<double>::infinity();
-    double max_z = -std::numeric_limits<double>::infinity();
-    double low_sum_z = 0.0;
+    float logodds = 0.0f;
+    std::uint16_t obs_count = 0;
+    std::uint16_t free_count = 0;
+    double ground_sum = 0.0;
+    std::uint32_t ground_count = 0;
   };
 
   struct GridCandidate
@@ -226,39 +190,37 @@ private:
     double distance = 0.0;
   };
 
-  // Immutable snapshot of (live state + fused SDF) that the planner reads
-  // for the duration of a single planning operation. Produced by the
-  // decay timer; consumed by planGridRoute and isRouteBlocked. The
-  // shared_ptr lets the producer swap in a fresh snapshot without
-  // interrupting an in-flight planner.
+  // Immutable snapshot of the classified grid (state + ground z + SDF) that
+  // the planner reads for the duration of a single planning operation. The
+  // mapping tick swaps a fresh shared_ptr under fused_mutex_; readers retain
+  // a shared_ptr and read lock-free, so the whole planning input is atomic.
   struct FusedSnapshot
   {
-    std::vector<LiveState> live_state;
-    std::vector<double> sdf;       // meters, sources = static !FREE OR live FRESH_BLOCKED
+    std::vector<CellState> state;
+    std::vector<double> z;
+    std::vector<double> sdf;
   };
 
   void readParameters()
   {
-    declare_parameter<std::string>("map_file", "");
     declare_parameter<std::string>("map_frame", "map");
 
-    declare_parameter<double>("map_voxel_size", 0.08);
     declare_parameter<double>("grid_resolution", 0.20);
-    declare_parameter<double>("grid_padding", 0.2);
     declare_parameter<int>("grid_max_cells", 2000000);
-    // -1 → auto-derive from (grid_resolution / map_voxel_size)^2 * fill.
-    // Calibrate against the actual saved maps once you have them under
-    // typego_sdk/resource/Map-* — build-time log reports the resulting
-    // free/unknown/blocked counts.
-    declare_parameter<int>("grid_min_support_points", -1);
-    declare_parameter<double>("grid_min_support_fill", 0.20);
+
+    // Live grid extent (fixed, recentered on first odom by default).
+    declare_parameter<double>("live_map_width_m", 80.0);
+    declare_parameter<double>("live_map_height_m", 80.0);
+    declare_parameter<double>("live_map_center_x", 0.0);
+    declare_parameter<double>("live_map_center_y", 0.0);
+    declare_parameter<bool>("live_map_recenter_on_first_odom", true);
 
     declare_parameter<double>("max_slope_deg", 25.0);
     declare_parameter<double>("max_step_height", 0.18);
 
     declare_parameter<double>("min_clearance", 0.35);
     declare_parameter<double>("obstacle_height", 0.15);
-    declare_parameter<double>("vehicle_height", 1.0);
+    declare_parameter<double>("vehicle_height", 1.0);   // reserved; unused in v1
     declare_parameter<double>("vehicle_length", 0.7);
     declare_parameter<double>("vehicle_width", 0.3);
     // Min SDF along a connector line (start/goal snap + edge check). A bit
@@ -275,29 +237,32 @@ private:
     declare_parameter<bool>("smoothing_enabled", true);
     declare_parameter<bool>("publish_debug_markers", false);
 
-    // Live obstacle layer.
-    declare_parameter<bool>("live_layer_enabled", true);
-    declare_parameter<std::string>("live_topic", "/terrain_map");
-    declare_parameter<double>("live_timeout_sec", 6.0);
-    declare_parameter<double>("live_input_timeout_sec", 3.0);
-    declare_parameter<double>("live_decay_rate_hz", 2.0);
-    declare_parameter<double>("live_publish_rate_hz", 5.0);
-    declare_parameter<double>("stale_step_penalty", 1.0);
+    // Live occupancy mapping.
+    declare_parameter<std::string>("live_topic", "/terrain_map_ext");
+    declare_parameter<double>("mapping_rate_hz", 2.0);
+    declare_parameter<double>("blockage_ceiling", 1.6);
+    declare_parameter<double>("live_l_hit", 0.85);
+    declare_parameter<double>("live_l_miss", 0.40);
+    declare_parameter<double>("live_l_min", -2.0);
+    declare_parameter<double>("live_l_max", 4.0);
+    declare_parameter<double>("live_l_occ_thr", 1.5);
+    declare_parameter<double>("live_l_free_thr", -1.0);
 
     // Replanning.
     declare_parameter<double>("replan_period_sec", 0.5);
     declare_parameter<double>("replan_horizon_m", 4.0);
     declare_parameter<int>("max_replan_attempts", 20);
 
-    get_parameter("map_file", map_file_);
     get_parameter("map_frame", map_frame_);
 
-    get_parameter("map_voxel_size", map_voxel_size_);
     get_parameter("grid_resolution", grid_resolution_);
-    get_parameter("grid_padding", grid_padding_);
     get_parameter("grid_max_cells", grid_max_cells_);
-    get_parameter("grid_min_support_points", grid_min_support_points_);
-    get_parameter("grid_min_support_fill", grid_min_support_fill_);
+
+    get_parameter("live_map_width_m", live_map_width_m_);
+    get_parameter("live_map_height_m", live_map_height_m_);
+    get_parameter("live_map_center_x", live_map_center_x_);
+    get_parameter("live_map_center_y", live_map_center_y_);
+    get_parameter("live_map_recenter_on_first_odom", live_map_recenter_on_first_odom_);
 
     get_parameter("max_slope_deg", max_slope_deg_);
     get_parameter("max_step_height", max_step_height_);
@@ -318,23 +283,26 @@ private:
     get_parameter("smoothing_enabled", smoothing_enabled_);
     get_parameter("publish_debug_markers", publish_debug_markers_);
 
-    get_parameter("live_layer_enabled", live_layer_enabled_);
     get_parameter("live_topic", live_topic_);
-    get_parameter("live_timeout_sec", live_timeout_sec_);
-    get_parameter("live_input_timeout_sec", live_input_timeout_sec_);
-    get_parameter("live_decay_rate_hz", live_decay_rate_hz_);
-    get_parameter("live_publish_rate_hz", live_publish_rate_hz_);
-    get_parameter("stale_step_penalty", stale_step_penalty_);
+    get_parameter("mapping_rate_hz", mapping_rate_hz_);
+    get_parameter("blockage_ceiling", blockage_ceiling_);
+    get_parameter("live_l_hit", live_l_hit_);
+    get_parameter("live_l_miss", live_l_miss_);
+    get_parameter("live_l_min", live_l_min_);
+    get_parameter("live_l_max", live_l_max_);
+    get_parameter("live_l_occ_thr", live_l_occ_thr_);
+    get_parameter("live_l_free_thr", live_l_free_thr_);
 
     get_parameter("replan_period_sec", replan_period_sec_);
     get_parameter("replan_horizon_m", replan_horizon_m_);
     get_parameter("max_replan_attempts", max_replan_attempts_);
 
-    live_decay_rate_hz_ = std::max(0.1, live_decay_rate_hz_);
-    live_publish_rate_hz_ = std::max(0.1, live_publish_rate_hz_);
+    grid_resolution_ = std::max(0.05, grid_resolution_);
+    grid_max_cells_ = std::max(1000, grid_max_cells_);
+    mapping_rate_hz_ = std::max(0.1, mapping_rate_hz_);
+    waypoint_rate_ = std::max(0.5, waypoint_rate_);
     replan_period_sec_ = std::max(0.05, replan_period_sec_);
     replan_horizon_m_ = std::max(grid_resolution_, replan_horizon_m_);
-    stale_step_penalty_ = std::max(0.0, stale_step_penalty_);
     max_replan_attempts_ = std::max(0, max_replan_attempts_);
 
     max_slope_rad_ = max_slope_deg_ * M_PI / 180.0;
@@ -343,264 +311,50 @@ private:
     {
       line_clearance_ = std::max(0.5 * grid_resolution_, clearance_radius_ - grid_resolution_);
     }
-
-    waypoint_rate_ = std::max(0.5, waypoint_rate_);
-    grid_resolution_ = std::max(0.05, grid_resolution_);
-    grid_padding_ = std::max(0.0, grid_padding_);
-    grid_max_cells_ = std::max(1000, grid_max_cells_);
-
-    if (grid_min_support_points_ < 0)
-    {
-      const double voxel = std::max(0.01, map_voxel_size_);
-      const double ratio = grid_resolution_ / voxel;
-      const double fill = std::clamp(grid_min_support_fill_, 0.0, 1.0);
-      grid_min_support_points_ =
-          std::max(1, static_cast<int>(std::ceil(ratio * ratio * fill)));
-    }
   }
 
-  bool loadMap()
+  // Allocates the fixed-extent grid centered on (cx, cy). Called once: either
+  // at construction (recenter disabled) or on the first odom. Sets map_ready_
+  // last so callbacks/goals bail until the grid exists.
+  void allocateLiveGrid(double cx, double cy)
   {
-    if (map_file_.empty())
-    {
-      RCLCPP_ERROR(get_logger(), "map_file is empty; PCD grid planner cannot start.");
-      return false;
-    }
-    std::ifstream input(map_file_);
-    if (!input.good())
-    {
-      RCLCPP_ERROR(get_logger(), "Cannot open PCD map file: %s", map_file_.c_str());
-      return false;
-    }
-
-    pcl::PointCloud<pcl::PointXYZI>::Ptr raw_cloud(new pcl::PointCloud<pcl::PointXYZI>());
-    if (pcl::io::loadPCDFile<pcl::PointXYZI>(map_file_, *raw_cloud) == -1)
-    {
-      pcl::PointCloud<pcl::PointXYZ>::Ptr xyz_cloud(new pcl::PointCloud<pcl::PointXYZ>());
-      if (pcl::io::loadPCDFile<pcl::PointXYZ>(map_file_, *xyz_cloud) == -1)
-      {
-        RCLCPP_ERROR(get_logger(), "Failed to load PCD map file: %s", map_file_.c_str());
-        return false;
-      }
-      raw_cloud->clear();
-      raw_cloud->reserve(xyz_cloud->size());
-      for (const auto& p : xyz_cloud->points)
-      {
-        pcl::PointXYZI out;
-        out.x = p.x;
-        out.y = p.y;
-        out.z = p.z;
-        out.intensity = 0.0f;
-        raw_cloud->push_back(out);
-      }
-    }
-
-    std::vector<int> valid_indices;
-    pcl::removeNaNFromPointCloud(*raw_cloud, *raw_cloud, valid_indices);
-    if (raw_cloud->empty())
-    {
-      RCLCPP_ERROR(get_logger(), "PCD map has no valid points: %s", map_file_.c_str());
-      return false;
-    }
-
-    if (map_voxel_size_ > 0.0)
-    {
-      pcl::VoxelGrid<pcl::PointXYZI> filter;
-      filter.setLeafSize(
-          static_cast<float>(map_voxel_size_),
-          static_cast<float>(map_voxel_size_),
-          static_cast<float>(map_voxel_size_));
-      filter.setInputCloud(raw_cloud);
-      filter.filter(*map_cloud_);
-    }
-    else
-    {
-      *map_cloud_ = *raw_cloud;
-    }
-
-    if (map_cloud_->empty())
-    {
-      RCLCPP_ERROR(get_logger(), "PCD map became empty after voxel filtering: %s", map_file_.c_str());
-      return false;
-    }
-
-    RCLCPP_INFO(
-        get_logger(),
-        "Loaded PCD map %s with %zu points after filtering.",
-        map_file_.c_str(), map_cloud_->size());
-    return true;
-  }
-
-  bool buildGridMap2D()
-  {
-    if (map_cloud_->empty())
-    {
-      RCLCPP_ERROR(get_logger(), "Cannot build 2D grid from an empty PCD map.");
-      return false;
-    }
-
-    double min_x = std::numeric_limits<double>::infinity();
-    double min_y = std::numeric_limits<double>::infinity();
-    double max_x = -std::numeric_limits<double>::infinity();
-    double max_y = -std::numeric_limits<double>::infinity();
-    for (const auto& point : map_cloud_->points)
-    {
-      min_x = std::min(min_x, static_cast<double>(point.x));
-      min_y = std::min(min_y, static_cast<double>(point.y));
-      max_x = std::max(max_x, static_cast<double>(point.x));
-      max_y = std::max(max_y, static_cast<double>(point.y));
-    }
-
-    grid_origin_x_ = min_x - grid_padding_;
-    grid_origin_y_ = min_y - grid_padding_;
-    grid_width_ = static_cast<int>(std::ceil((max_x - min_x + 2.0 * grid_padding_) / grid_resolution_)) + 1;
-    grid_height_ = static_cast<int>(std::ceil((max_y - min_y + 2.0 * grid_padding_) / grid_resolution_)) + 1;
-    const long long cell_count = static_cast<long long>(grid_width_) * static_cast<long long>(grid_height_);
-    if (grid_width_ <= 0 || grid_height_ <= 0 || cell_count <= 0 || cell_count > grid_max_cells_)
+    grid_width_ = std::max(1, static_cast<int>(std::ceil(live_map_width_m_ / grid_resolution_)));
+    grid_height_ = std::max(1, static_cast<int>(std::ceil(live_map_height_m_ / grid_resolution_)));
+    const long long cell_count =
+        static_cast<long long>(grid_width_) * static_cast<long long>(grid_height_);
+    if (cell_count <= 0 || cell_count > grid_max_cells_)
     {
       RCLCPP_ERROR(
           get_logger(),
-          "2D grid size is invalid or too large: width=%d height=%d cells=%lld max=%d.",
+          "Live grid size invalid or too large: %dx%d cells=%lld max=%d. "
+          "Reduce live_map_width_m/height_m or raise grid_max_cells.",
           grid_width_, grid_height_, cell_count, grid_max_cells_);
-      return false;
+      return;
     }
 
-    grid_.clear();
-    grid_.resize(static_cast<std::size_t>(cell_count));
+    grid_origin_x_ = cx - 0.5 * live_map_width_m_;
+    grid_origin_y_ = cy - 0.5 * live_map_height_m_;
 
-    // Build-only counters; destroyed when buildGridMap2D returns so they
-    // don't sit in memory through the lifetime of the node.
-    std::vector<BuildAccumulator> accum(static_cast<std::size_t>(cell_count));
-
-    for (const auto& point : map_cloud_->points)
+    const std::size_t cells = static_cast<std::size_t>(cell_count);
+    grid_.assign(cells, GridCell{});
     {
-      int gx = 0;
-      int gy = 0;
-      if (!worldToGrid(point.x, point.y, gx, gy))
-      {
-        continue;
-      }
-      BuildAccumulator& a = accum[gridIndex(gx, gy)];
-      a.count++;
-      a.min_z = std::min(a.min_z, static_cast<double>(point.z));
-      a.max_z = std::max(a.max_z, static_cast<double>(point.z));
+      std::lock_guard<std::mutex> lock(accum_mutex_);
+      accum_.assign(cells, LiveAccum{});
+      in_touched_.assign(cells, 0);
+      touched_.clear();
     }
-
-    for (const auto& point : map_cloud_->points)
-    {
-      int gx = 0;
-      int gy = 0;
-      if (!worldToGrid(point.x, point.y, gx, gy))
-      {
-        continue;
-      }
-      BuildAccumulator& a = accum[gridIndex(gx, gy)];
-      if (a.count == 0 || !std::isfinite(a.min_z))
-      {
-        continue;
-      }
-
-      const double dz = point.z - a.min_z;
-      if (dz <= max_step_height_)
-      {
-        a.low_count++;
-        a.low_sum_z += point.z;
-      }
-      if (dz > obstacle_height_ && dz < vehicle_height_)
-      {
-        a.obstacle_count++;
-      }
-    }
-
-    std::size_t free_count = 0;
-    std::size_t blocked_count = 0;
-    std::size_t unknown_count = 0;
-    for (std::size_t i = 0; i < grid_.size(); ++i)
-    {
-      GridCell& cell = grid_[i];
-      const BuildAccumulator& a = accum[i];
-      if (a.low_count > 0)
-      {
-        cell.z = a.low_sum_z / static_cast<double>(a.low_count);
-      }
-      else if (std::isfinite(a.min_z))
-      {
-        cell.z = a.min_z;
-      }
-
-      if (a.obstacle_count > 0)
-      {
-        cell.state = CellState::BLOCKED;
-        blocked_count++;
-      }
-      else if (a.low_count >= grid_min_support_points_)
-      {
-        cell.state = CellState::FREE;
-        free_count++;
-      }
-      else
-      {
-        cell.state = CellState::UNKNOWN;
-        unknown_count++;
-      }
-    }
-
-    // Mark boundary-touching cells as UNKNOWN: a FREE cell at the grid edge
-    // has no neighbor on one side, so negative-obstacle protection is gone.
-    auto demote_to_unknown_if_free = [&](int idx) {
-      GridCell& cell = grid_[idx];
-      if (cell.state == CellState::FREE)
-      {
-        cell.state = CellState::UNKNOWN;
-        free_count--;
-        unknown_count++;
-      }
-    };
-    for (int gx = 0; gx < grid_width_; ++gx)
-    {
-      demote_to_unknown_if_free(gridIndex(gx, 0));
-      demote_to_unknown_if_free(gridIndex(gx, grid_height_ - 1));
-    }
-    for (int gy = 0; gy < grid_height_; ++gy)
-    {
-      demote_to_unknown_if_free(gridIndex(0, gy));
-      demote_to_unknown_if_free(gridIndex(grid_width_ - 1, gy));
-    }
-
-    buildStaticSdf();
-
-    std::size_t traversable_count = 0;
-    for (const GridCell& cell : grid_)
-    {
-      if (cell.state == CellState::FREE && cell.sdf >= clearance_radius_)
-      {
-        traversable_count++;
-      }
-    }
+    // Seed an all-UNKNOWN snapshot so a goal before any terrain arrives fails
+    // cleanly ("no FREE cell") instead of dereferencing a null snapshot, and
+    // publish the (empty) extent so RViz shows the grid frame from the start.
+    map_ready_ = true;
+    publishSnapshot();
+    publishGridMap();
 
     RCLCPP_INFO(
         get_logger(),
-        "Built 2D PCD grid: %dx%d cells, res=%.2fm, support>=%d, "
-        "free=%zu blocked=%zu unknown=%zu traversable(sdf>=%.2fm)=%zu.",
-        grid_width_, grid_height_, grid_resolution_, grid_min_support_points_,
-        free_count, blocked_count, unknown_count, clearance_radius_, traversable_count);
-    if (traversable_count == 0)
-    {
-      RCLCPP_ERROR(
-          get_logger(),
-          "2D PCD grid has no traversable cells. "
-          "If free=%zu is reasonable but traversable=0, clearance_radius=%.2fm "
-          "may be too large for this map's corridor widths.",
-          free_count, clearance_radius_);
-      return false;
-    }
-
-    // The point cloud is no longer needed — the grid + SDF capture
-    // everything the planner uses. Free it (can be hundreds of MB); the
-    // empty cloud object stays valid.
-    map_cloud_->clear();
-    map_cloud_->points.shrink_to_fit();
-    return true;
+        "Live grid allocated: %dx%d @ %.2fm, extent %.0fx%.0f m, origin (%.2f, %.2f).",
+        grid_width_, grid_height_, grid_resolution_,
+        live_map_width_m_, live_map_height_m_, grid_origin_x_, grid_origin_y_);
   }
 
   // Felzenszwalb-Huttenlocher 1D squared-distance transform along a strip.
@@ -647,7 +401,10 @@ private:
     }
   }
 
-  void buildStaticSdf()
+  // Rebuilds grid_[*].sdf = meters to the nearest non-FREE cell, via a 2-pass
+  // EDT. O(N); ~ms for a 160k-cell grid. Runs on the executor thread (mapping
+  // tick) so grid_ is touched single-threaded.
+  void buildSdf()
   {
     const std::size_t cells = grid_.size();
     if (cells == 0)
@@ -656,14 +413,12 @@ private:
     }
 
     // Large finite sentinel — avoids inf - inf = NaN inside the parabola
-    // intersection arithmetic. Must dominate any real squared distance in
-    // *cell units*, which is bounded by `width^2 + height^2`. Multiply by
-    // a safety factor; even a 2 M-cell grid stays well under 1e15.
+    // intersection arithmetic. Dominates any real squared distance (bounded
+    // by width^2 + height^2 in cell units).
     const double sentinel =
         static_cast<double>(grid_width_) * grid_width_ +
         static_cast<double>(grid_height_) * grid_height_ + 1.0;
 
-    // Squared distance in *cell units*; scale to meters at the very end.
     std::vector<double> squared(cells);
     for (std::size_t i = 0; i < cells; ++i)
     {
@@ -676,7 +431,6 @@ private:
     std::vector<int> v(n + 1);
     std::vector<double> zb(n + 2);
 
-    // Row pass.
     for (int gy = 0; gy < grid_height_; ++gy)
     {
       for (int gx = 0; gx < grid_width_; ++gx)
@@ -689,8 +443,6 @@ private:
         squared[gridIndex(gx, gy)] = row_out[gx];
       }
     }
-
-    // Column pass.
     for (int gx = 0; gx < grid_width_; ++gx)
     {
       for (int gy = 0; gy < grid_height_; ++gy)
@@ -716,9 +468,31 @@ private:
     return fused_snapshot_;
   }
 
+  // Copies the current grid_ (state/z/sdf) into a fresh immutable snapshot and
+  // swaps it in for the planner. Executor thread only.
+  void publishSnapshot()
+  {
+    const std::size_t cells = grid_.size();
+    auto snap = std::make_shared<FusedSnapshot>();
+    snap->state.resize(cells);
+    snap->z.resize(cells);
+    snap->sdf.resize(cells);
+    for (std::size_t i = 0; i < cells; ++i)
+    {
+      snap->state[i] = grid_[i].state;
+      snap->z[i] = grid_[i].z;
+      snap->sdf[i] = grid_[i].sdf;
+    }
+    std::lock_guard<std::mutex> lock(fused_mutex_);
+    fused_snapshot_ = std::move(snap);
+  }
+
+  // 100 Hz: tally raw per-cell evidence. No log-odds here — that's collapsed to
+  // one vote per cell at the mapping tick so the filter rate is decoupled from
+  // the sensor rate. Touched cells are deduped into touched_ for the tick.
   void terrainCallback(const sensor_msgs::msg::PointCloud2::SharedPtr msg)
   {
-    if (!map_ready_ || grid_.empty())
+    if (!map_ready_)
     {
       return;
     }
@@ -730,230 +504,152 @@ private:
       return;
     }
 
-    const double stamp_now = now().seconds();
-    std::lock_guard<std::mutex> lock(live_mutex_);
-    live_last_input_sec_ = stamp_now;
+    std::lock_guard<std::mutex> lock(accum_mutex_);
     for (const auto& point : cloud.points)
     {
-      // terrain_analysis intensity carries the obstacle-height delta in
-      // meters (height above local ground). Skip ground returns.
-      if (!std::isfinite(point.intensity) || point.intensity <= obstacle_height_)
+      const float intensity = point.intensity;  // height above ground, meters
+      if (!std::isfinite(intensity))
       {
         continue;
       }
+      bool obstacle;
+      if (intensity < obstacle_height_)
+      {
+        obstacle = false;  // ground / free evidence
+      }
+      else if (intensity <= blockage_ceiling_)
+      {
+        obstacle = true;   // obstacle or no-data blockage evidence
+      }
+      else
+      {
+        continue;          // overhead / outlier — ignore
+      }
+
       int gx = 0;
       int gy = 0;
       if (!worldToGrid(point.x, point.y, gx, gy))
       {
-        continue;
+        continue;          // outside the fixed extent — dropped
       }
       const int idx = gridIndex(gx, gy);
-      // Don't waste live state on cells that are already statically
-      // BLOCKED — the SDF treats them identically and we save a
-      // refresh cycle.
-      if (grid_[idx].state == CellState::BLOCKED)
+      if (!in_touched_[idx])
       {
-        continue;
+        in_touched_[idx] = 1;
+        touched_.push_back(idx);
       }
-      live_state_[idx] = LiveState::FRESH_BLOCKED;
-      live_stamp_[idx] = stamp_now;
-    }
-  }
-
-  void onLiveDecayTick()
-  {
-    if (!map_ready_ || grid_.empty())
-    {
-      return;
-    }
-
-    const double now_sec = now().seconds();
-    bool input_dead = false;
-    bool any_blocked = false;
-    {
-      std::lock_guard<std::mutex> lock(live_mutex_);
-      // Watchdog: if /terrain_map went silent, treat the live layer as
-      // unobserved rather than freezing the last-seen obstacles in place.
-      if (live_last_input_sec_ > 0.0 &&
-          (now_sec - live_last_input_sec_) > live_input_timeout_sec_)
+      LiveAccum& a = accum_[idx];
+      if (obstacle)
       {
-        input_dead = true;
-        std::fill(live_state_.begin(), live_state_.end(), LiveState::CLEAR);
-      }
-      else
-      {
-        const double half = 0.5 * live_timeout_sec_;
-        const double full = live_timeout_sec_;
-        for (std::size_t i = 0; i < live_state_.size(); ++i)
+        if (a.obs_count < 65535)
         {
-          if (live_state_[i] == LiveState::CLEAR)
-          {
-            continue;
-          }
-          const double age = now_sec - live_stamp_[i];
-          if (age >= full)
-          {
-            live_state_[i] = LiveState::CLEAR;
-          }
-          else if (age >= half)
-          {
-            live_state_[i] = LiveState::STALE;
-          }
-          if (live_state_[i] == LiveState::FRESH_BLOCKED)
-          {
-            any_blocked = true;
-          }
+          a.obs_count++;
         }
       }
+      else
+      {
+        if (a.free_count < 65535)
+        {
+          a.free_count++;
+        }
+        a.ground_sum += static_cast<double>(point.z) - static_cast<double>(intensity);
+        a.ground_count++;
+      }
     }
-
-    if (input_dead && !logged_input_dead_)
-    {
-      RCLCPP_WARN(
-          get_logger(),
-          "/terrain_map silent for >%.1fs; live layer cleared, planner falling "
-          "back to static prior.",
-          live_input_timeout_sec_);
-      logged_input_dead_ = true;
-    }
-    if (!input_dead && logged_input_dead_)
-    {
-      RCLCPP_INFO(get_logger(), "/terrain_map back online; live layer active again.");
-      logged_input_dead_ = false;
-    }
-
-    rebuildFusedSnapshot(any_blocked);
   }
 
-  // Builds a fresh FusedSnapshot from the current live_state_/live_stamp_
-  // and swaps it into fused_snapshot_. If `any_live_blocked` is false the
-  // result is identical to the static SDF, so we skip the EDT.
-  void rebuildFusedSnapshot(bool any_live_blocked)
+  // Classify one cell from its accumulator into grid_. Sticky-FREE: a FREE cell
+  // stays FREE through the UNKNOWN band; only crossing live_l_occ_thr moves it
+  // to BLOCKED. Grid-boundary cells are forced UNKNOWN (no negative-obstacle
+  // protection at the extent edge).
+  void classifyCell(int idx, const LiveAccum& a)
   {
-    const std::size_t cells = grid_.size();
-    auto snap = std::make_shared<FusedSnapshot>();
-    snap->live_state.resize(cells);
-    snap->sdf.resize(cells);
-
+    CellState next;
+    if (a.logodds >= live_l_occ_thr_)
     {
-      std::lock_guard<std::mutex> lock(live_mutex_);
-      std::copy(live_state_.begin(), live_state_.end(), snap->live_state.begin());
+      next = CellState::BLOCKED;
+    }
+    else if (a.logodds <= live_l_free_thr_)
+    {
+      next = CellState::FREE;
+    }
+    else
+    {
+      next = CellState::UNKNOWN;
+    }
+    if (grid_[idx].state == CellState::FREE && next == CellState::UNKNOWN)
+    {
+      next = CellState::FREE;  // sticky-FREE override
     }
 
-    if (!any_live_blocked)
+    const int gx = idx % grid_width_;
+    const int gy = idx / grid_width_;
+    if (gx == 0 || gy == 0 || gx == grid_width_ - 1 || gy == grid_height_ - 1)
     {
-      for (std::size_t i = 0; i < cells; ++i)
-      {
-        snap->sdf[i] = grid_[i].sdf;
-      }
-      {
-        std::lock_guard<std::mutex> lock(fused_mutex_);
-        fused_snapshot_ = std::move(snap);
-      }
-      return;
+      next = CellState::UNKNOWN;
     }
+    grid_[idx].state = next;
 
-    const double sentinel =
-        static_cast<double>(grid_width_) * grid_width_ +
-        static_cast<double>(grid_height_) * grid_height_ + 1.0;
-    std::vector<double> squared(cells);
-    for (std::size_t i = 0; i < cells; ++i)
+    if (a.ground_count > 0)
     {
-      const bool source =
-          grid_[i].state != CellState::FREE ||
-          snap->live_state[i] == LiveState::FRESH_BLOCKED;
-      squared[i] = source ? 0.0 : sentinel;
-    }
-
-    const int n = std::max(grid_width_, grid_height_);
-    std::vector<double> row_in(n), row_out(n);
-    std::vector<int> v(n + 1);
-    std::vector<double> zb(n + 2);
-
-    for (int gy = 0; gy < grid_height_; ++gy)
-    {
-      for (int gx = 0; gx < grid_width_; ++gx)
-      {
-        row_in[gx] = squared[gridIndex(gx, gy)];
-      }
-      edt1d(row_in.data(), row_out.data(), grid_width_, v.data(), zb.data());
-      for (int gx = 0; gx < grid_width_; ++gx)
-      {
-        squared[gridIndex(gx, gy)] = row_out[gx];
-      }
-    }
-    for (int gx = 0; gx < grid_width_; ++gx)
-    {
-      for (int gy = 0; gy < grid_height_; ++gy)
-      {
-        row_in[gy] = squared[gridIndex(gx, gy)];
-      }
-      edt1d(row_in.data(), row_out.data(), grid_height_, v.data(), zb.data());
-      for (int gy = 0; gy < grid_height_; ++gy)
-      {
-        squared[gridIndex(gx, gy)] = row_out[gy];
-      }
-    }
-    for (std::size_t i = 0; i < cells; ++i)
-    {
-      snap->sdf[i] = std::sqrt(squared[i]) * grid_resolution_;
-    }
-
-    {
-      std::lock_guard<std::mutex> lock(fused_mutex_);
-      fused_snapshot_ = std::move(snap);
+      grid_[idx].z = a.ground_sum / static_cast<double>(a.ground_count);
     }
   }
 
-  void publishLiveMap()
+  // Mapping tick: collapse evidence → one log-odds step per touched cell,
+  // reclassify, rebuild the SDF, swap the snapshot, and republish the map.
+  void onMappingTick()
   {
     if (!map_ready_ || grid_.empty())
     {
       return;
     }
-    auto snap = getFusedSnapshot();
-    if (!snap)
+
+    std::size_t updated = 0;
     {
-      return;
+      std::lock_guard<std::mutex> lock(accum_mutex_);
+      for (int idx : touched_)
+      {
+        in_touched_[idx] = 0;
+        LiveAccum& a = accum_[idx];
+        if (a.obs_count == 0 && a.free_count == 0)
+        {
+          continue;  // duplicate index already processed this tick
+        }
+        if (a.obs_count > 0)
+        {
+          a.logodds += static_cast<float>(live_l_hit_);  // obstacle wins
+        }
+        else
+        {
+          a.logodds -= static_cast<float>(live_l_miss_);
+        }
+        a.logodds = std::clamp(
+            a.logodds, static_cast<float>(live_l_min_), static_cast<float>(live_l_max_));
+        a.obs_count = 0;
+        a.free_count = 0;
+        classifyCell(idx, a);
+        ++updated;
+      }
+      touched_.clear();
     }
 
-    nav_msgs::msg::OccupancyGrid map;
-    map.header.frame_id = map_frame_;
-    map.header.stamp = now();
-    map.info.resolution = static_cast<float>(grid_resolution_);
-    map.info.width = static_cast<std::uint32_t>(grid_width_);
-    map.info.height = static_cast<std::uint32_t>(grid_height_);
-    map.info.origin.position.x = grid_origin_x_;
-    map.info.origin.position.y = grid_origin_y_;
-    map.info.origin.orientation.w = 1.0;
-    map.data.resize(grid_.size());
-
-    for (std::size_t i = 0; i < grid_.size(); ++i)
+    if (updated == 0)
     {
-      const LiveState ls = snap->live_state[i];
-      if (ls == LiveState::FRESH_BLOCKED || grid_[i].state == CellState::BLOCKED)
-      {
-        map.data[i] = 100;
-      }
-      else if (grid_[i].state == CellState::UNKNOWN)
-      {
-        map.data[i] = -1;
-      }
-      else if (ls == LiveState::STALE)
-      {
-        map.data[i] = 50;  // soft penalty in the published view
-      }
-      else
-      {
-        map.data[i] = 0;
-      }
+      return;  // nothing changed; skip the EDT + publish
     }
-    live_grid_map_pub_->publish(map);
+
+    buildSdf();
+    publishSnapshot();
+    publishGridMap();
+    if (publish_debug_markers_)
+    {
+      publishGridMarkers();
+    }
   }
 
-  // True if any sample along the next `replan_horizon_m_` of route is
-  // currently FRESH_BLOCKED in the fused snapshot. The static prior is
-  // immutable at runtime, so we don't bother re-checking it here.
+  // True if any sample along the next replan_horizon_m_ of route is no longer
+  // traversable in the current snapshot (non-FREE or sub-clearance).
   bool isRouteBlocked(
       const std::vector<geometry_msgs::msg::Point>& route,
       std::size_t route_index) const
@@ -972,7 +668,7 @@ private:
     double walked = 0.0;
     for (std::size_t i = route_index; i + 1 < route.size(); ++i)
     {
-      const geometry_msgs::msg::Point& a = i == route_index ? route[i] : route[i];
+      const geometry_msgs::msg::Point& a = route[i];
       const geometry_msgs::msg::Point& b = route[i + 1];
       const double seg = pointDistXY(a, b);
       if (seg < 1e-6)
@@ -991,8 +687,7 @@ private:
           return true;
         }
         const int idx = gridIndex(gx, gy);
-        if (snap->live_state[idx] == LiveState::FRESH_BLOCKED ||
-            grid_[idx].state == CellState::BLOCKED)
+        if (snap->state[idx] != CellState::FREE || snap->sdf[idx] < clearance_radius_)
         {
           return true;
         }
@@ -1012,10 +707,17 @@ private:
 
   void odomCallback(const nav_msgs::msg::Odometry::SharedPtr msg)
   {
-    std::lock_guard<std::mutex> lock(odom_mutex_);
-    latest_pose_ = msg->pose.pose;
-    latest_odom_stamp_ = msg->header.stamp;
-    has_odom_.store(true);
+    {
+      std::lock_guard<std::mutex> lock(odom_mutex_);
+      latest_pose_ = msg->pose.pose;
+      latest_odom_stamp_ = msg->header.stamp;
+      has_odom_.store(true);
+    }
+    // One-shot: center the grid on the robot's first pose.
+    if (live_map_recenter_on_first_odom_ && !grid_allocated_.exchange(true))
+    {
+      allocateLiveGrid(msg->pose.pose.position.x, msg->pose.pose.position.y);
+    }
   }
 
   void goalPoseCallback(const geometry_msgs::msg::PoseStamped::SharedPtr msg)
@@ -1182,9 +884,8 @@ private:
       }
 
       // Throttled live replanning. Only triggers when the upcoming route
-      // segment is currently blocked by the fused live layer.
-      if (live_layer_enabled_ &&
-          (now() - last_replan_check).seconds() >= replan_period_sec_)
+      // segment is no longer traversable in the latest snapshot.
+      if ((now() - last_replan_check).seconds() >= replan_period_sec_)
       {
         last_replan_check = now();
         if (isRouteBlocked(route, route_index))
@@ -1260,6 +961,9 @@ private:
     return inGrid(gx, gy);
   }
 
+  // Cell-center XY (z left at 0 — the planner overwrites/ignores z, and never
+  // reads grid_ from the worker thread). The marker publisher reads grid_[i].z
+  // directly on the executor thread.
   geometry_msgs::msg::Point gridCenter(int index) const
   {
     const int gx = index % grid_width_;
@@ -1267,36 +971,25 @@ private:
     geometry_msgs::msg::Point point;
     point.x = grid_origin_x_ + (static_cast<double>(gx) + 0.5) * grid_resolution_;
     point.y = grid_origin_y_ + (static_cast<double>(gy) + 0.5) * grid_resolution_;
-    point.z = grid_[index].z;
+    point.z = 0.0;
     return point;
   }
 
-  bool gridFree(int index) const
+  bool gridFree(int index, const FusedSnapshot& snap) const
   {
-    return index >= 0 && index < static_cast<int>(grid_.size()) &&
-           grid_[index].state == CellState::FREE;
+    return index >= 0 && index < static_cast<int>(snap.state.size()) &&
+           snap.state[index] == CellState::FREE;
   }
 
   bool gridTraversable(int index, const FusedSnapshot& snap) const
   {
-    if (!gridFree(index))
-    {
-      return false;
-    }
-    if (snap.live_state[index] == LiveState::FRESH_BLOCKED)
-    {
-      return false;
-    }
-    return snap.sdf[index] >= clearance_radius_;
+    return gridFree(index, snap) && snap.sdf[index] >= clearance_radius_;
   }
 
-  // Slope + step constraint between two cells (static, snapshot-independent).
-  // Both z values are valid when the caller has already confirmed the cells
-  // are FREE (FREE implies low_count >= grid_min_support_points, so z was
-  // averaged from observations).
-  bool stepWithinSlope(int from_idx, int to_idx) const
+  // Slope + step constraint between two FREE cells, read from the snapshot.
+  bool stepWithinSlope(int from_idx, int to_idx, const FusedSnapshot& snap) const
   {
-    const double dz = std::abs(grid_[from_idx].z - grid_[to_idx].z);
+    const double dz = std::abs(snap.z[from_idx] - snap.z[to_idx]);
     if (dz > max_step_height_)
     {
       return false;
@@ -1319,7 +1012,7 @@ private:
     {
       return false;
     }
-    if (!stepWithinSlope(from_idx, to_idx))
+    if (!stepWithinSlope(from_idx, to_idx, snap))
     {
       return false;
     }
@@ -1342,11 +1035,9 @@ private:
 
   // Walks the grid cells the straight segment passes through (Amanatides-Woo
   // DDA, 4-connected) and validates the full motion model along the line:
-  //   - every cell is FREE, not FRESH_BLOCKED, sdf >= margin, AND
-  //   - every consecutive (orthogonally adjacent) transition respects
-  //     step height + slope.
-  // The slope/step check is what stops smoothing from cutting a straight
-  // shortcut across a terrain discontinuity that the grid search routed
+  // every cell FREE + sdf >= margin, and every consecutive transition within
+  // step height + slope. The slope/step check stops smoothing from cutting a
+  // straight shortcut across a terrain discontinuity the grid search routed
   // around. `min_sdf < 0` defaults to line_clearance_.
   bool gridLineTraversableWorld(
       const geometry_msgs::msg::Point& from,
@@ -1357,12 +1048,9 @@ private:
     const double margin = min_sdf < 0.0 ? line_clearance_ : min_sdf;
 
     auto cell_clear = [&](int idx) {
-      return grid_[idx].state == CellState::FREE &&
-             snap.live_state[idx] != LiveState::FRESH_BLOCKED &&
-             snap.sdf[idx] >= margin;
+      return snap.state[idx] == CellState::FREE && snap.sdf[idx] >= margin;
     };
 
-    // Continuous grid coordinates (cell units).
     const double fx = (from.x - grid_origin_x_) / grid_resolution_;
     const double fy = (from.y - grid_origin_y_) / grid_resolution_;
     const double tx = (to.x - grid_origin_x_) / grid_resolution_;
@@ -1390,7 +1078,6 @@ private:
     constexpr double kInf = std::numeric_limits<double>::infinity();
     const double inv_dx = step_x != 0 ? 1.0 / std::abs(dx) : kInf;
     const double inv_dy = step_y != 0 ? 1.0 / std::abs(dy) : kInf;
-    // Distance (in t, 0..1 of the segment) to the first x/y cell boundary.
     double t_max_x = step_x > 0 ? (static_cast<double>(cx + 1) - fx) * inv_dx
                    : step_x < 0 ? (fx - static_cast<double>(cx)) * inv_dx
                                 : kInf;
@@ -1419,7 +1106,7 @@ private:
         return false;
       }
       const int idx = gridIndex(cx, cy);
-      if (!cell_clear(idx) || !stepWithinSlope(prev_idx, idx))
+      if (!cell_clear(idx) || !stepWithinSlope(prev_idx, idx, snap))
       {
         return false;
       }
@@ -1429,9 +1116,7 @@ private:
   }
 
   // Expanding-ring snap. Accept the first `max_candidates` FREE cells with
-  // fused sdf >= sdf_floor that have a clear line-of-sight to the query
-  // point (line min-sdf >= line_clearance_). Cells that are currently
-  // FRESH_BLOCKED in the live layer are skipped.
+  // sdf >= sdf_floor that have a clear line-of-sight to the query point.
   std::vector<GridCandidate> gridSnapCandidates(
       const geometry_msgs::msg::Point& point,
       double radius,
@@ -1454,9 +1139,7 @@ private:
         return;
       }
       const int idx = gridIndex(gx, gy);
-      if (grid_[idx].state != CellState::FREE ||
-          snap.live_state[idx] == LiveState::FRESH_BLOCKED ||
-          snap.sdf[idx] < sdf_floor)
+      if (snap.state[idx] != CellState::FREE || snap.sdf[idx] < sdf_floor)
       {
         return;
       }
@@ -1473,7 +1156,6 @@ private:
       candidates.push_back(GridCandidate{idx, dist});
     };
 
-    // Ring 0 = the cell containing `point` itself.
     try_cell(center_x, center_y);
     for (int ring = 1; ring <= max_ring; ++ring)
     {
@@ -1509,14 +1191,12 @@ private:
     return candidates;
   }
 
-  // Multi-source, multi-goal A*. Sources are the start snap candidates
-  // (seeded with their snap distance as g); goals are the goal snap
-  // candidates (snap distance added when finalizing). The heuristic toward
-  // `goal_point` is admissible: step costs are >= the straight-line XY
-  // distance (stale penalty only inflates them), and every goal candidate
-  // is within goal_snap_radius_ of goal_point, so subtracting that radius
-  // never overestimates remaining cost. Early-terminates once the cheapest
-  // open node can't beat the best goal found.
+  // Multi-source, multi-goal A*. Sources are the start snap candidates (seeded
+  // with their snap distance as g); goals are the goal snap candidates (snap
+  // distance added when finalizing). The heuristic toward `goal_point` is
+  // admissible (step costs >= straight-line XY distance, and every goal
+  // candidate is within goal_snap_radius_ of goal_point). Early-terminates once
+  // the cheapest open node can't beat the best goal found.
   bool searchGridToCandidates(
       const std::vector<GridCandidate>& start_candidates,
       const std::vector<GridCandidate>& goal_candidates,
@@ -1531,14 +1211,14 @@ private:
       return false;
     }
 
-    const int cell_count = static_cast<int>(grid_.size());
+    const int cell_count = static_cast<int>(grid_width_) * grid_height_;
     std::vector<double> g_score(cell_count, std::numeric_limits<double>::infinity());
     std::vector<int> parent(cell_count, -1);
     std::vector<int> source(cell_count, -1);
     std::vector<bool> closed(cell_count, false);
 
     // Goal candidates are capped (<=32), so a small sorted lookup beats two
-    // grid-sized arrays (~24 MB at the 2 M-cell cap, allocated every plan).
+    // grid-sized arrays allocated every plan.
     struct GoalEntry { int cell; double snap; int cand; };
     std::vector<GoalEntry> goals;
     goals.reserve(goal_candidates.size());
@@ -1594,8 +1274,7 @@ private:
     while (!open.empty())
     {
       // Stay responsive to shutdown: bail out of a long/flooding search
-      // when the node is being destroyed. stop_requested_ is only set in
-      // the destructor, so this never aborts a normal plan.
+      // when the node is being destroyed.
       if (++since_stop_check >= 4096)
       {
         since_stop_check = 0;
@@ -1608,8 +1287,6 @@ private:
       const double f_curr = open.top().first;
       const int current = open.top().second;
       open.pop();
-      // No open node can beat the best finalized goal: f is a lower bound
-      // on any goal cost reachable through `current`.
       if (f_curr >= best_total)
       {
         break;
@@ -1647,15 +1324,9 @@ private:
           continue;
         }
 
-        double step_xy = std::hypot(
+        const double step_xy = std::hypot(
             static_cast<double>(dir[0]) * grid_resolution_,
             static_cast<double>(dir[1]) * grid_resolution_);
-        // STALE = recent obstacle aged out; still passable but penalized
-        // so the planner prefers fresh-clear corridors when one exists.
-        if (snap.live_state[next] == LiveState::STALE)
-        {
-          step_xy *= 1.0 + stale_step_penalty_;
-        }
         const double tentative = g_score[current] + step_xy;
         if (tentative < g_score[next])
         {
@@ -1708,7 +1379,7 @@ private:
     auto snap_ptr = getFusedSnapshot();
     if (!snap_ptr)
     {
-      error = "Fused snapshot unavailable (planner not yet initialized).";
+      error = "Fused snapshot unavailable (grid not yet allocated).";
       return false;
     }
     const FusedSnapshot& snap = *snap_ptr;
@@ -1778,17 +1449,14 @@ private:
 
     RCLCPP_INFO(
         get_logger(),
-        "2D PCD grid route planned: %zu waypoints (pre-smooth=%zu), cells=%zu, "
+        "2D grid route planned: %zu waypoints (pre-smooth=%zu), cells=%zu, "
         "start_snap=%.2fm, goal_snap=%.2fm.",
         route.size(), pre_smooth, cell_path.size(), start_snap, goal_snap);
     return route.size() >= 2;
   }
 
   // Appends one waypoint per direction change in the cell path to `route`
-  // (drops the collinear interior cells). All waypoints take `z` so the
-  // stream doesn't bounce on neighboring-cell elevation noise. Without
-  // smoothing this keeps the route from being one point per cell; with
-  // smoothing it's a cheap first pass before line-of-sight compaction.
+  // (drops collinear interior cells). All waypoints take `z`.
   void compactTurns(
       const std::vector<int>& cell_path,
       double z,
@@ -1830,20 +1498,11 @@ private:
     }
   }
 
-  // Greedy line-of-sight compaction. Walk the route from each anchor and
-  // advance the lookahead while the straight line stays clear (fused SDF
-  // >= clearance_radius_) and within slope/step. Keeps the anchor's z but
-  // reuses route[0].z for the rest so the waypoint stream doesn't get z
-  // bounces from neighboring cells.
-  //
-  // Smoothing validates shortcuts at clearance_radius_ — the same margin
-  // the grid search enforces — NOT the relaxed line_clearance_. Otherwise a
-  // smoothed straight line could bow through a cell with sdf in
-  // [line_clearance_, clearance_radius_) that A* itself refused to traverse.
-  // The start/goal connectors (route[0]->route[1] and last->goal) legitimately
-  // use the lower margin; they're preserved automatically because a merge
-  // across a sub-clearance connector fails this stricter check and the
-  // original connector segment is kept.
+  // Greedy line-of-sight compaction at clearance_radius_ (the same margin the
+  // grid search enforces — not the relaxed line_clearance_), so a smoothed
+  // shortcut can't bow through a cell A* itself refused. Start/goal connectors
+  // that use the lower margin are preserved automatically because a merge
+  // across a sub-clearance connector fails this stricter check.
   std::vector<geometry_msgs::msg::Point> smoothRoute(
       const std::vector<geometry_msgs::msg::Point>& in,
       const FusedSnapshot& snap) const
@@ -1974,9 +1633,9 @@ private:
     path_marker_pub_->publish(array);
   }
 
-  // Publishes the *reusable* static world map: 0 FREE, 100 BLOCKED, -1
-  // UNKNOWN per the OccupancyGrid spec. Robot-specific clearance does NOT
-  // appear here — other robots can subscribe and apply their own footprint.
+  // Publishes the live 2D world map: 0 FREE, 100 BLOCKED, -1 UNKNOWN per the
+  // OccupancyGrid spec. Robot-specific clearance does NOT appear here — other
+  // consumers can subscribe and apply their own footprint. Executor thread.
   void publishGridMap()
   {
     if (grid_.empty())
@@ -2046,6 +1705,7 @@ private:
     {
       const GridCell& cell = grid_[i];
       geometry_msgs::msg::Point point = gridCenter(static_cast<int>(i));
+      point.z = cell.z;
       switch (cell.state)
       {
         case CellState::BLOCKED:
@@ -2065,8 +1725,7 @@ private:
           }
           break;
         case CellState::UNKNOWN:
-          // Skip UNKNOWN — RViz already renders these from /pcd_2d_map.
-          break;
+          break;  // RViz renders these from /pcd_2d_map
       }
     }
 
@@ -2076,21 +1735,23 @@ private:
     grid_marker_pub_->publish(array);
   }
 
-  std::string map_file_;
   std::string map_frame_;
 
-  double map_voxel_size_ = 0.08;
   double grid_resolution_ = 0.20;
-  double grid_padding_ = 0.2;
   int grid_max_cells_ = 2000000;
-  int grid_min_support_points_ = -1;     // -1 → auto-derive from voxel/cell ratio
-  double grid_min_support_fill_ = 0.20;
+
+  double live_map_width_m_ = 80.0;
+  double live_map_height_m_ = 80.0;
+  double live_map_center_x_ = 0.0;
+  double live_map_center_y_ = 0.0;
+  bool live_map_recenter_on_first_odom_ = true;
+
   double max_slope_deg_ = 25.0;
   double max_slope_rad_ = 25.0 * M_PI / 180.0;
   double max_step_height_ = 0.18;
   double min_clearance_ = 0.35;
   double obstacle_height_ = 0.15;
-  double vehicle_height_ = 1.0;
+  double vehicle_height_ = 1.0;          // reserved; unused in v1
   double vehicle_length_ = 0.7;
   double vehicle_width_ = 0.3;
   double clearance_radius_ = 0.35;
@@ -2105,16 +1766,16 @@ private:
   bool smoothing_enabled_ = true;
   bool publish_debug_markers_ = false;
 
-  // Live layer.
-  bool live_layer_enabled_ = true;
-  std::string live_topic_ = "/terrain_map";
-  double live_timeout_sec_ = 6.0;
-  double live_input_timeout_sec_ = 3.0;
-  double live_decay_rate_hz_ = 2.0;
-  double live_publish_rate_hz_ = 5.0;
-  double stale_step_penalty_ = 1.0;
-  double live_last_input_sec_ = 0.0;       // guarded by live_mutex_
-  bool logged_input_dead_ = false;         // single-threaded (decay tick only)
+  // Live occupancy mapping.
+  std::string live_topic_ = "/terrain_map_ext";
+  double mapping_rate_hz_ = 2.0;
+  double blockage_ceiling_ = 1.6;
+  double live_l_hit_ = 0.85;
+  double live_l_miss_ = 0.40;
+  double live_l_min_ = -2.0;
+  double live_l_max_ = 4.0;
+  double live_l_occ_thr_ = 1.5;
+  double live_l_free_thr_ = -1.0;
 
   // Replanning.
   double replan_period_sec_ = 0.5;
@@ -2125,27 +1786,29 @@ private:
   std::atomic_bool has_odom_{false};
   std::atomic_bool executing_{false};
   std::atomic_bool stop_requested_{false};
+  std::atomic_bool grid_allocated_{false};
 
   // One joinable worker, never detached. Replaced before each run; joined
   // in the destructor.
   std::thread worker_;
   std::mutex worker_mutex_;
 
-  pcl::PointCloud<pcl::PointXYZI>::Ptr map_cloud_;
-
+  // Current best map — owned by the executor thread (mapping tick + publishers).
   std::vector<GridCell> grid_;
   int grid_width_ = 0;
   int grid_height_ = 0;
   double grid_origin_x_ = 0.0;
   double grid_origin_y_ = 0.0;
 
-  // Live layer state (mutable). Guarded by live_mutex_.
-  std::vector<LiveState> live_state_;
-  std::vector<double> live_stamp_;
-  mutable std::mutex live_mutex_;
+  // Log-odds accumulators + touched-cell bookkeeping. Guarded by accum_mutex_
+  // (terrainCallback tallies, mapping tick collapses).
+  std::vector<LiveAccum> accum_;
+  std::vector<int> touched_;
+  std::vector<std::uint8_t> in_touched_;
+  std::mutex accum_mutex_;
 
-  // Read-only snapshot the planner consumes. Guarded by fused_mutex_ for
-  // the swap; readers retain a shared_ptr and read lock-free.
+  // Read-only snapshot the planner consumes. Guarded by fused_mutex_ for the
+  // swap; readers retain a shared_ptr and read lock-free.
   std::shared_ptr<const FusedSnapshot> fused_snapshot_;
   mutable std::mutex fused_mutex_;
 
@@ -2159,11 +1822,9 @@ private:
   rclcpp::Publisher<geometry_msgs::msg::PointStamped>::SharedPtr waypoint_pub_;
   rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr path_pub_;
   rclcpp::Publisher<nav_msgs::msg::OccupancyGrid>::SharedPtr grid_map_pub_;
-  rclcpp::Publisher<nav_msgs::msg::OccupancyGrid>::SharedPtr live_grid_map_pub_;
   rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr grid_marker_pub_;
   rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr path_marker_pub_;
-  rclcpp::TimerBase::SharedPtr live_decay_timer_;
-  rclcpp::TimerBase::SharedPtr live_publish_timer_;
+  rclcpp::TimerBase::SharedPtr mapping_timer_;
   rclcpp_action::Server<NavigateToPose>::SharedPtr action_server_;
 };
 

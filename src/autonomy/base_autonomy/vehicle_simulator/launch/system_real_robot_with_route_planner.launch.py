@@ -58,8 +58,9 @@ def generate_launch_description():
   use_arise = IfCondition(PythonExpression(["'", slam_backend, "' == 'arise'"]))
   use_lightning = IfCondition(PythonExpression(["'", slam_backend, "' == 'lightning'"]))
   use_far = IfCondition(PythonExpression(["'", route_planner_backend, "' == 'far'"]))
+  # pcd_grid builds its 2D map live from terrain analysis — no saved map needed.
   use_pcd_grid = IfCondition(PythonExpression([
-    "'", route_planner_backend, "' == 'pcd_grid' and '", map_dir, "' != ''"
+    "'", route_planner_backend, "' == 'pcd_grid'"
   ]))
   local_action_server = PythonExpression([
     "'false' if '", route_planner_backend, "' == 'pcd_grid' else 'true'"
@@ -161,7 +162,6 @@ def generate_launch_description():
       get_package_share_directory('pcd_grid_planner'), 'launch', 'pcd_grid_planner.launch.py')
     ),
     launch_arguments={
-      'map_file': map_dir,
       'vehicleLength': vehicleLength,
       'vehicleWidth': vehicleWidth,
     }.items(),
