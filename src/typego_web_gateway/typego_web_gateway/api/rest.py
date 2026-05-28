@@ -135,6 +135,54 @@ def build_app(
     async def waypoints() -> JSONResponse:
         return JSONResponse({'waypoints': bridge.get_waypoints()})
 
+    # ── places (place graph) ─────────────────────────────────────────────
+    @app.get('/api/places')
+    async def places() -> JSONResponse:
+        graph = bridge.get_place_graph()
+        all_places = graph.get('places', [])
+        connector_kinds = {'portal', 'open_transition', 'junction'}
+        rooms = [p for p in all_places if p['kind'] not in connector_kinds]
+        portals = [p for p in all_places if p['kind'] in connector_kinds]
+
+        # Room adjacency is derived from the connector graph.
+        adj: dict = {}
+        for c in portals:
+            ends = c.get('adjacent_place_ids', [])
+            for a in ends:
+                adj.setdefault(a, set()).update(e for e in ends if e != a)
+
+        def label(p: dict) -> str:
+            if p.get('label_locked') and p.get('operator_label'):
+                return p['operator_label']
+            return p.get('instance_label') or p.get('semantic_label') \
+                or p['place_id']
+
+        lines = ['Places:']
+        for p in rooms:
+            wps = p.get('member_waypoint_ids', [])
+            state = 'provisional' if p.get('provisional') else 'complete'
+            neighbors = ', '.join(sorted(adj.get(p['place_id'], []))) or '-'
+            lines.append(
+                f"- {label(p)} [{p['kind']}] waypoints {wps} "
+                f"{state} adj: {neighbors}")
+        lines.append('')
+        lines.append('Portals:')
+        for c in portals:
+            wps = c.get('member_waypoint_ids', [])
+            wp = wps[0] if wps else '-'
+            ends = ' <-> '.join(c.get('adjacent_place_ids', []))
+            width = c.get('width_m')
+            wtxt = f", width {width:.2f} m" if width else ''
+            lines.append(
+                f"- {c['place_id']} (waypoint {wp}): {ends}{wtxt}")
+
+        return JSONResponse({
+            'map_version': graph.get('map_version', ''),
+            'places': rooms,
+            'portals': portals,
+            'summary': '\n'.join(lines),
+        })
+
     # ── goal ─────────────────────────────────────────────────────────────
     @app.post('/api/goal')
     async def post_goal(req: GoalRequest) -> JSONResponse:

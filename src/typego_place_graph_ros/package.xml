@@ -1,0 +1,30 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>typego_place_graph_ros</name>
+  <version>0.0.1</version>
+  <description>
+    Thin ROS 2 wrapper around the geometry-only typego_place_graph
+    library: subscribes to an OccupancyGrid, runs the segmentation
+    pipeline, and publishes the place graph as RViz markers. Kept
+    separate so the core library stays free of ROS dependencies.
+  </description>
+  <maintainer email="guojun.chen@yale.edu">guojun</maintainer>
+  <license>MIT</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <depend>rclcpp</depend>
+  <depend>nav_msgs</depend>
+  <depend>geometry_msgs</depend>
+  <depend>std_msgs</depend>
+  <depend>visualization_msgs</depend>
+  <depend>typego_place_graph</depend>
+
+  <test_depend>ament_lint_auto</test_depend>
+  <test_depend>ament_lint_common</test_depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>

@@ -4,7 +4,7 @@ from rclpy.node import Node
 from nav2_msgs.action import NavigateToPose
 from rclpy.action import ActionClient
 import math
-import csv
+import json
 import os
 import sys
 import threading
@@ -12,39 +12,35 @@ import threading
 
 # ── Configuration ─────────────────────────────────────────────────────────────
 # Override MAP_NAME and PATROL_LIST via command-line args, or edit here.
-MAP_NAME    = "full-map"          # e.g. "full-map"  →  Map-full-map/waypoints.csv
+MAP_NAME    = "full-map"          # e.g. "full-map"  →  Map-full-map/waypoints.json
 PATROL_LIST = [1]       # waypoint indices to visit in order (repeats)
 ROBOT_NS    = ""                  # robot namespace, empty for single robot
 # ──────────────────────────────────────────────────────────────────────────────
 
 
 def load_waypoints(map_name: str) -> dict:
-    """Load waypoints.csv for the given map name.
-    Returns a dict: {index: (x, y)} using the index column in the CSV.
-    CSV format per row: <index> <x> <y> <label>
+    """Load waypoints.json for the given map name.
+    Returns a dict: {index: (x, y)} using the id field.
     """
     script_dir = os.path.dirname(os.path.abspath(__file__))
-    csv_path = os.path.join(
+    json_path = os.path.join(
         script_dir, "..", "src", "typego_sdk", "resource",
-        f"Map-{map_name}", "waypoints.csv"
+        f"Map-{map_name}", "waypoints.json"
     )
-    csv_path = os.path.normpath(csv_path)
+    json_path = os.path.normpath(json_path)
 
-    if not os.path.isfile(csv_path):
-        print(f"[ERROR] Waypoints file not found: {csv_path}")
+    if not os.path.isfile(json_path):
+        print(f"[ERROR] Waypoints file not found: {json_path}")
         sys.exit(1)
 
     waypoints = {}
-    with open(csv_path, newline="") as f:
-        reader = csv.reader(f, delimiter=" ")
-        for row in reader:
-            row = [c for c in row if c]  # remove empty tokens
-            if len(row) < 3:
-                continue
-            idx, x, y = int(row[0]), float(row[1]), float(row[2])
-            waypoints[idx] = (x, y)
+    with open(json_path) as f:
+        doc = json.load(f)
+    items = doc.get("waypoints", doc) if isinstance(doc, dict) else doc
+    for item in items:
+        waypoints[int(item["id"])] = (float(item["x"]), float(item["y"]))
 
-    print(f"[INFO] Loaded {len(waypoints)} waypoints from: {csv_path}")
+    print(f"[INFO] Loaded {len(waypoints)} waypoints from: {json_path}")
     return waypoints
 
 

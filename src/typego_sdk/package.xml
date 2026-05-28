@@ -11,18 +11,24 @@
 
 
   <depend>rclcpp</depend>
-  <depend>sensor_msgs</depend>
+  <depend>tf2</depend>
   <depend>tf2_ros</depend>
-  <depend>libcurl4-openssl-dev</depend>
 
   <depend>typego_interface</depend>
   <depend>rcl_interfaces</depend>
+  <depend>typego_place_graph</depend>
+  <depend>nav_msgs</depend>
+  <depend>geometry_msgs</depend>
+  <depend>visualization_msgs</depend>
+  <depend>std_msgs</depend>
+  <depend>ament_index_cpp</depend>
 
   <test_depend>ament_lint_auto</test_depend>
   <test_depend>ament_lint_common</test_depend>
 
   <exec_depend>launch</exec_depend>
   <exec_depend>launch_ros</exec_depend>
+  <exec_depend>typego_place_graph_ros</exec_depend>
 
   <export>
     <build_type>ament_cmake</build_type>

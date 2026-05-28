@@ -28,6 +28,8 @@ find_package(std_msgs REQUIRED)
 rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/WayPoint.msg"
   "msg/WayPointArray.msg"
+  "msg/PlaceRegion.msg"
+  "msg/PlaceGraph.msg"
   "msg/CustomPoint.msg"
   "msg/CustomMsg.msg"
   "srv/SetSpeed.srv"

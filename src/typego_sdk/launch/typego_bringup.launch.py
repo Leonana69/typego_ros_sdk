@@ -287,6 +287,13 @@ ARGUMENTS = [
         description='If "true", spawns the typego_config service node for '
                     'runtime introspection of robot.yaml.'
     ),
+    DeclareLaunchArgument(
+        'launch_place_graph_viz',
+        default_value='false',
+        description='If "true", spawns typego_place_graph_ros/place_graph_node, '
+                    'which republishes the place-graph segmentation as RViz '
+                    'markers (debug visualization on /place_graph_node/markers).'
+    ),
 ]
 
 
@@ -334,6 +341,8 @@ def generate_launch_description():
             LaunchConfiguration('cmd_vel_min_angular'))
         launch_config_service = context.perform_substitution(
             LaunchConfiguration('launch_config_service')).lower() == 'true'
+        launch_place_graph_viz = context.perform_substitution(
+            LaunchConfiguration('launch_place_graph_viz')).lower() == 'true'
 
         robot_index = f'robot{robot_id}' if robot_id else ''
         tf_prefix = f'/{robot_index}' if robot_index else ''
@@ -363,7 +372,7 @@ def generate_launch_description():
             }.items(),
         )
 
-        # --- waypoints_service_node ---
+        # --- place_graph_waypoints_node ---
         waypoints_remappings = []
         if robot_index:
             waypoints_remappings = [
@@ -373,11 +382,22 @@ def generate_launch_description():
 
         waypoints_node = Node(
             package='typego_sdk',
-            executable='waypoints_service_node',
+            executable='place_graph_waypoints_node',
             output='screen',
             remappings=waypoints_remappings,
             parameters=[{
                 'slam_map_name': slam_map_name,
+                'map_topic': 'map',
+            }],
+        )
+
+        # --- place_graph_node (debug RViz visualization of the segmentation) ---
+        place_graph_viz_node = Node(
+            package='typego_place_graph_ros',
+            executable='place_graph_node',
+            output='screen',
+            parameters=[{
+                'map_topic': f'{tf_prefix}/map' if tf_prefix else '/map',
             }],
         )
 
@@ -442,6 +462,9 @@ def generate_launch_description():
             autonomy_launch,
             waypoints_node,
         ]
+
+        if launch_place_graph_viz:
+            actions.append(place_graph_viz_node)
 
         # --- typego_config service node (runtime introspection of robot.yaml) ---
         if launch_config_service:
