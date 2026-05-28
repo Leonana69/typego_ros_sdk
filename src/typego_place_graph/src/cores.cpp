@@ -340,9 +340,17 @@ CoresResult extract_cores(const SegmentationGrid& seg, const Config& cfg) {
         }
     }
 
+    // A free-space component that survived neither opening nor this
+    // fallback's A_min is speckle (isolated lidar-return cells embedded
+    // in unknown space), not a real place. Without this gate a live
+    // SLAM map mints hundreds of 1-2 cell frontier_regions. Mirrors the
+    // opened-core A_min gate above.
+    int fallback_a_min_cells =
+        static_cast<int>(std::ceil(cfg.a_min_m2 / cell_area));
     for (int cid = 0; cid < num_free_comps; ++cid) {
         if (free_comp_has_core.count(cid)) continue;
         if (cf[cid].size == 0) continue;
+        if (cf[cid].size < fallback_a_min_cells) continue;
         double fratio = cf[cid].perimeter > 0
             ? static_cast<double>(cf[cid].frontier) / cf[cid].perimeter
             : 0.0;
