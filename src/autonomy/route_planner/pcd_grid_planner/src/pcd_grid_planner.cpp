@@ -1537,18 +1537,31 @@ private:
     std::vector<int> source(cell_count, -1);
     std::vector<bool> closed(cell_count, false);
 
-    // Per-cell goal snap cost (inf = not a goal candidate).
-    std::vector<double> goal_snap(cell_count, std::numeric_limits<double>::infinity());
-    std::vector<int> goal_cand_of_cell(cell_count, -1);
+    // Goal candidates are capped (<=32), so a small sorted lookup beats two
+    // grid-sized arrays (~24 MB at the 2 M-cell cap, allocated every plan).
+    struct GoalEntry { int cell; double snap; int cand; };
+    std::vector<GoalEntry> goals;
+    goals.reserve(goal_candidates.size());
     for (std::size_t i = 0; i < goal_candidates.size(); ++i)
     {
       const GridCandidate& c = goal_candidates[i];
-      if (gridTraversable(c.index, snap) && c.distance < goal_snap[c.index])
+      if (gridTraversable(c.index, snap))
       {
-        goal_snap[c.index] = c.distance;
-        goal_cand_of_cell[c.index] = static_cast<int>(i);
+        goals.push_back(GoalEntry{c.index, c.distance, static_cast<int>(i)});
       }
     }
+    if (goals.empty())
+    {
+      return false;
+    }
+    std::sort(goals.begin(), goals.end(),
+              [](const GoalEntry& a, const GoalEntry& b) { return a.cell < b.cell; });
+    auto goal_at = [&](int cell) -> const GoalEntry* {
+      auto it = std::lower_bound(
+          goals.begin(), goals.end(), cell,
+          [](const GoalEntry& e, int c) { return e.cell < c; });
+      return (it != goals.end() && it->cell == cell) ? &(*it) : nullptr;
+    };
 
     auto heuristic = [&](int idx) {
       const double d = pointDistXY(gridCenter(idx), goal_point);
@@ -1575,9 +1588,23 @@ private:
 
     double best_total = std::numeric_limits<double>::infinity();
     int best_goal_cell = -1;
+    int best_goal_cand = -1;
+    int since_stop_check = 0;
 
     while (!open.empty())
     {
+      // Stay responsive to shutdown: bail out of a long/flooding search
+      // when the node is being destroyed. stop_requested_ is only set in
+      // the destructor, so this never aborts a normal plan.
+      if (++since_stop_check >= 4096)
+      {
+        since_stop_check = 0;
+        if (stop_requested_.load())
+        {
+          return false;
+        }
+      }
+
       const double f_curr = open.top().first;
       const int current = open.top().second;
       open.pop();
@@ -1593,13 +1620,14 @@ private:
       }
       closed[current] = true;
 
-      if (goal_cand_of_cell[current] >= 0)
+      if (const GoalEntry* ge = goal_at(current))
       {
-        const double total = g_score[current] + goal_snap[current];
+        const double total = g_score[current] + ge->snap;
         if (total < best_total)
         {
           best_total = total;
           best_goal_cell = current;
+          best_goal_cand = ge->cand;
         }
       }
 
@@ -1639,12 +1667,12 @@ private:
       }
     }
 
-    if (best_goal_cell < 0)
+    if (best_goal_cell < 0 || best_goal_cand < 0)
     {
       return false;
     }
 
-    selected_goal = goal_candidates[goal_cand_of_cell[best_goal_cell]];
+    selected_goal = goal_candidates[best_goal_cand];
     const int selected_source = source[selected_goal.index];
     if (selected_source < 0 || selected_source >= static_cast<int>(start_candidates.size()))
     {
@@ -1803,10 +1831,19 @@ private:
   }
 
   // Greedy line-of-sight compaction. Walk the route from each anchor and
-  // advance the lookahead while the straight line stays clear of the
-  // inflation boundary (line_clearance_ from the fused SDF). Keeps the
-  // anchor's z but reuses route[0].z for the rest so the waypoint stream
-  // doesn't get z bounces from neighboring cells.
+  // advance the lookahead while the straight line stays clear (fused SDF
+  // >= clearance_radius_) and within slope/step. Keeps the anchor's z but
+  // reuses route[0].z for the rest so the waypoint stream doesn't get z
+  // bounces from neighboring cells.
+  //
+  // Smoothing validates shortcuts at clearance_radius_ — the same margin
+  // the grid search enforces — NOT the relaxed line_clearance_. Otherwise a
+  // smoothed straight line could bow through a cell with sdf in
+  // [line_clearance_, clearance_radius_) that A* itself refused to traverse.
+  // The start/goal connectors (route[0]->route[1] and last->goal) legitimately
+  // use the lower margin; they're preserved automatically because a merge
+  // across a sub-clearance connector fails this stricter check and the
+  // original connector segment is kept.
   std::vector<geometry_msgs::msg::Point> smoothRoute(
       const std::vector<geometry_msgs::msg::Point>& in,
       const FusedSnapshot& snap) const
@@ -1823,7 +1860,7 @@ private:
     {
       std::size_t lookahead = anchor + 1;
       while (lookahead + 1 < in.size() &&
-             gridLineTraversableWorld(in[anchor], in[lookahead + 1], snap))
+             gridLineTraversableWorld(in[anchor], in[lookahead + 1], snap, clearance_radius_))
       {
         ++lookahead;
       }
