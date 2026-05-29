@@ -58,7 +58,7 @@ def generate_launch_description():
   use_arise = IfCondition(PythonExpression(["'", slam_backend, "' == 'arise'"]))
   use_lightning = IfCondition(PythonExpression(["'", slam_backend, "' == 'lightning'"]))
   use_far = IfCondition(PythonExpression(["'", route_planner_backend, "' == 'far'"]))
-  # pcd_grid builds its 2D map live from terrain analysis — no saved map needed.
+  # pcd_grid builds its 2D map live from the SLAM /registered_scan slice — no saved map needed.
   use_pcd_grid = IfCondition(PythonExpression([
     "'", route_planner_backend, "' == 'pcd_grid'"
   ]))

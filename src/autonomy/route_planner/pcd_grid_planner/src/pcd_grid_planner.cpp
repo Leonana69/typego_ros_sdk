@@ -52,11 +52,24 @@ geometry_msgs::msg::Point lerpPoint(
 }
 }  // namespace
 
-// Live-mapping 2D grid planner. The grid is built at runtime by accumulating
-// terrain_analysis output (already ground-segmented + ceiling-filtered, in the
-// map frame) into a per-cell log-odds occupancy filter, instead of projecting a
-// saved PCD. The planning pipeline (SDF, A*, snap, line-of-sight smoothing,
-// replan) is unchanged; only the source of the grid differs.
+// Live-mapping 2D grid planner. The grid is built at runtime into a per-cell
+// log-odds occupancy filter. Two evidence sources are supported (map_source):
+//
+//   slice   (default): raw SLAM points from /registered_scan (already in the
+//           map frame). A thin horizontal band at the lidar plane (robot z +
+//           slice_band_offset, half-thickness slice_band_half): returns within
+//           the band are obstacles, returns below it are floor/free (and set
+//           the cell ground z), returns above it are overhead and ignored. The
+//           band follows the robot's z, so it is immune to SLAM z-drift and
+//           floor-level changes, and needs no per-cell floor estimation.
+//   terrain (legacy): terrain_analysis output (/terrain_map_ext), intensity =
+//           height above estimated ground.
+//
+// After classification a spatial cleanup filter (isolated-component removal,
+// optional morphological opening) produces a filtered view used for the SDF and
+// the published map; the raw log-odds state is never overwritten by it. The
+// planning pipeline (SDF, A*, snap, line-of-sight smoothing, replan) is
+// unchanged; only the source and the spatial cleanup differ.
 class PcdGridPlanner : public rclcpp::Node
 {
 public:
@@ -74,9 +87,9 @@ public:
     goal_pose_sub_ = create_subscription<geometry_msgs::msg::PoseStamped>(
         "/goal_pose", 1,
         std::bind(&PcdGridPlanner::goalPoseCallback, this, std::placeholders::_1));
-    terrain_sub_ = create_subscription<sensor_msgs::msg::PointCloud2>(
+    cloud_sub_ = create_subscription<sensor_msgs::msg::PointCloud2>(
         live_topic_, rclcpp::SensorDataQoS(),
-        std::bind(&PcdGridPlanner::terrainCallback, this, std::placeholders::_1));
+        std::bind(&PcdGridPlanner::cloudCallback, this, std::placeholders::_1));
 
     waypoint_pub_ = create_publisher<geometry_msgs::msg::PointStamped>("/way_point", 5);
     path_pub_ = create_publisher<nav_msgs::msg::Path>(
@@ -110,8 +123,9 @@ public:
 
     RCLCPP_INFO(
         get_logger(),
-        "PCD grid planner (live mapping from %s) ready; action server on "
+        "PCD grid planner ready (map_source=%s, input=%s); action server on "
         "/navigate_to_pose, RViz goals on /goal_pose.",
+        map_source_ == MapSource::SLICE ? "slice" : "terrain",
         live_topic_.c_str());
   }
 
@@ -161,6 +175,22 @@ private:
     BLOCKED = 2,
   };
 
+  // Evidence source for the live grid. SLICE consumes raw /registered_scan with
+  // a per-cell column model; TERRAIN consumes terrain_analysis /terrain_map_ext.
+  enum class MapSource : std::uint8_t
+  {
+    SLICE = 0,
+    TERRAIN = 1,
+  };
+
+  // What a single slice return contributed to its cell.
+  enum class SliceEvidence : std::uint8_t
+  {
+    IGNORE = 0,    // overhead / outlier — no vote
+    FREE = 1,      // floor return — free vote (and a ray-trace clearing target)
+    OBSTACLE = 2,  // above floor — obstacle vote
+  };
+
   // Runtime cell — the current best map, owned by the executor thread
   // (mapping tick + publishers). The navigation worker never reads this
   // directly; it reads an immutable FusedSnapshot copy instead.
@@ -172,15 +202,15 @@ private:
   };
 
   // Per-cell log-odds accumulator. obs_count/free_count are raw evidence
-  // tallied by terrainCallback (100 Hz) and collapsed to one log-odds vote
-  // per mapping tick (decoupling the filter rate from the sensor rate).
-  // logodds + ground_sum/ground_count persist across ticks; the counts reset.
+  // tallied by cloudCallback and collapsed to one log-odds vote per mapping
+  // tick (decoupling the filter rate from the sensor rate). logodds +
+  // ground_sum/ground_count persist across ticks; the counts reset.
   struct LiveAccum
   {
     float logodds = 0.0f;
     std::uint16_t obs_count = 0;
     std::uint16_t free_count = 0;
-    double ground_sum = 0.0;
+    double ground_sum = 0.0;     // sum of floor-return z (below-band); defines cell ground z
     std::uint32_t ground_count = 0;
   };
 
@@ -205,20 +235,24 @@ private:
   {
     declare_parameter<std::string>("map_frame", "map");
 
-    declare_parameter<double>("grid_resolution", 0.20);
+    declare_parameter<double>("grid_resolution", 0.05);
     declare_parameter<int>("grid_max_cells", 2000000);
 
-    // Live grid extent (fixed, recentered on first odom by default).
-    declare_parameter<double>("live_map_width_m", 80.0);
-    declare_parameter<double>("live_map_height_m", 80.0);
+    // Live grid extent: initial size (recentered on first odom), grown to fit
+    // the explored area as the robot moves (grow-to-fit, slam_toolbox-style).
+    declare_parameter<double>("live_map_width_m", 24.0);
+    declare_parameter<double>("live_map_height_m", 24.0);
     declare_parameter<double>("live_map_center_x", 0.0);
     declare_parameter<double>("live_map_center_y", 0.0);
     declare_parameter<bool>("live_map_recenter_on_first_odom", true);
+    declare_parameter<bool>("live_grid_growth", true);
+    declare_parameter<double>("live_grid_growth_margin_m", 3.0);   // expand this far past new returns
+    declare_parameter<double>("live_grid_grow_max_range_m", 20.0); // ignore returns farther than this for growth
 
     declare_parameter<double>("max_slope_deg", 25.0);
     declare_parameter<double>("max_step_height", 0.18);
 
-    declare_parameter<double>("min_clearance", 0.35);
+    declare_parameter<double>("min_clearance", 0.25);
     declare_parameter<double>("obstacle_height", 0.15);
     declare_parameter<double>("vehicle_height", 1.0);   // reserved; unused in v1
     declare_parameter<double>("vehicle_length", 0.7);
@@ -238,15 +272,54 @@ private:
     declare_parameter<bool>("publish_debug_markers", false);
 
     // Live occupancy mapping.
-    declare_parameter<std::string>("live_topic", "/terrain_map_ext");
+    declare_parameter<std::string>("map_source", "slice");   // "slice" | "terrain"
+    declare_parameter<std::string>("live_topic", "/registered_scan");
     declare_parameter<double>("mapping_rate_hz", 2.0);
     declare_parameter<double>("blockage_ceiling", 1.6);
+
+    // SLICE mode: thin horizontal band at the lidar plane (robot-relative).
+    // A return is an obstacle within slice_band_half of the band center
+    // (robot z + slice_band_offset); below the band it's floor/free; above it
+    // is overhead and ignored. The band follows the robot, so it's immune to
+    // SLAM z-drift and works across floor levels.
+    declare_parameter<double>("slice_band_half", 0.10);         // half-thickness of the obstacle band
+    declare_parameter<double>("slice_band_offset", 0.0);        // band center = robot_z + this (lidar plane)
+
+    // Spatial cleanup filter (applied to a filtered view; never overwrites the
+    // raw log-odds state). Removes isolated obstacle specks; opening optional.
+    declare_parameter<bool>("spatial_filter_enabled", true);
+    declare_parameter<int>("spatial_min_component_size", 3);    // BLOCKED component <= this → cleared
+    declare_parameter<bool>("spatial_opening", false);          // erode→dilate (can thin walls; off)
+
+    // Robot free-space carving: the robot stands on traversable ground, so a
+    // small disc around its pose is FREE by definition. Fills the lidar's
+    // near-field blind cone and seeds free space at startup before the log-odds
+    // warmup. Carved cells borrow ground z from observed neighbors.
+    declare_parameter<bool>("robot_free_carve", true);
+    declare_parameter<double>("robot_free_radius", 5.0);        // blind-cone flood cap (stops at observations)
+
+    // Ray-trace clearing (SLICE mode): clears cells a beam sweeps to a floor
+    // return, so dynamic obstacles decay once the floor behind them reappears.
+    declare_parameter<bool>("raytrace_clearing", true);
+    declare_parameter<double>("raytrace_min_range_m", 0.3);
+    declare_parameter<double>("raytrace_max_range_m", 15.0);
+
+    // Clearance/SDF source: false (default) = keep clearance from BLOCKED only,
+    // so the unobserved frontier of a live map doesn't block paths through
+    // observed-free space; true = also inflate from UNKNOWN (conservative, for
+    // a complete saved map).
+    declare_parameter<bool>("clearance_inflate_unknown", false);
+
+    // Slope/step gate between cells. Off by default: needs a reliable per-cell
+    // elevation, which the slice band z is not, and its per-step threshold is
+    // sub-noise at fine resolution. Enable only for terrain-mode elevation.
+    declare_parameter<bool>("enforce_slope_check", false);
     declare_parameter<double>("live_l_hit", 0.85);
     declare_parameter<double>("live_l_miss", 0.40);
     declare_parameter<double>("live_l_min", -2.0);
     declare_parameter<double>("live_l_max", 4.0);
     declare_parameter<double>("live_l_occ_thr", 1.5);
-    declare_parameter<double>("live_l_free_thr", -1.0);
+    declare_parameter<double>("live_l_free_thr", -0.4);
 
     // Replanning.
     declare_parameter<double>("replan_period_sec", 0.5);
@@ -263,6 +336,9 @@ private:
     get_parameter("live_map_center_x", live_map_center_x_);
     get_parameter("live_map_center_y", live_map_center_y_);
     get_parameter("live_map_recenter_on_first_odom", live_map_recenter_on_first_odom_);
+    get_parameter("live_grid_growth", live_grid_growth_);
+    get_parameter("live_grid_growth_margin_m", live_grid_growth_margin_);
+    get_parameter("live_grid_grow_max_range_m", live_grid_grow_max_range_);
 
     get_parameter("max_slope_deg", max_slope_deg_);
     get_parameter("max_step_height", max_step_height_);
@@ -283,9 +359,28 @@ private:
     get_parameter("smoothing_enabled", smoothing_enabled_);
     get_parameter("publish_debug_markers", publish_debug_markers_);
 
+    std::string map_source_str;
+    get_parameter("map_source", map_source_str);
+    map_source_ = (map_source_str == "terrain") ? MapSource::TERRAIN : MapSource::SLICE;
+
     get_parameter("live_topic", live_topic_);
     get_parameter("mapping_rate_hz", mapping_rate_hz_);
     get_parameter("blockage_ceiling", blockage_ceiling_);
+
+    get_parameter("slice_band_half", slice_band_half_);
+    get_parameter("slice_band_offset", slice_band_offset_);
+
+    get_parameter("spatial_filter_enabled", spatial_filter_enabled_);
+    get_parameter("spatial_min_component_size", spatial_min_component_size_);
+    get_parameter("spatial_opening", spatial_opening_);
+
+    get_parameter("robot_free_carve", robot_free_carve_);
+    get_parameter("robot_free_radius", robot_free_radius_);
+    get_parameter("raytrace_clearing", raytrace_clearing_);
+    get_parameter("raytrace_min_range_m", raytrace_min_range_);
+    get_parameter("raytrace_max_range_m", raytrace_max_range_);
+    get_parameter("clearance_inflate_unknown", clearance_inflate_unknown_);
+    get_parameter("enforce_slope_check", enforce_slope_check_);
     get_parameter("live_l_hit", live_l_hit_);
     get_parameter("live_l_miss", live_l_miss_);
     get_parameter("live_l_min", live_l_min_);
@@ -305,8 +400,33 @@ private:
     replan_horizon_m_ = std::max(grid_resolution_, replan_horizon_m_);
     max_replan_attempts_ = std::max(0, max_replan_attempts_);
 
+    slice_band_half_ = std::max(0.0, slice_band_half_);
+    robot_free_radius_ = std::max(0.0, robot_free_radius_);
+    live_grid_growth_margin_ = std::max(0.0, live_grid_growth_margin_);
+    live_grid_grow_max_range_ = std::max(grid_resolution_, live_grid_grow_max_range_);
+    raytrace_min_range_ = std::max(0.0, raytrace_min_range_);
+    raytrace_max_range_ = std::max(raytrace_min_range_ + grid_resolution_, raytrace_max_range_);
+    spatial_min_component_size_ = std::max(0, spatial_min_component_size_);
+
+    // Footgun guard: terrain mode wants the elevation cloud, not raw scans.
+    if (map_source_ == MapSource::TERRAIN && live_topic_ == "/registered_scan")
+    {
+      live_topic_ = "/terrain_map_ext";
+      RCLCPP_WARN(
+          get_logger(),
+          "map_source=terrain but live_topic was the slice default; using "
+          "'/terrain_map_ext'. Set live_topic explicitly to override.");
+    }
+
     max_slope_rad_ = max_slope_deg_ * M_PI / 180.0;
-    clearance_radius_ = std::max(min_clearance_, 0.5 * std::hypot(vehicle_length_, vehicle_width_));
+    // Inscribed footprint radius (half the SHORT side) — the clearance the robot
+    // physically needs to fit, since it can rotate to align with a gap. The old
+    // circumscribed radius (0.5*hypot) demanded the worst-case 45°-in-a-corner
+    // margin everywhere, which a route planner over a tight live map can't meet
+    // (the robot couldn't even anchor its own start). Exact footprint/orientation
+    // safety is handled downstream by the footprint-aware local planner.
+    const double inscribed = 0.5 * std::min(vehicle_length_, vehicle_width_);
+    clearance_radius_ = std::max(min_clearance_, inscribed);
     if (line_clearance_ < 0.0)
     {
       line_clearance_ = std::max(0.5 * grid_resolution_, clearance_radius_ - grid_resolution_);
@@ -337,6 +457,7 @@ private:
 
     const std::size_t cells = static_cast<std::size_t>(cell_count);
     grid_.assign(cells, GridCell{});
+    filtered_state_.assign(cells, CellState::UNKNOWN);
     {
       std::lock_guard<std::mutex> lock(accum_mutex_);
       accum_.assign(cells, LiveAccum{});
@@ -350,11 +471,133 @@ private:
     publishSnapshot();
     publishGridMap();
 
+    ray_stamp_.assign(cells, 0u);
+    ray_gen_ = 0u;
+    carve_visit_gen_.assign(cells, 0u);
+    carve_gen_ = 0u;
+
     RCLCPP_INFO(
         get_logger(),
         "Live grid allocated: %dx%d @ %.2fm, extent %.0fx%.0f m, origin (%.2f, %.2f).",
         grid_width_, grid_height_, grid_resolution_,
         live_map_width_m_, live_map_height_m_, grid_origin_x_, grid_origin_y_);
+  }
+
+  // Grow-to-fit: if near-field returns (within grow_max_range of the robot)
+  // fall outside the current extent, expand the grid to cover them plus a
+  // margin. Bounds growth to the observed area (slam_toolbox-style) instead of
+  // a fixed 80 m. Caller holds accum_mutex_; gated on !executing_ by the caller
+  // so the realloc never races the navigation worker. Executor thread only.
+  void maybeGrowGrid(const pcl::PointCloud<pcl::PointXYZI>& cloud, double rx, double ry)
+  {
+    const double range_sq = live_grid_grow_max_range_ * live_grid_grow_max_range_;
+    double min_x = std::numeric_limits<double>::infinity();
+    double max_x = -std::numeric_limits<double>::infinity();
+    double min_y = std::numeric_limits<double>::infinity();
+    double max_y = -std::numeric_limits<double>::infinity();
+    bool any = false;
+    for (const auto& p : cloud.points)
+    {
+      if (!std::isfinite(p.x) || !std::isfinite(p.y)) continue;
+      const double dx = p.x - rx;
+      const double dy = p.y - ry;
+      if (dx * dx + dy * dy > range_sq) continue;  // far outlier — don't grow to it
+      min_x = std::min(min_x, static_cast<double>(p.x));
+      max_x = std::max(max_x, static_cast<double>(p.x));
+      min_y = std::min(min_y, static_cast<double>(p.y));
+      max_y = std::max(max_y, static_cast<double>(p.y));
+      any = true;
+    }
+    if (!any) return;
+
+    const double m = live_grid_growth_margin_;
+    const double cur_min_x = grid_origin_x_;
+    const double cur_max_x = grid_origin_x_ + grid_width_ * grid_resolution_;
+    const double cur_min_y = grid_origin_y_;
+    const double cur_max_y = grid_origin_y_ + grid_height_ * grid_resolution_;
+
+    const int dx_lo = (min_x - m) < cur_min_x
+                          ? static_cast<int>(std::ceil((cur_min_x - (min_x - m)) / grid_resolution_)) : 0;
+    const int dx_hi = (max_x + m) > cur_max_x
+                          ? static_cast<int>(std::ceil(((max_x + m) - cur_max_x) / grid_resolution_)) : 0;
+    const int dy_lo = (min_y - m) < cur_min_y
+                          ? static_cast<int>(std::ceil((cur_min_y - (min_y - m)) / grid_resolution_)) : 0;
+    const int dy_hi = (max_y + m) > cur_max_y
+                          ? static_cast<int>(std::ceil(((max_y + m) - cur_max_y) / grid_resolution_)) : 0;
+    if (dx_lo + dx_hi + dy_lo + dy_hi == 0) return;
+    growGrid(dx_lo, dx_hi, dy_lo, dy_hi);
+  }
+
+  // Reallocates the grid larger by the given per-side cell counts, copying every
+  // existing cell to its shifted position (so indices remap by a constant
+  // offset). Publishes a fresh snapshot at the new dimensions immediately so a
+  // goal accepted before the next mapping tick reads dims matching the snapshot.
+  void growGrid(int dx_lo, int dx_hi, int dy_lo, int dy_hi)
+  {
+    const int new_w = grid_width_ + dx_lo + dx_hi;
+    const int new_h = grid_height_ + dy_lo + dy_hi;
+    const long long new_cells = static_cast<long long>(new_w) * static_cast<long long>(new_h);
+    if (new_cells <= 0 || new_cells > grid_max_cells_)
+    {
+      RCLCPP_WARN_THROTTLE(
+          get_logger(), *get_clock(), 5000,
+          "Grid growth to %dx%d (%lld cells) would exceed grid_max_cells=%d; "
+          "capping. Far area will not be mapped — raise grid_max_cells or lower "
+          "live_grid_grow_max_range.",
+          new_w, new_h, new_cells, grid_max_cells_);
+      return;
+    }
+    const std::size_t nc = static_cast<std::size_t>(new_cells);
+
+    std::vector<GridCell> new_grid(nc);
+    std::vector<CellState> new_filtered(nc, CellState::UNKNOWN);
+    std::vector<LiveAccum> new_accum(nc);
+    std::vector<std::uint8_t> new_in_touched(nc, 0);
+    for (int gy = 0; gy < grid_height_; ++gy)
+    {
+      const int row_old = gy * grid_width_;
+      const int row_new = (gy + dy_lo) * new_w + dx_lo;
+      for (int gx = 0; gx < grid_width_; ++gx)
+      {
+        new_grid[row_new + gx] = grid_[row_old + gx];
+        new_filtered[row_new + gx] = filtered_state_[row_old + gx];
+        new_accum[row_new + gx] = accum_[row_old + gx];
+        new_in_touched[row_new + gx] = in_touched_[row_old + gx];
+      }
+    }
+    for (int& t : touched_)
+    {
+      const int ogx = t % grid_width_;
+      const int ogy = t / grid_width_;
+      t = (ogy + dy_lo) * new_w + (ogx + dx_lo);
+    }
+
+    grid_.swap(new_grid);
+    filtered_state_.swap(new_filtered);
+    accum_.swap(new_accum);
+    in_touched_.swap(new_in_touched);
+    grid_origin_x_ -= dx_lo * grid_resolution_;
+    grid_origin_y_ -= dy_lo * grid_resolution_;
+    grid_width_ = new_w;
+    grid_height_ = new_h;
+    // Generation-stamped scratch: resize + zero. The counters reset to 0 and
+    // are pre-incremented before use, so 0 always reads as "unvisited".
+    carve_visit_gen_.assign(nc, 0u);
+    carve_gen_ = 0u;
+    ray_stamp_.assign(nc, 0u);
+    ray_gen_ = 0u;
+
+    // New perimeter cells are UNKNOWN with sdf 0 (conservative) until the next
+    // mapping tick rebuilds the SDF; publish now so any goal sees matching dims.
+    publishSnapshot();
+    publishGridMap();
+
+    RCLCPP_INFO(
+        get_logger(),
+        "Live grid grew to %dx%d (%.0fx%.0f m), origin (%.2f, %.2f).",
+        grid_width_, grid_height_,
+        grid_width_ * grid_resolution_, grid_height_ * grid_resolution_,
+        grid_origin_x_, grid_origin_y_);
   }
 
   // Felzenszwalb-Huttenlocher 1D squared-distance transform along a strip.
@@ -401,9 +644,9 @@ private:
     }
   }
 
-  // Rebuilds grid_[*].sdf = meters to the nearest non-FREE cell, via a 2-pass
-  // EDT. O(N); ~ms for a 160k-cell grid. Runs on the executor thread (mapping
-  // tick) so grid_ is touched single-threaded.
+  // Rebuilds grid_[*].sdf = meters to the nearest non-FREE cell in the filtered
+  // view (filtered_state_), via a 2-pass EDT. O(N); ~ms for a 160k-cell grid.
+  // Runs on the executor thread (mapping tick) so grid_ is touched single-threaded.
   void buildSdf()
   {
     const std::size_t cells = grid_.size();
@@ -419,10 +662,19 @@ private:
         static_cast<double>(grid_width_) * grid_width_ +
         static_cast<double>(grid_height_) * grid_height_ + 1.0;
 
+    // SDF sources (distance 0) are the cells the robot must keep clearance
+    // from. By default that's only BLOCKED (real obstacles): treating UNKNOWN
+    // as a source would inflate clearance off the entire unobserved frontier of
+    // a live map and make most observed-FREE space non-traversable. Set
+    // clearance_inflate_unknown to restore the conservative behavior (treat
+    // unobserved cells as obstacles too — appropriate for a complete saved map).
     std::vector<double> squared(cells);
     for (std::size_t i = 0; i < cells; ++i)
     {
-      squared[i] = grid_[i].state == CellState::FREE ? sentinel : 0.0;
+      const bool is_source = clearance_inflate_unknown_
+                                 ? (filtered_state_[i] != CellState::FREE)
+                                 : (filtered_state_[i] == CellState::BLOCKED);
+      squared[i] = is_source ? 0.0 : sentinel;
     }
 
     const int n = std::max(grid_width_, grid_height_);
@@ -462,6 +714,180 @@ private:
     }
   }
 
+  // Builds filtered_state_ from the raw log-odds grid_ states. The filter is a
+  // VIEW consumed by the SDF and the published map; grid_[*].state (the
+  // log-odds classification) is never modified, so the temporal filter and the
+  // spatial one can't fight each other. Optional morphological opening, then
+  // isolated-component removal. Executor thread only.
+  void computeFilteredStates()
+  {
+    const std::size_t cells = grid_.size();
+    if (filtered_state_.size() != cells)
+    {
+      filtered_state_.assign(cells, CellState::UNKNOWN);
+    }
+    for (std::size_t i = 0; i < cells; ++i)
+    {
+      filtered_state_[i] = grid_[i].state;
+    }
+    if (!spatial_filter_enabled_)
+    {
+      return;
+    }
+    if (spatial_opening_)
+    {
+      morphologicalOpenBlocked();
+    }
+    if (spatial_min_component_size_ > 0)
+    {
+      removeSmallBlockedComponents();
+    }
+  }
+
+  // 8-connected opening (erode then dilate) of the BLOCKED set. Erosion clears
+  // a BLOCKED cell unless all 8 neighbors are BLOCKED; dilation restores
+  // survivors, restricted to originally-BLOCKED cells (opening is
+  // anti-extensive, so the result never paints over FREE/UNKNOWN). Removes thin
+  // specks but can also thin one-cell walls — off by default.
+  void morphologicalOpenBlocked()
+  {
+    const int w = grid_width_;
+    const int h = grid_height_;
+    auto is_blocked = [&](int gx, int gy, const std::vector<CellState>& s) {
+      return gx >= 0 && gy >= 0 && gx < w && gy < h &&
+             s[gy * w + gx] == CellState::BLOCKED;
+    };
+
+    std::vector<CellState> eroded = filtered_state_;
+    for (int gy = 0; gy < h; ++gy)
+    {
+      for (int gx = 0; gx < w; ++gx)
+      {
+        if (filtered_state_[gy * w + gx] != CellState::BLOCKED)
+        {
+          continue;
+        }
+        bool all_blocked = true;
+        for (int dy = -1; dy <= 1 && all_blocked; ++dy)
+        {
+          for (int dx = -1; dx <= 1; ++dx)
+          {
+            if (!is_blocked(gx + dx, gy + dy, filtered_state_))
+            {
+              all_blocked = false;
+              break;
+            }
+          }
+        }
+        if (!all_blocked)
+        {
+          eroded[gy * w + gx] = CellState::FREE;
+        }
+      }
+    }
+
+    for (int gy = 0; gy < h; ++gy)
+    {
+      for (int gx = 0; gx < w; ++gx)
+      {
+        const int idx = gy * w + gx;
+        if (filtered_state_[idx] != CellState::BLOCKED)
+        {
+          continue;
+        }
+        bool near_survivor = false;
+        for (int dy = -1; dy <= 1 && !near_survivor; ++dy)
+        {
+          for (int dx = -1; dx <= 1; ++dx)
+          {
+            if (is_blocked(gx + dx, gy + dy, eroded))
+            {
+              near_survivor = true;
+              break;
+            }
+          }
+        }
+        filtered_state_[idx] = near_survivor ? CellState::BLOCKED : CellState::FREE;
+      }
+    }
+  }
+
+  // Clears BLOCKED connected components (8-connected) of at most
+  // spatial_min_component_size_ cells to FREE — but only when the component
+  // touches no UNKNOWN neighbor, i.e. it sits inside known-free space and is
+  // almost certainly speckle. Small blocked clusters at the unobserved
+  // frontier are kept (likely real, partially-seen obstacles). O(N).
+  void removeSmallBlockedComponents()
+  {
+    const int w = grid_width_;
+    const int h = grid_height_;
+    const std::size_t cells = filtered_state_.size();
+    const int max_speck = spatial_min_component_size_;
+
+    std::vector<char> visited(cells, 0);
+    std::vector<int> stack;
+    std::vector<int> component;
+    for (int start = 0; start < static_cast<int>(cells); ++start)
+    {
+      if (visited[start] || filtered_state_[start] != CellState::BLOCKED)
+      {
+        continue;
+      }
+      stack.clear();
+      component.clear();
+      stack.push_back(start);
+      visited[start] = 1;
+      bool touches_unknown = false;
+      int count = 0;
+      while (!stack.empty())
+      {
+        const int idx = stack.back();
+        stack.pop_back();
+        ++count;
+        if (count <= max_speck)
+        {
+          component.push_back(idx);   // only a speck's worth is worth remembering
+        }
+        const int gx = idx % w;
+        const int gy = idx / w;
+        for (int dy = -1; dy <= 1; ++dy)
+        {
+          for (int dx = -1; dx <= 1; ++dx)
+          {
+            if (dx == 0 && dy == 0)
+            {
+              continue;
+            }
+            const int nx = gx + dx;
+            const int ny = gy + dy;
+            if (nx < 0 || ny < 0 || nx >= w || ny >= h)
+            {
+              continue;
+            }
+            const int nidx = ny * w + nx;
+            const CellState ns = filtered_state_[nidx];
+            if (ns == CellState::UNKNOWN)
+            {
+              touches_unknown = true;
+            }
+            else if (ns == CellState::BLOCKED && !visited[nidx])
+            {
+              visited[nidx] = 1;
+              stack.push_back(nidx);
+            }
+          }
+        }
+      }
+      if (count <= max_speck && !touches_unknown)
+      {
+        for (int idx : component)
+        {
+          filtered_state_[idx] = CellState::FREE;
+        }
+      }
+    }
+  }
+
   std::shared_ptr<const FusedSnapshot> getFusedSnapshot() const
   {
     std::lock_guard<std::mutex> lock(fused_mutex_);
@@ -479,7 +905,7 @@ private:
     snap->sdf.resize(cells);
     for (std::size_t i = 0; i < cells; ++i)
     {
-      snap->state[i] = grid_[i].state;
+      snap->state[i] = filtered_state_[i];
       snap->z[i] = grid_[i].z;
       snap->sdf[i] = grid_[i].sdf;
     }
@@ -487,14 +913,31 @@ private:
     fused_snapshot_ = std::move(snap);
   }
 
-  // 100 Hz: tally raw per-cell evidence. No log-odds here — that's collapsed to
-  // one vote per cell at the mapping tick so the filter rate is decoupled from
-  // the sensor rate. Touched cells are deduped into touched_ for the tick.
-  void terrainCallback(const sensor_msgs::msg::PointCloud2::SharedPtr msg)
+  // Tally raw per-cell evidence from one incoming cloud. No log-odds here —
+  // that's collapsed to one vote per cell at the mapping tick so the filter
+  // rate is decoupled from the sensor rate. Per-point classification branches
+  // on map_source_; touched cells are deduped into touched_ for the tick.
+  void cloudCallback(const sensor_msgs::msg::PointCloud2::SharedPtr msg)
   {
     if (!map_ready_)
     {
       return;
+    }
+    // /registered_scan is already registered into the SLAM world frame. We do
+    // NOT transform it — the planner holds no TF buffer, and odometry is read
+    // the same way. The SLAM backend may label the world frame "map",
+    // "sensor_init", etc.; accept any frame and treat its coordinates as the
+    // world frame. Note the actual frame once so it can be sanity-checked.
+    if (!cloud_frame_logged_)
+    {
+      cloud_frame_logged_ = true;
+      RCLCPP_INFO(
+          get_logger(),
+          "First cloud on '%s': frame='%s', map_frame='%s' — treating cloud "
+          "coordinates as the world frame (no transform applied).",
+          live_topic_.c_str(),
+          msg->header.frame_id.empty() ? "<none>" : msg->header.frame_id.c_str(),
+          map_frame_.c_str());
     }
 
     pcl::PointCloud<pcl::PointXYZI> cloud;
@@ -504,58 +947,283 @@ private:
       return;
     }
 
+    // Sensor pose (robot xyz). x,y are the ray-trace origin + grow-to-fit
+    // reference; z is the lidar plane the slice band is centered on.
+    bool have_sensor = false;
+    double rx = 0.0;
+    double ry = 0.0;
+    double rz = 0.0;
+    if (has_odom_.load())
+    {
+      std::lock_guard<std::mutex> lock(odom_mutex_);
+      rx = latest_pose_.position.x;
+      ry = latest_pose_.position.y;
+      rz = latest_pose_.position.z;
+      have_sensor = true;
+    }
+    // SLICE mode needs the robot z to place the band; without odom, skip.
+    if (map_source_ == MapSource::SLICE && !have_sensor)
+    {
+      return;
+    }
+    const double slice_band_center = rz + slice_band_offset_;
+
     std::lock_guard<std::mutex> lock(accum_mutex_);
+
+    // Grow-to-fit: expand the grid to cover near-field returns. Gated on
+    // !executing_ so the realloc never races the navigation worker (it reads
+    // grid_ dims; growth only changes them between goals). Far outliers beyond
+    // grow_max_range are not grown to.
+    if (live_grid_growth_ && have_sensor && !executing_.load())
+    {
+      maybeGrowGrid(cloud, rx, ry);
+    }
+
+    int sgx = 0;
+    int sgy = 0;
+    const bool ray_clear = map_source_ == MapSource::SLICE && raytrace_clearing_ &&
+                           have_sensor && worldToGrid(rx, ry, sgx, sgy);
+    ++ray_gen_;
+    if (ray_clear)
+    {
+      scan_floor_cells_.clear();
+    }
+
+    std::size_t in_grid = 0;
     for (const auto& point : cloud.points)
     {
-      const float intensity = point.intensity;  // height above ground, meters
-      if (!std::isfinite(intensity))
+      if (!std::isfinite(point.x) || !std::isfinite(point.y))
       {
         continue;
       }
-      bool obstacle;
-      if (intensity < obstacle_height_)
-      {
-        obstacle = false;  // ground / free evidence
-      }
-      else if (intensity <= blockage_ceiling_)
-      {
-        obstacle = true;   // obstacle or no-data blockage evidence
-      }
-      else
-      {
-        continue;          // overhead / outlier — ignore
-      }
-
       int gx = 0;
       int gy = 0;
       if (!worldToGrid(point.x, point.y, gx, gy))
       {
-        continue;          // outside the fixed extent — dropped
+        continue;          // outside the extent — dropped
       }
+      ++in_grid;
       const int idx = gridIndex(gx, gy);
-      if (!in_touched_[idx])
+      LiveAccum& a = accum_[idx];
+
+      if (map_source_ == MapSource::SLICE)
+      {
+        const SliceEvidence ev = tallySlicePoint(a, point.z, slice_band_center);
+        if (ev == SliceEvidence::IGNORE)
+        {
+          continue;
+        }
+        if (!in_touched_[idx])
+        {
+          in_touched_[idx] = 1;
+          touched_.push_back(idx);
+        }
+        if (ray_clear)
+        {
+          // Obstacle returns mark the cell so clearing rays never free-vote it
+          // (a standing obstacle must not decay). FREE returns are collected as
+          // clearing targets — only beams to a visible floor point are traced,
+          // and an obstacle occludes the floor behind it, so a clearing beam
+          // never sweeps through a real obstacle. The target list is deduped
+          // after the loop, so floor/obstacle return order in a cell is moot.
+          if (ev == SliceEvidence::OBSTACLE)
+          {
+            ray_stamp_[idx] = ray_gen_;
+          }
+          else  // SliceEvidence::FREE
+          {
+            scan_floor_cells_.push_back(idx);
+          }
+        }
+      }
+      else if (tallyTerrainPoint(a, point) && !in_touched_[idx])
       {
         in_touched_[idx] = 1;
         touched_.push_back(idx);
       }
-      LiveAccum& a = accum_[idx];
-      if (obstacle)
+    }
+
+    if (ray_clear)
+    {
+      std::sort(scan_floor_cells_.begin(), scan_floor_cells_.end());
+      scan_floor_cells_.erase(
+          std::unique(scan_floor_cells_.begin(), scan_floor_cells_.end()),
+          scan_floor_cells_.end());
+      for (const int endpoint : scan_floor_cells_)
       {
-        if (a.obs_count < 65535)
-        {
-          a.obs_count++;
-        }
+        raytraceClearLine(sgx, sgy, endpoint);
+      }
+    }
+
+    last_cloud_size_ = cloud.size();
+    last_cloud_in_grid_ = in_grid;
+  }
+
+  // Walks the 2D line from the sensor cell to a floor-return cell and casts a
+  // FREE (miss) vote into each cell the beam passes through (excluding the
+  // endpoint and any cell that is itself a scan endpoint this tick). This is
+  // the nav2/costmap raytraceFreespace idea: cells a beam sweeps are free, so a
+  // dynamic obstacle that moves away gets cleared once the floor behind it is
+  // seen again. Cleared cells with no observed ground of their own borrow the
+  // endpoint's ground z so the slope/step check stays consistent. accum_mutex_
+  // is held by the caller; executor thread only.
+  void raytraceClearLine(int sgx, int sgy, int endpoint_idx)
+  {
+    const int ex = endpoint_idx % grid_width_;
+    const int ey = endpoint_idx / grid_width_;
+    if (sgx == ex && sgy == ey)
+    {
+      return;
+    }
+    const LiveAccum& ea = accum_[endpoint_idx];
+    const double zE = ea.ground_count > 0
+                          ? ea.ground_sum / static_cast<double>(ea.ground_count)
+                          : grid_[endpoint_idx].z;
+
+    // Amanatides-Woo voxel traversal from the sensor cell center to the
+    // endpoint cell center — visits every cell the beam crosses (no gaps),
+    // unlike interval sampling. Endpoint and sensor cells are excluded.
+    const double fx = static_cast<double>(sgx) + 0.5;
+    const double fy = static_cast<double>(sgy) + 0.5;
+    const double tx = static_cast<double>(ex) + 0.5;
+    const double ty = static_cast<double>(ey) + 0.5;
+    const double dx = tx - fx;
+    const double dy = ty - fy;
+    const int step_x = dx > 0.0 ? 1 : (dx < 0.0 ? -1 : 0);
+    const int step_y = dy > 0.0 ? 1 : (dy < 0.0 ? -1 : 0);
+    constexpr double kInf = std::numeric_limits<double>::infinity();
+    const double inv_dx = step_x != 0 ? 1.0 / std::abs(dx) : kInf;
+    const double inv_dy = step_y != 0 ? 1.0 / std::abs(dy) : kInf;
+    double t_max_x = step_x > 0 ? (static_cast<double>(sgx + 1) - fx) * inv_dx
+                   : step_x < 0 ? (fx - static_cast<double>(sgx)) * inv_dx : kInf;
+    double t_max_y = step_y > 0 ? (static_cast<double>(sgy + 1) - fy) * inv_dy
+                   : step_y < 0 ? (fy - static_cast<double>(sgy)) * inv_dy : kInf;
+    const double t_delta_x = inv_dx;
+    const double t_delta_y = inv_dy;
+
+    int cx = sgx;
+    int cy = sgy;
+    const int max_iter = grid_width_ + grid_height_ + 4;
+    for (int iter = 0; (cx != ex || cy != ey) && iter < max_iter; ++iter)
+    {
+      if (t_max_x < t_max_y)
+      {
+        cx += step_x;
+        t_max_x += t_delta_x;
       }
       else
       {
-        if (a.free_count < 65535)
-        {
-          a.free_count++;
-        }
-        a.ground_sum += static_cast<double>(point.z) - static_cast<double>(intensity);
-        a.ground_count++;
+        cy += step_y;
+        t_max_y += t_delta_y;
+      }
+      if (cx == ex && cy == ey)
+      {
+        break;  // reached the endpoint — never clear it
+      }
+      if (!inGrid(cx, cy))
+      {
+        break;
+      }
+      const double r = std::hypot(static_cast<double>(cx - sgx) * grid_resolution_,
+                                  static_cast<double>(cy - sgy) * grid_resolution_);
+      if (r < raytrace_min_range_)
+      {
+        continue;
+      }
+      if (r > raytrace_max_range_)
+      {
+        break;
+      }
+      const int c = gridIndex(cx, cy);
+      if (ray_stamp_[c] == ray_gen_)
+      {
+        continue;  // an obstacle endpoint or already cleared this scan
+      }
+      ray_stamp_[c] = ray_gen_;
+      LiveAccum& a = accum_[c];
+      if (a.free_count < 65535)
+      {
+        a.free_count++;  // clearing miss vote
+      }
+      if (a.ground_count == 0)
+      {
+        // A cleared cell has no floor return of its own; give it a provisional
+        // ground z (the beam's floor endpoint) for the slope check only. No
+        // ground evidence is added, so a real floor return later overrides it.
+        grid_[c].z = zE;
+      }
+      if (!in_touched_[c])
+      {
+        in_touched_[c] = 1;
+        touched_.push_back(c);
       }
     }
+  }
+
+  // TERRAIN mode: intensity = height above terrain-analysis ground. Returns
+  // true if the point added evidence (so the cell should be reclassified).
+  bool tallyTerrainPoint(LiveAccum& a, const pcl::PointXYZI& point)
+  {
+    const float intensity = point.intensity;  // height above ground, meters
+    if (!std::isfinite(intensity))
+    {
+      return false;
+    }
+    if (intensity < obstacle_height_)
+    {
+      if (a.free_count < 65535)
+      {
+        a.free_count++;    // ground / free evidence
+      }
+      a.ground_sum += static_cast<double>(point.z) - static_cast<double>(intensity);
+      a.ground_count++;
+      return true;
+    }
+    if (intensity <= blockage_ceiling_)
+    {
+      if (a.obs_count < 65535)
+      {
+        a.obs_count++;     // obstacle or no-data blockage evidence
+      }
+      return true;
+    }
+    return false;          // overhead / outlier — ignore
+  }
+
+  // SLICE mode: thin horizontal band at the lidar plane. `band_center` is the
+  // robot's current z (+ slice_band_offset), so the band follows the robot and
+  // is immune to SLAM z-drift / floor-level changes. A return within
+  // slice_band_half of the center is an OBSTACLE; below the band it's
+  // floor/FREE (and sets the cell ground z); above the band it's overhead and
+  // ignored. No per-cell floor estimation — obstacle height is judged against
+  // the lidar plane directly. Returns what the point contributed.
+  SliceEvidence tallySlicePoint(LiveAccum& a, float pz, double band_center)
+  {
+    if (!std::isfinite(pz))
+    {
+      return SliceEvidence::IGNORE;
+    }
+    const double rel = static_cast<double>(pz) - band_center;
+    if (rel > slice_band_half_)
+    {
+      return SliceEvidence::IGNORE;   // above the band — overhead
+    }
+    if (rel >= -slice_band_half_)
+    {
+      if (a.obs_count < 65535)
+      {
+        a.obs_count++;                // within the band — obstacle
+      }
+      return SliceEvidence::OBSTACLE;
+    }
+    // below the band — floor / free evidence; its z defines the cell ground.
+    if (a.free_count < 65535)
+    {
+      a.free_count++;
+    }
+    a.ground_sum += static_cast<double>(pz);
+    a.ground_count++;
+    return SliceEvidence::FREE;
   }
 
   // Classify one cell from its accumulator into grid_. Sticky-FREE: a FREE cell
@@ -582,9 +1250,14 @@ private:
       next = CellState::FREE;  // sticky-FREE override
     }
 
+    // Negative-obstacle protection at the grid extent: force the boundary ring
+    // UNKNOWN so the planner won't path off the edge. Only in conservative mode
+    // — otherwise (live grow-to-fit map) this seals an observed edge cell as a
+    // non-traversable wall, and the extent is the unobserved frontier anyway.
     const int gx = idx % grid_width_;
     const int gy = idx / grid_width_;
-    if (gx == 0 || gy == 0 || gx == grid_width_ - 1 || gy == grid_height_ - 1)
+    if (clearance_inflate_unknown_ &&
+        (gx == 0 || gy == 0 || gx == grid_width_ - 1 || gy == grid_height_ - 1))
     {
       next = CellState::UNKNOWN;
     }
@@ -596,8 +1269,137 @@ private:
     }
   }
 
+  // Fills the lidar's near-field blind cone with FREE. A low-mounted Mid-360
+  // (downward FOV limit ~-7°) sees no ground closer than ~height/tan(7°) — a
+  // several-metre hole around the robot that never gets returns. The robot is
+  // physically standing on traversable ground there, so we flood-fill it: BFS
+  // from the robot cell through genuinely-unobserved cells, bounded by
+  // robot_free_radius_, stopping at the first observed cells (walls or the
+  // observed floor ring) so it never leaks into occluded space behind a wall.
+  // Filled cells borrow the nearest observed ground z; if no ground has been
+  // observed near the robot yet, carving is skipped rather than guessing a z.
+  // Observed evidence (free or wall) is never overridden. Returns cells turned FREE.
+  std::size_t carveRobotFreeSpace()
+  {
+    if (!robot_free_carve_ || !has_odom_.load())
+    {
+      return 0;
+    }
+    double rx = 0.0;
+    double ry = 0.0;
+    {
+      std::lock_guard<std::mutex> lock(odom_mutex_);
+      rx = latest_pose_.position.x;
+      ry = latest_pose_.position.y;
+    }
+    int cgx = 0;
+    int cgy = 0;
+    if (!worldToGrid(rx, ry, cgx, cgy))
+    {
+      return 0;
+    }
+    const int rad =
+        std::max(1, static_cast<int>(std::ceil(robot_free_radius_ / grid_resolution_)));
+    const long rad_sq = static_cast<long>(rad) * rad;
+
+    std::lock_guard<std::mutex> lock(accum_mutex_);
+    // Nearest observed-ground z reference to the robot, within the radius. The
+    // Mid-360's downward FOV limit puts the closest ground return several
+    // meters out, so search the whole radius. Without any observed ground,
+    // don't carve — a guessed z would break the slope check at the boundary.
+    double ground_z = 0.0;
+    long best_d2 = std::numeric_limits<long>::max();
+    for (int dy = -rad; dy <= rad; ++dy)
+    {
+      for (int dx = -rad; dx <= rad; ++dx)
+      {
+        const long d2 = static_cast<long>(dx) * dx + static_cast<long>(dy) * dy;
+        if (d2 > rad_sq || d2 >= best_d2) continue;
+        const int gx = cgx + dx;
+        const int gy = cgy + dy;
+        if (!inGrid(gx, gy)) continue;
+        const int idx = gridIndex(gx, gy);
+        if (accum_[idx].ground_count > 0)
+        {
+          best_d2 = d2;
+          ground_z = grid_[idx].z;
+        }
+      }
+    }
+    if (best_d2 == std::numeric_limits<long>::max())
+    {
+      return 0;  // no observed ground near the robot yet
+    }
+
+    // Flood-fill the connected blind cone: BFS from the robot cell through
+    // genuinely-unobserved cells, bounded by the radius, stopping at any
+    // observed cell. Fills the near-field the lidar can't reach (free by the
+    // robot's presence) yet never crosses a wall or the observed floor ring
+    // into occluded space behind it. A generation stamp avoids clearing the
+    // visited array each tick.
+    if (carve_visit_gen_.size() != grid_.size())
+    {
+      carve_visit_gen_.assign(grid_.size(), 0u);
+      carve_gen_ = 0u;
+    }
+    ++carve_gen_;
+    std::vector<int> stack;
+    auto consider = [&](int gx, int gy) {
+      if (!inGrid(gx, gy)) return;
+      const long d2 = static_cast<long>(gx - cgx) * (gx - cgx) +
+                      static_cast<long>(gy - cgy) * (gy - cgy);
+      if (d2 > rad_sq) return;
+      const int idx = gridIndex(gx, gy);
+      if (carve_visit_gen_[idx] == carve_gen_) return;
+      carve_visit_gen_[idx] = carve_gen_;   // visited; observed cells act as boundaries
+      const LiveAccum& a = accum_[idx];
+      if (grid_[idx].state != CellState::UNKNOWN || a.logodds != 0.0f || a.ground_count > 0)
+      {
+        return;  // observed — don't flood through it
+      }
+      stack.push_back(idx);
+    };
+
+    // Seed from the robot's OWN cell first — it's the blind spot directly under
+    // the sensor and is usually pristine UNKNOWN; consider() carves it FREE so
+    // the robot can anchor a path start there (the start connector check needs
+    // the start cell FREE). Then seed the neighbors so the rest of the cone
+    // fills even if the robot's own cell happened to be observed.
+    consider(cgx, cgy);
+    for (int dy = -1; dy <= 1; ++dy)
+    {
+      for (int dx = -1; dx <= 1; ++dx)
+      {
+        if (dx != 0 || dy != 0) consider(cgx + dx, cgy + dy);
+      }
+    }
+
+    std::size_t carved = 0;
+    while (!stack.empty())
+    {
+      const int idx = stack.back();
+      stack.pop_back();
+      LiveAccum& a = accum_[idx];
+      a.logodds = static_cast<float>(std::clamp(live_l_free_thr_, live_l_min_, live_l_max_));
+      grid_[idx].z = ground_z;  // provisional slope z; floor left to the first real return
+      classifyCell(idx, a);
+      if (grid_[idx].state == CellState::FREE) ++carved;
+      const int gx = idx % grid_width_;
+      const int gy = idx / grid_width_;
+      for (int dy = -1; dy <= 1; ++dy)
+      {
+        for (int dx = -1; dx <= 1; ++dx)
+        {
+          if (dx != 0 || dy != 0) consider(gx + dx, gy + dy);
+        }
+      }
+    }
+    return carved;
+  }
+
   // Mapping tick: collapse evidence → one log-odds step per touched cell,
-  // reclassify, rebuild the SDF, swap the snapshot, and republish the map.
+  // reclassify, carve free space under the robot, rebuild the SDF, swap the
+  // snapshot, and republish the map.
   void onMappingTick()
   {
     if (!map_ready_ || grid_.empty())
@@ -634,11 +1436,14 @@ private:
       touched_.clear();
     }
 
-    if (updated == 0)
+    const std::size_t carved = carveRobotFreeSpace();
+
+    if (updated == 0 && carved == 0)
     {
-      return;  // nothing changed; skip the EDT + publish
+      return;  // nothing changed; skip the filter + EDT + publish
     }
 
+    computeFilteredStates();
     buildSdf();
     publishSnapshot();
     publishGridMap();
@@ -646,6 +1451,61 @@ private:
     {
       publishGridMarkers();
     }
+
+    // Throttled diagnostics. Compares the robot pose to where classified cells
+    // actually are, and reports the nearest free cell — so we can separate
+    // "no data" (pts=0) from "data in the wrong place" (centroid far from
+    // robot) from "robot vicinity unobserved" (nearest_free large, blind cone).
+    std::size_t n_free = 0;
+    std::size_t n_blocked = 0;
+    std::size_t n_unknown = 0;
+    std::size_t n_class = 0;
+    double cx_sum = 0.0;
+    double cy_sum = 0.0;
+    constexpr double kInf = std::numeric_limits<double>::infinity();
+    double min_x = kInf, max_x = -kInf, min_y = kInf, max_y = -kInf;
+    double nearest_free = kInf;
+    double rx = 0.0;
+    double ry = 0.0;
+    {
+      std::lock_guard<std::mutex> lock(odom_mutex_);
+      rx = latest_pose_.position.x;
+      ry = latest_pose_.position.y;
+    }
+    for (std::size_t i = 0; i < filtered_state_.size(); ++i)
+    {
+      const CellState s = filtered_state_[i];
+      if (s == CellState::FREE) ++n_free;
+      else if (s == CellState::BLOCKED) ++n_blocked;
+      else { ++n_unknown; continue; }
+      ++n_class;
+      const int gx = static_cast<int>(i) % grid_width_;
+      const int gy = static_cast<int>(i) / grid_width_;
+      const double wx = grid_origin_x_ + (static_cast<double>(gx) + 0.5) * grid_resolution_;
+      const double wy = grid_origin_y_ + (static_cast<double>(gy) + 0.5) * grid_resolution_;
+      cx_sum += wx;
+      cy_sum += wy;
+      min_x = std::min(min_x, wx);
+      max_x = std::max(max_x, wx);
+      min_y = std::min(min_y, wy);
+      max_y = std::max(max_y, wy);
+      if (s == CellState::FREE)
+      {
+        nearest_free = std::min(nearest_free, std::hypot(wx - rx, wy - ry));
+      }
+    }
+    const double cls_cx = n_class ? cx_sum / static_cast<double>(n_class) : 0.0;
+    const double cls_cy = n_class ? cy_sum / static_cast<double>(n_class) : 0.0;
+    RCLCPP_INFO_THROTTLE(
+        get_logger(), *get_clock(), 2000,
+        "slice map: pts=%zu in_grid=%zu | free=%zu blocked=%zu unknown=%zu | "
+        "robot=(%.1f,%.1f) classified_centroid=(%.1f,%.1f) "
+        "bbox=[%.1f,%.1f]x[%.1f,%.1f] nearest_free=%.2fm | carved=%zu updated=%zu",
+        last_cloud_size_, last_cloud_in_grid_, n_free, n_blocked, n_unknown,
+        rx, ry, cls_cx, cls_cy,
+        n_class ? min_x : 0.0, n_class ? max_x : 0.0,
+        n_class ? min_y : 0.0, n_class ? max_y : 0.0,
+        nearest_free, carved, updated);
   }
 
   // True if any sample along the next replan_horizon_m_ of route is no longer
@@ -987,8 +1847,18 @@ private:
   }
 
   // Slope + step constraint between two FREE cells, read from the snapshot.
+  // OFF by default: the SLICE band model's per-cell z is a rough mean of
+  // below-band returns (not a clean terrain elevation), and the per-step slope
+  // threshold step_xy*tan(max_slope) shrinks with resolution — at 0.05 m it is
+  // only ~2.3 cm, below lidar z-noise, so it would reject flat-floor steps and
+  // make A* find no path. Enable only with a reliable per-cell elevation
+  // (e.g. terrain mode at a coarse resolution).
   bool stepWithinSlope(int from_idx, int to_idx, const FusedSnapshot& snap) const
   {
+    if (!enforce_slope_check_)
+    {
+      return true;
+    }
     const double dz = std::abs(snap.z[from_idx] - snap.z[to_idx]);
     if (dz > max_step_height_)
     {
@@ -1008,12 +1878,15 @@ private:
 
   bool gridMoveAllowed(int from_idx, int to_idx, const FusedSnapshot& snap) const
   {
+    ++dbg_edges_;
     if (!gridTraversable(from_idx, snap) || !gridTraversable(to_idx, snap))
     {
+      ++dbg_rej_traversable_;
       return false;
     }
     if (!stepWithinSlope(from_idx, to_idx, snap))
     {
+      ++dbg_rej_slope_;
       return false;
     }
 
@@ -1027,6 +1900,7 @@ private:
       const int side_b = gridIndex(fx, fy + dy);
       if (!gridTraversable(side_a, snap) || !gridTraversable(side_b, snap))
       {
+        ++dbg_rej_diagonal_;
         return false;
       }
     }
@@ -1206,6 +2080,13 @@ private:
       GridCandidate& selected_start,
       GridCandidate& selected_goal)
   {
+    dbg_seeded_ = 0;
+    dbg_expanded_ = 0;
+    dbg_goals_traversable_ = 0;
+    dbg_edges_ = 0;
+    dbg_rej_traversable_ = 0;
+    dbg_rej_slope_ = 0;
+    dbg_rej_diagonal_ = 0;
     if (start_candidates.empty() || goal_candidates.empty())
     {
       return false;
@@ -1230,6 +2111,7 @@ private:
         goals.push_back(GoalEntry{c.index, c.distance, static_cast<int>(i)});
       }
     }
+    dbg_goals_traversable_ = goals.size();
     if (goals.empty())
     {
       return false;
@@ -1260,6 +2142,7 @@ private:
       g_score[candidate.index] = candidate.distance;
       source[candidate.index] = static_cast<int>(i);
       open.push(QueueItem(candidate.distance + heuristic(candidate.index), candidate.index));
+      ++dbg_seeded_;
     }
 
     const int dirs[8][2] = {
@@ -1296,6 +2179,7 @@ private:
         continue;
       }
       closed[current] = true;
+      ++dbg_expanded_;
 
       if (const GoalEntry* ge = goal_at(current))
       {
@@ -1396,6 +2280,44 @@ private:
 
     if (start_candidates.empty())
     {
+      // Why couldn't the robot anchor its start? Report the robot cell's own
+      // state + sdf (= distance to the nearest BLOCKED cell), the snap floor it
+      // needed, and how much FREE space near the robot meets that floor. If the
+      // robot cell isn't FREE → it's marked occupied (self-return / phantom);
+      // if its sdf < floor → a BLOCKED cell sits within sdf metres of the robot.
+      int rgx = 0;
+      int rgy = 0;
+      const char* robot_state = "off-grid";
+      double robot_sdf = -1.0;
+      std::size_t free_meeting_floor = 0;
+      if (worldToGrid(start.x, start.y, rgx, rgy))
+      {
+        const int ridx = gridIndex(rgx, rgy);
+        robot_sdf = snap.sdf[ridx];
+        robot_state = snap.state[ridx] == CellState::FREE ? "FREE"
+                    : snap.state[ridx] == CellState::BLOCKED ? "BLOCKED" : "UNKNOWN";
+        const int r = static_cast<int>(std::ceil(start_snap_radius_ / grid_resolution_));
+        for (int dy = -r; dy <= r; ++dy)
+        {
+          for (int dx = -r; dx <= r; ++dx)
+          {
+            const int gx = rgx + dx;
+            const int gy = rgy + dy;
+            if (!inGrid(gx, gy)) continue;
+            const int idx = gridIndex(gx, gy);
+            if (snap.state[idx] == CellState::FREE && snap.sdf[idx] >= start_sdf_floor)
+            {
+              ++free_meeting_floor;
+            }
+          }
+        }
+      }
+      RCLCPP_WARN(
+          get_logger(),
+          "No start anchor | robot=(%.2f,%.2f) cell=%s sdf=%.2f(=dist to nearest BLOCKED) | "
+          "start_floor=%.2f clearance=%.2f res=%.3f | FREE cells within %.1fm meeting floor=%zu",
+          start.x, start.y, robot_state, robot_sdf, start_sdf_floor, clearance_radius_,
+          grid_resolution_, start_snap_radius_, free_meeting_floor);
       error = "No FREE 2D grid cell with a clear connector near current pose.";
       return false;
     }
@@ -1411,6 +2333,86 @@ private:
     if (!searchGridToCandidates(start_candidates, goal_candidates, requested_goal, snap,
                                 cell_path, selected_start, selected_goal))
     {
+      // Diagnose why: how much of the FREE space is actually traversable
+      // (FREE && sdf >= clearance). If traversable << free (or max_free_sdf <
+      // clearance), the clearance requirement is the limiter — the corridor is
+      // pinched by nearby obstacles/unknown. Otherwise it's connectivity
+      // (FREE fragmented by UNKNOWN gaps) or the slope/step check.
+      std::size_t n_free = 0;
+      std::size_t n_trav = 0;
+      std::size_t n_blocked = 0;
+      std::size_t n_unknown = 0;
+      double max_free_sdf = 0.0;
+      for (std::size_t i = 0; i < snap.state.size(); ++i)
+      {
+        const CellState s = snap.state[i];
+        if (s == CellState::BLOCKED) { ++n_blocked; continue; }
+        if (s == CellState::UNKNOWN) { ++n_unknown; continue; }
+        ++n_free;
+        max_free_sdf = std::max(max_free_sdf, snap.sdf[i]);
+        if (snap.sdf[i] >= clearance_radius_) ++n_trav;
+      }
+      const double start_sdf = start_candidates.empty() ? -1.0 : snap.sdf[start_candidates.front().index];
+      const double goal_sdf = goal_candidates.empty() ? -1.0 : snap.sdf[goal_candidates.front().index];
+
+      // Decisive check: is the FREE space (ignoring clearance) connected from the
+      // start to any goal cell? YES → the barrier is purely the clearance margin
+      // (a sub-clearance pinch). NO → the FREE region itself is split by
+      // UNKNOWN/BLOCKED cells between start and goal.
+      bool free_connected = false;
+      std::size_t free_comp = 0;
+      {
+        std::vector<char> vis(snap.state.size(), 0);
+        std::vector<char> is_goal(snap.state.size(), 0);
+        for (const auto& gc : goal_candidates)
+        {
+          if (gc.index >= 0 && gc.index < static_cast<int>(is_goal.size())) is_goal[gc.index] = 1;
+        }
+        std::vector<int> st;
+        const int s0 = start_candidates.front().index;
+        if (s0 >= 0 && s0 < static_cast<int>(vis.size()) && snap.state[s0] == CellState::FREE)
+        {
+          vis[s0] = 1;
+          st.push_back(s0);
+        }
+        while (!st.empty())
+        {
+          const int c = st.back();
+          st.pop_back();
+          ++free_comp;
+          if (is_goal[c]) free_connected = true;
+          const int cx = c % grid_width_;
+          const int cy = c / grid_width_;
+          for (int dy = -1; dy <= 1; ++dy)
+          {
+            for (int dx = -1; dx <= 1; ++dx)
+            {
+              if (dx == 0 && dy == 0) continue;
+              const int nx = cx + dx;
+              const int ny = cy + dy;
+              if (!inGrid(nx, ny)) continue;
+              const int nidx = gridIndex(nx, ny);
+              if (vis[nidx] || snap.state[nidx] != CellState::FREE) continue;
+              vis[nidx] = 1;
+              st.push_back(nidx);
+            }
+          }
+        }
+      }
+
+      RCLCPP_WARN(
+          get_logger(),
+          "No path | start=(%.2f,%.2f) goal=(%.2f,%.2f) res=%.3f clearance=%.2f | "
+          "FREE=%zu trav(sdf>=clr)=%zu maxFREEsdf=%.2f BLOCKED=%zu UNKNOWN=%zu | "
+          "start_cand=%zu(sdf=%.2f) goal_cand=%zu(sdf=%.2f) | "
+          "A*: seeded=%zu goals_trav=%zu expanded=%zu | rejects: trav=%zu slope=%zu diag=%zu | "
+          "FREE-connected(start->goal)=%s freeComp=%zu",
+          start.x, start.y, requested_goal.x, requested_goal.y, grid_resolution_, clearance_radius_,
+          n_free, n_trav, max_free_sdf, n_blocked, n_unknown,
+          start_candidates.size(), start_sdf, goal_candidates.size(), goal_sdf,
+          dbg_seeded_, dbg_goals_traversable_, dbg_expanded_,
+          dbg_rej_traversable_, dbg_rej_slope_, dbg_rej_diagonal_,
+          free_connected ? "YES" : "NO", free_comp);
       error = "No reachable 2D grid path from current pose to requested goal.";
       return false;
     }
@@ -1657,7 +2659,7 @@ private:
 
     for (std::size_t i = 0; i < grid_.size(); ++i)
     {
-      switch (grid_[i].state)
+      switch (filtered_state_[i])
       {
         case CellState::FREE:    map.data[i] = 0;   break;
         case CellState::BLOCKED: map.data[i] = 100; break;
@@ -1706,7 +2708,7 @@ private:
       const GridCell& cell = grid_[i];
       geometry_msgs::msg::Point point = gridCenter(static_cast<int>(i));
       point.z = cell.z;
-      switch (cell.state)
+      switch (filtered_state_[i])
       {
         case CellState::BLOCKED:
           point.z += 0.04;
@@ -1737,19 +2739,22 @@ private:
 
   std::string map_frame_;
 
-  double grid_resolution_ = 0.20;
+  double grid_resolution_ = 0.05;
   int grid_max_cells_ = 2000000;
 
-  double live_map_width_m_ = 80.0;
-  double live_map_height_m_ = 80.0;
+  double live_map_width_m_ = 24.0;
+  double live_map_height_m_ = 24.0;
   double live_map_center_x_ = 0.0;
   double live_map_center_y_ = 0.0;
   bool live_map_recenter_on_first_odom_ = true;
+  bool live_grid_growth_ = true;
+  double live_grid_growth_margin_ = 3.0;
+  double live_grid_grow_max_range_ = 20.0;
 
   double max_slope_deg_ = 25.0;
   double max_slope_rad_ = 25.0 * M_PI / 180.0;
   double max_step_height_ = 0.18;
-  double min_clearance_ = 0.35;
+  double min_clearance_ = 0.25;
   double obstacle_height_ = 0.15;
   double vehicle_height_ = 1.0;          // reserved; unused in v1
   double vehicle_length_ = 0.7;
@@ -1767,15 +2772,60 @@ private:
   bool publish_debug_markers_ = false;
 
   // Live occupancy mapping.
-  std::string live_topic_ = "/terrain_map_ext";
+  MapSource map_source_ = MapSource::SLICE;
+  std::string live_topic_ = "/registered_scan";
   double mapping_rate_hz_ = 2.0;
-  double blockage_ceiling_ = 1.6;
+  double blockage_ceiling_ = 1.6;       // TERRAIN mode only
+
+  // SLICE mode lidar-plane band (robot-relative).
+  double slice_band_half_ = 0.10;
+  double slice_band_offset_ = 0.0;
+
+  // Spatial cleanup filter.
+  bool spatial_filter_enabled_ = true;
+  int spatial_min_component_size_ = 3;
+  bool spatial_opening_ = false;
+
+  // Robot free-space carving (blind-cone flood-fill).
+  bool robot_free_carve_ = true;
+  double robot_free_radius_ = 5.0;
+  std::vector<std::uint32_t> carve_visit_gen_;   // per-cell BFS visited stamp
+  std::uint32_t carve_gen_ = 0;
+
+  // Ray-trace clearing (SLICE mode dynamic-obstacle decay).
+  bool raytrace_clearing_ = true;
+  double raytrace_min_range_ = 0.3;
+  double raytrace_max_range_ = 15.0;
+
+  // Clearance/SDF: inflate from UNKNOWN too (conservative) vs BLOCKED only.
+  bool clearance_inflate_unknown_ = false;
+  // Slope/step gate (needs reliable per-cell elevation; off for slice band).
+  bool enforce_slope_check_ = false;
+
+  // A* diagnostics — reset and filled per search (one navigation at a time),
+  // read by planGridRoute's failure log. mutable: written in const search/edge
+  // methods. Not thread-shared (single active search).
+  mutable std::size_t dbg_seeded_ = 0;            // start sources pushed into open
+  mutable std::size_t dbg_expanded_ = 0;          // cells closed by A*
+  mutable std::size_t dbg_goals_traversable_ = 0; // goal candidates that are traversable
+  mutable std::size_t dbg_edges_ = 0;             // edge checks in gridMoveAllowed
+  mutable std::size_t dbg_rej_traversable_ = 0;   // edges rejected: cell not FREE or sdf<clearance
+  mutable std::size_t dbg_rej_slope_ = 0;         // edges rejected: slope/step gate
+  mutable std::size_t dbg_rej_diagonal_ = 0;      // edges rejected: diagonal corner blocked
+  std::vector<std::uint32_t> ray_stamp_;         // per-scan endpoint/cleared stamp
+  std::uint32_t ray_gen_ = 0;
+  std::vector<int> scan_floor_cells_;            // this scan's floor-return cells (ray-trace targets)
+
+  // Diagnostics (executor thread only).
+  bool cloud_frame_logged_ = false;
+  std::size_t last_cloud_size_ = 0;
+  std::size_t last_cloud_in_grid_ = 0;
   double live_l_hit_ = 0.85;
   double live_l_miss_ = 0.40;
   double live_l_min_ = -2.0;
   double live_l_max_ = 4.0;
   double live_l_occ_thr_ = 1.5;
-  double live_l_free_thr_ = -1.0;
+  double live_l_free_thr_ = -0.4;
 
   // Replanning.
   double replan_period_sec_ = 0.5;
@@ -1795,13 +2845,17 @@ private:
 
   // Current best map — owned by the executor thread (mapping tick + publishers).
   std::vector<GridCell> grid_;
+  // Spatially-filtered view of grid_[*].state, rebuilt each mapping tick and
+  // consumed by the SDF, the published map, and the planner snapshot. grid_ is
+  // never modified by the spatial filter. Executor thread only.
+  std::vector<CellState> filtered_state_;
   int grid_width_ = 0;
   int grid_height_ = 0;
   double grid_origin_x_ = 0.0;
   double grid_origin_y_ = 0.0;
 
   // Log-odds accumulators + touched-cell bookkeeping. Guarded by accum_mutex_
-  // (terrainCallback tallies, mapping tick collapses).
+  // (cloudCallback tallies, mapping tick collapses).
   std::vector<LiveAccum> accum_;
   std::vector<int> touched_;
   std::vector<std::uint8_t> in_touched_;
@@ -1818,7 +2872,7 @@ private:
 
   rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr odom_sub_;
   rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr goal_pose_sub_;
-  rclcpp::Subscription<sensor_msgs::msg::PointCloud2>::SharedPtr terrain_sub_;
+  rclcpp::Subscription<sensor_msgs::msg::PointCloud2>::SharedPtr cloud_sub_;
   rclcpp::Publisher<geometry_msgs::msg::PointStamped>::SharedPtr waypoint_pub_;
   rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr path_pub_;
   rclcpp::Publisher<nav_msgs::msg::OccupancyGrid>::SharedPtr grid_map_pub_;

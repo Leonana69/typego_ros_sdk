@@ -2,21 +2,25 @@ pcd_grid_planner:
   ros__parameters:
     map_frame: map
 
-    grid_resolution: 0.20
+    grid_resolution: 0.05                   # cell size (m); finer = 16x cells vs 0.20
     grid_max_cells: 2000000
 
-    # Fixed live-map extent, recentered on the robot's first odometry.
-    live_map_width_m: 80.0
-    live_map_height_m: 80.0
+    # Live-map extent: initial size (recentered on first odom), then grown to
+    # fit the explored area as the robot moves (slam_toolbox-style grow-to-fit).
+    live_map_width_m: 24.0                  # initial extent; grows as needed
+    live_map_height_m: 24.0
     live_map_center_x: 0.0                  # used only if recenter is false
     live_map_center_y: 0.0
     live_map_recenter_on_first_odom: true
+    live_grid_growth: true                  # expand the grid to cover new explored area
+    live_grid_growth_margin_m: 3.0          # grow this far past new returns (amortizes regrowth)
+    live_grid_grow_max_range_m: 20.0        # ignore returns farther than this when growing (caps size)
 
     max_slope_deg: 25.0
     max_step_height: 0.18
 
-    min_clearance: 0.35
-    obstacle_height: 0.15                   # intensity < this → free; >= → obstacle
+    min_clearance: 0.25                     # planner clearance floor; effective clearance = max(this, inscribed footprint radius)
+    obstacle_height: 0.15                   # TERRAIN mode: intensity < this → free; >= → obstacle
     vehicle_height: 1.0                     # reserved; unused in v1
     line_clearance: -1.0                    # -1 → clearance_radius - grid_resolution
 
@@ -29,16 +33,61 @@ pcd_grid_planner:
     smoothing_enabled: true                 # greedy line-of-sight compaction post-A*
     publish_debug_markers: false            # /pcd_2d_map already shows the grid in RViz
 
-    # Live occupancy mapping (log-odds accumulation from terrain analysis).
-    live_topic: "/terrain_map_ext"
+    # Live occupancy mapping.
+    # map_source = slice: raw SLAM points (/registered_scan), per-cell column model.
+    #            = terrain: terrain_analysis output (/terrain_map_ext), intensity=elevation.
+    map_source: slice
+    live_topic: "/registered_scan"          # set to /terrain_map_ext for map_source=terrain
     mapping_rate_hz: 2.0                     # reclassify + SDF + publish rate
+
+    # SLICE mode: thin horizontal band at the lidar plane (robot-relative).
+    # band center = robot z + slice_band_offset; a return within slice_band_half
+    # of the center is an obstacle, below the band is floor/free, above is
+    # overhead (ignored). The band follows the robot, so it is immune to SLAM
+    # z-drift and floor-level changes. Misses obstacles shorter than the lidar.
+    slice_band_half: 0.10                   # half-thickness of the obstacle band (m)  → ±10 cm
+    slice_band_offset: 0.0                  # band center = robot_z + this (lidar plane); raise to slice higher
+
+    # Spatial cleanup of the published/planned map (never alters log-odds state).
+    spatial_filter_enabled: true
+    spatial_min_component_size: 3           # isolated BLOCKED clusters <= this (in free space) → cleared
+    spatial_opening: false                  # morphological open (can thin 1-cell walls; off)
+
+    # Robot free-space carving: flood-fills the lidar near-field blind cone with
+    # FREE (a low Mid-360 sees no ground closer than ~height/tan(7deg), several
+    # metres). BFS from the robot through unobserved cells, stopping at observed
+    # walls/floor — never leaks behind a wall, never overrides observed cells.
+    robot_free_carve: true
+    robot_free_radius: 5.0                  # m; flood cap (the fill stops at observations anyway)
+
+    # Ray-trace clearing (dynamic obstacles): a beam swept to a floor return
+    # clears the cells it passes through, so a person who walks away gets cleared
+    # once the floor behind them reappears. Clears along FLOOR beams only, so low
+    # static obstacles (which occlude the floor behind them) are not wrongly cleared.
+    raytrace_clearing: true
+    raytrace_min_range_m: 0.3               # skip clearing nearer than this (sensor noise)
+    raytrace_max_range_m: 15.0              # cap clearing-ray length
+
+    # Clearance source: false = keep clearance from BLOCKED obstacles only, so the
+    # unobserved (UNKNOWN) frontier of a live map doesn't block paths through
+    # observed-free space. Set true only for a complete saved map where UNKNOWN
+    # should be treated as an obstacle (negative-obstacle protection).
+    clearance_inflate_unknown: false
+
+    # Slope/step traversability gate between cells. Off: the slice band z is a
+    # rough estimate and the per-step slope threshold is sub-noise at fine
+    # resolution (~2 cm at 0.05 m), so it would block flat-floor paths. Enable
+    # only with a reliable per-cell elevation (terrain mode, coarse grid).
+    enforce_slope_check: false
+
+    # TERRAIN mode only.
     blockage_ceiling: 1.6                   # >= terrain vehicleHeight (1.5) to catch no-data
     live_l_hit: 0.85                        # per-tick log-odds increment (obstacle)
     live_l_miss: 0.40                       # per-tick log-odds decrement (free)
     live_l_min: -2.0                        # shallow FREE floor → faster new-obstacle flip
     live_l_max: 4.0
-    live_l_occ_thr: 1.5                     # >= → BLOCKED
-    live_l_free_thr: -1.0                   # <= → FREE (sticky once FREE)
+    live_l_occ_thr: 1.5                     # >= → BLOCKED (~2 ticks of obstacle evidence)
+    live_l_free_thr: -0.4                   # <= → FREE (1 tick of floor evidence; raise toward -1.0 to denoise)
 
     replan_period_sec: 0.5
     replan_horizon_m: 4.0

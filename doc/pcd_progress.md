@@ -17,6 +17,119 @@ each PR is still to do.
 | PR 2 | ✅ implemented | `ce1bd20` |
 | PR 3 | ✅ implemented | `0d13111` |
 | PR 4 | ✅ implemented | `cfefe3a` |
+| PR 5 | ✅ implemented (uncommitted) | — |
+
+## PR 5 — Map source: SLAM slice instead of terrain analysis
+
+**Why:** the `/terrain_map_ext` output the grid was built from is noisy — its
+per-point `intensity` is *height above a per-point estimated ground*, and that
+estimator (a neighborhood plane fit expanded by `disRatioZ * dis`) smears and
+invents obstacles/holes on uneven floors, reflective surfaces, and sparse
+returns. The published 2D map inherited that noise.
+
+**What changed:** a new `map_source` parameter selects the evidence source.
+
+- `map_source: slice` (new default) — subscribe to `/registered_scan` (raw
+  registered SLAM points, already in the map frame; geometry only, `intensity`
+  ignored). Each cell keeps a **robust local floor** (`floor_z`, the running min
+  of return z in that cell, lowered by at most `slice_floor_max_drop`, which is
+  clamped `<= slice_obstacle_height` so a single sub-floor outlier can never
+  manufacture a phantom obstacle). A return is **obstacle** evidence when it
+  rises between `floor + slice_obstacle_height` and `floor + slice_obstacle_ceiling`
+  (the robot fits under anything taller), **free** within `slice_obstacle_height`
+  of the floor, ignored above the ceiling. Near-floor returns (`<=
+  slice_ground_band`) define the published per-cell ground z. This is a per-cell
+  *column* model: slope-robust (no moving-Z reference, unlike a vehicleZ-anchored
+  slice) and free of the neighborhood plane-fit smearing.
+- `map_source: terrain` — the legacy `/terrain_map_ext` path, unchanged.
+- **Spatial cleanup** (the "smooth/filter to clean it" ask): after log-odds
+  classification, a filtered *view* (`filtered_state_`) is produced and consumed
+  by the SDF, the published `/pcd_2d_map`, the planner snapshot, and debug
+  markers; the raw log-odds `grid_[*].state` is never overwritten, so the
+  temporal and spatial filters don't fight. The filter is isolated-component
+  removal (`spatial_min_component_size`, default 3: clears BLOCKED 8-connected
+  clusters of ≤N cells **only when they touch no UNKNOWN neighbor**, i.e. sit
+  inside known-free space — connected walls and frontier obstacles are never
+  touched) plus optional morphological opening (`spatial_opening`, default off:
+  anti-extensive, can thin 1-cell walls). Kill switch: `spatial_filter_enabled`.
+
+The planning pipeline (multi-source A*, SDF clearance, snap, line-of-sight
+smoothing, replan) is byte-for-byte unchanged; only the evidence source and the
+spatial cleanup are new. Build clean; a 4-perspective design review and a
+4-dimension adversarial diff review (slice/floor math, spatial filter,
+concurrency, integration) returned no confirmed bugs.
+
+**New parameters** (`config/default.yaml`): `map_source`, `slice_obstacle_height`
+(0.15), `slice_obstacle_ceiling` (0.80), `slice_ground_band` (0.10),
+`slice_floor_max_drop` (0.12), `spatial_filter_enabled` (true),
+`spatial_min_component_size` (3), `spatial_opening` (false). `live_topic`
+default is now `/registered_scan`; terrain mode auto-redirects it to
+`/terrain_map_ext` with a warning if left at the slice default.
+
+**Known v1 limitations (by design):** no negative-obstacle / drop-off detection
+(a sharp floor drop beyond `slice_floor_max_drop` keeps the upper floor and
+reads free); recurrent sub-floor noise can slowly lower a cell's floor (fails
+toward phantom obstacles — the safe direction — and isolated ones are swept by
+component removal); multi-level overlap (mezzanine over floor in one XY cell)
+collapses to one floor. Acceptable for the single-level indoor target; revisit
+if deployed on stairs/multi-level.
+
+## PR 6 — Live-mapping fixes (frame, blind cone, dynamic clearing, grow-to-fit)
+
+Field-debugging follow-ups on the slice mapper, in order found:
+
+1. **Frame guard removed.** The early frame-id reject dropped every
+   `/registered_scan` when the SLAM world frame wasn't literally `"map"`. The
+   cloud is pre-registered world coordinates; we accept any frame and log it once.
+2. **Blind-cone fill (`robot_free_carve`).** A low Mid-360 (downward FOV ~−7°)
+   sees no ground within ~3 m, leaving the robot ringed by UNKNOWN. A BFS
+   flood-fill from the robot through unobserved cells (bounded by
+   `robot_free_radius`, stopping at observed walls/floor) marks the near-field
+   FREE with a borrowed ground z. Also raised `live_l_free_thr` to −0.4 so
+   observed floor turns FREE in one tick.
+3. **Ray-trace clearing (`raytrace_clearing`).** Dynamic obstacles used to stick
+   forever (a cell only cleared if a floor return landed in it). Now, per scan,
+   beams are traced (Amanatides-Woo) from the robot to each **floor** return and
+   the swept cells get a FREE/miss vote — so a person who walks away is cleared
+   (~2.5 s) once the floor behind them reappears. Clearing along *floor* beams
+   only means low static obstacles (which occlude the floor behind them) are not
+   wrongly cleared; obstacle endpoints are never cleared, so a standing obstacle
+   stays blocked.
+4. **Grow-to-fit grid (`live_grid_growth`).** Replaced the fixed 80×80 m extent
+   with a 24×24 m initial grid that expands to cover the explored area (returns
+   within `live_grid_grow_max_range_m` + margin), bounded by `grid_max_cells`.
+   Made thread-safe without a snapshot-dims refactor by gating the realloc on
+   `!executing_`: the single-threaded executor + worker-only-while-executing
+   means growth never races the planner reading the grid dims.
+
+Two design reviews + a 4-/3-dimension adversarial diff review backed each step;
+the last review caught and fixed 3 real bugs (floor-target registration vs
+coincident obstacle returns, interval-sampling DDA skipping cells, missing
+`carve_visit_gen_` init). Build clean; unverified end-to-end on hardware.
+
+## PR 7 — Slice model: robot-relative lidar-plane band
+
+Replaced the per-cell column model with a thin **horizontal band at the lidar
+plane**, by operator choice (simpler, and it drops the per-cell floor estimation
+that caused most PR-6 bugs). Per return: `rel = z − (robot_z + slice_band_offset)`;
+`|rel| ≤ slice_band_half` (default 0.10) → obstacle, `rel < −half` → floor/free
+(sets cell ground z), `rel > half` → overhead (ignored). The band is centered on
+the robot's current z, so it tracks the lidar plane and is immune to SLAM
+z-drift and floor-level changes — no absolute-z reference, no running-min floor.
+Free space still comes from below-band floor returns + ray-trace clearing + the
+blind-cone carve; grow-to-fit unchanged. Removed `slice_obstacle_height/
+ceiling/ground_band/floor_max_drop` and the `LiveAccum` floor fields; added
+`slice_band_half`, `slice_band_offset`. Also set `grid_resolution` default to
+0.05 m. **Limitation:** a thin slice at the lidar plane misses obstacles shorter
+than the lidar; if the lidar sits <`slice_band_half` above the floor, raise
+`slice_band_offset` so the band clears the floor.
+
+**Verification before merge:** smoke-test on a real `/registered_scan` (bag or
+robot): confirm `/pcd_2d_map` shows clean walls + free near-field floor, send a
+goal and watch `/pcd_grid_path` reach it, compare map cleanliness against
+`map_source: terrain` on the same path, and check per-tick timing on the Jetson
+Orin at the configured extent (full-grid EDT + filter run each tick when cells
+change).
 
 Outstanding work, in order:
 1. **Smoke verification** on `Map-<name>.pcd` for each verification case

@@ -22,7 +22,7 @@ def generate_launch_description():
             default_value='0.3',
             description='Vehicle footprint width, m.',
         ),
-        LogInfo(msg='PCD grid planner: building 2D map live from terrain analysis.'),
+        LogInfo(msg='PCD grid planner: building 2D map live from SLAM /registered_scan slice (map_source=slice).'),
         Node(
             package='pcd_grid_planner',
             executable='pcd_grid_planner',
