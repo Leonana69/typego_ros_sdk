@@ -262,9 +262,31 @@ Send goals via any of these methods:
 
 - **RViz:** Use the goal pose or waypoint RViz plugins
 - **Nav2 action:** `navigate_to_pose` action server
-- **Waypoint service:** Custom waypoints service node
+- **Waypoints:** Place-graph waypoints node (`place_graph_waypoints_node`)
 - **Patrol script:** `python3 scripts/patrol.py --map_name <name> --patrol_list 0,1,2`
 - **Keyboard:** `teleop_keyboard_controller`
+
+### Place-Graph Waypoints
+
+`place_graph_waypoints_node` builds a geometry-only **place graph** from the live occupancy
+grid — segmenting it into rooms, corridors, open areas, portals, junctions, and frontier
+regions — and emits LLM-selectable navigation targets per place. Waypoints are *fixed
+anchors*: once minted, a waypoint keeps its integer `id` and its frozen pose across map
+refreshes until that pose becomes invalid, so a patrol index or an object attached to
+`(id, x, y)` stays stable as the map grows.
+
+Per place it generates: an `entrance` just inside each adjacent doorway; interval `coverage`
+waypoints (every `waypoint_spacing_m`, default 2.0 m) for corridors and large rooms; a single
+`center` for small rooms; a `doorway`/`transition`/`junction` waypoint at each connector; and a
+volatile `frontier` target in unexplored regions. Each `typego_interface/msg/WayPoint` carries
+`place_id` and `waypoint_role` alongside `yaw`, `semantic_context`, `clearance_m`, and
+`source`. The full place graph is published on the latched `place_graph` topic and exposed via
+the gateway's `GET /api/places`; waypoints and the graph persist together in `waypoints.json`
+(schema v3). Semantic (VLM/LLM) labeling is deferred — labels here are geometry-derived.
+
+Useful `place_graph_waypoints_node` parameters include `waypoint_spacing_m`,
+`coverage_min_area_m2`, `entrance_offset_m`, `min_anchor_clearance_m`, `min_refresh_interval_s`,
+`map_change_cell_threshold`, `occupancy_threshold`, and `stale_anchor_retire_refreshes`.
 
 ## Makefile Reference
 

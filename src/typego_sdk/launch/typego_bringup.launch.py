@@ -34,8 +34,6 @@ _DEFAULT_FALLBACKS = {
     'launch_web_gateway': 'true',
     'web_gateway_port': '8080',
     'robot_ip': '',
-    'edge_service_ip': '127.0.0.1',
-    'edge_service_port': '50049',
     'nav2_params_file': 'nav2_params.yaml',
     'slam_params_file': 'slam.yaml',
     # profiles.* — which per-tool tuning YAML each planner loads
@@ -132,8 +130,6 @@ def _load_defaults():
         'launch_web_gateway': ('web_gateway', 'enabled'),
         'web_gateway_port': ('web_gateway', 'port'),
         'robot_ip': ('network', 'robot_ip'),
-        'edge_service_ip': ('network', 'edge_service', 'ip'),
-        'edge_service_port': ('network', 'edge_service', 'port'),
         'nav2_params_file': ('profiles', 'nav2_params_file'),
         'slam_params_file': ('profiles', 'slam_params_file'),
         'local_planner_profile': ('profiles', 'local_planner_profile'),
@@ -214,16 +210,6 @@ ARGUMENTS = [
         'robot_ip',
         default_value=_DEFAULTS['robot_ip'],
         description='Robot LAN IP (network.robot_ip).'
-    ),
-    DeclareLaunchArgument(
-        'edge_service_ip',
-        default_value=_DEFAULTS['edge_service_ip'],
-        description='Edge service IP (network.edge_service.ip).'
-    ),
-    DeclareLaunchArgument(
-        'edge_service_port',
-        default_value=_DEFAULTS['edge_service_port'],
-        description='Edge service TCP port (network.edge_service.port).'
     ),
     DeclareLaunchArgument(
         'nav2_params_file',
@@ -315,6 +301,13 @@ ARGUMENTS = [
         description='If "true", spawns the typego_config service node for '
                     'runtime introspection of robot.yaml.'
     ),
+    DeclareLaunchArgument(
+        'launch_place_graph_viz',
+        default_value='false',
+        description='If "true", spawns typego_place_graph_ros/place_graph_node, '
+                    'which republishes the place-graph segmentation as RViz '
+                    'markers (debug visualization on /place_graph_node/markers).'
+    ),
 ]
 
 
@@ -332,10 +325,6 @@ def generate_launch_description():
             LaunchConfiguration('web_gateway_port'))
         robot_ip = context.perform_substitution(
             LaunchConfiguration('robot_ip'))
-        edge_service_ip = context.perform_substitution(
-            LaunchConfiguration('edge_service_ip'))
-        edge_service_port = context.perform_substitution(
-            LaunchConfiguration('edge_service_port'))
         nav2_params_file = context.perform_substitution(
             LaunchConfiguration('nav2_params_file'))
         slam_params_file = context.perform_substitution(
@@ -370,6 +359,8 @@ def generate_launch_description():
             LaunchConfiguration('cmd_vel_min_angular'))
         launch_config_service = context.perform_substitution(
             LaunchConfiguration('launch_config_service')).lower() == 'true'
+        launch_place_graph_viz = context.perform_substitution(
+            LaunchConfiguration('launch_place_graph_viz')).lower() == 'true'
 
         map_name = slam_map_name[4:] if slam_map_name.startswith('Map-') else slam_map_name
         robot_index = f'robot{robot_id}' if robot_id else ''
@@ -401,7 +392,7 @@ def generate_launch_description():
             }.items(),
         )
 
-        # --- waypoints_service_node ---
+        # --- place_graph_waypoints_node ---
         waypoints_remappings = []
         if robot_index:
             waypoints_remappings = [
@@ -411,13 +402,22 @@ def generate_launch_description():
 
         waypoints_node = Node(
             package='typego_sdk',
-            executable='waypoints_service_node',
+            executable='place_graph_waypoints_node',
             output='screen',
             remappings=waypoints_remappings,
             parameters=[{
                 'slam_map_name': map_name,
-                'edge_service_ip': edge_service_ip,
-                'edge_service_port': int(edge_service_port),
+                'map_topic': 'map',
+            }],
+        )
+
+        # --- place_graph_node (debug RViz visualization of the segmentation) ---
+        place_graph_viz_node = Node(
+            package='typego_place_graph_ros',
+            executable='place_graph_node',
+            output='screen',
+            parameters=[{
+                'map_topic': f'{tf_prefix}/map' if tf_prefix else '/map',
             }],
         )
 
@@ -483,6 +483,9 @@ def generate_launch_description():
             autonomy_launch,
             waypoints_node,
         ]
+
+        if launch_place_graph_viz:
+            actions.append(place_graph_viz_node)
 
         # --- typego_config service node (runtime introspection of robot.yaml) ---
         if launch_config_service:

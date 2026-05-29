@@ -93,7 +93,7 @@ def generate_launch_description():
             launch_arguments=nav2_args.items(),
         )
 
-        # Start waypoints_service_node and Nav2 only after the map topic is ready
+        # Start Nav2 only after the map topic is ready
         post_map_actions = RegisterEventHandler(
             OnProcessExit(
                 target_action=wait_for_map,

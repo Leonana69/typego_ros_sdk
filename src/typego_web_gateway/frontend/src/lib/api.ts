@@ -43,6 +43,12 @@ export interface Waypoint {
   x: number;
   y: number;
   label: string;
+  yaw?: number;
+  semantic_context?: string;
+  confidence?: number;
+  source?: string;
+  clearance_m?: number;
+  generation_reason?: string;
 }
 
 export interface RobotConfigIdentity {

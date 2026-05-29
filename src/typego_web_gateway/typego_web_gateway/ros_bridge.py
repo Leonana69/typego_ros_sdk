@@ -31,7 +31,7 @@ except ImportError:  # older tf2_ros layouts keep it in the submodule
     from tf2_ros.exceptions import TransformException
 
 try:
-    from typego_interface.msg import WayPointArray
+    from typego_interface.msg import PlaceGraph, WayPointArray
     from typego_interface.srv import SetSpeed
     _TYPEGO_INTERFACE = True
 except ImportError:
@@ -70,6 +70,7 @@ class RosBridge(Node):
 
         self._map: Optional[MapSnapshot] = None
         self._waypoints: List[Dict] = []
+        self._place_graph: Dict = {'map_version': '', 'places': []}
         self._pose: Optional[Pose2D] = None
         self._events: Deque[Dict] = deque(maxlen=500)
 
@@ -90,11 +91,15 @@ class RosBridge(Node):
             self._waypoints_sub = self.create_subscription(
                 WayPointArray, 'waypoints', self._on_waypoints, 10,
             )
+            self._place_graph_sub = self.create_subscription(
+                PlaceGraph, 'place_graph', self._on_place_graph, latched,
+            )
             self._speed_client = self.create_client(
                 SetSpeed, 'typego/set_speed',
             )
         else:
             self._waypoints_sub = None
+            self._place_graph_sub = None
             self._speed_client = None
 
         # Optional: typego_config runs separately and may not be up. The
@@ -140,9 +145,48 @@ class RosBridge(Node):
         with self._lock:
             self._waypoints = [
                 {'id': int(wp.id), 'x': float(wp.x), 'y': float(wp.y),
-                 'label': str(wp.label)}
+                 'label': str(wp.label),
+                 'yaw': float(getattr(wp, 'yaw', 0.0)),
+                 'semantic_context': str(getattr(wp, 'semantic_context', '')),
+                 'confidence': float(getattr(wp, 'confidence', 0.0)),
+                 'source': str(getattr(wp, 'source', '')),
+                 'clearance_m': float(getattr(wp, 'clearance_m', 0.0)),
+                 'generation_reason': str(getattr(wp, 'generation_reason', '')),
+                 'place_id': str(getattr(wp, 'place_id', '')),
+                 'waypoint_role': str(getattr(wp, 'waypoint_role', ''))}
                 for wp in msg.waypoints
             ]
+
+    def _on_place_graph(self, msg) -> None:
+        places = []
+        for p in msg.places:
+            places.append({
+                'place_id': str(p.place_id),
+                'kind': str(p.kind),
+                'semantic_label': str(getattr(p, 'semantic_label', '')),
+                'instance_label': str(getattr(p, 'instance_label', '')),
+                'operator_label': str(getattr(p, 'operator_label', '')),
+                'label_locked': bool(getattr(p, 'label_locked', False)),
+                'confidence': float(getattr(p, 'confidence', 0.0)),
+                'source': str(getattr(p, 'source', '')),
+                'centroid': {'x': float(p.centroid_x), 'y': float(p.centroid_y)},
+                'peak': {'x': float(p.peak_x), 'y': float(p.peak_y)},
+                'area_m2': float(p.area_m2),
+                'clearance_m': float(p.clearance_m),
+                'frontier_ratio': float(p.frontier_ratio),
+                'provisional': bool(p.provisional),
+                'stale': bool(p.stale),
+                'approach_yaw': (float(p.approach_yaw)
+                                 if p.has_approach_yaw else None),
+                'width_m': float(p.width_m) if p.has_width_m else None,
+                'adjacent_place_ids': [str(a) for a in p.adjacent_place_ids],
+                'member_waypoint_ids': [int(i) for i in p.member_waypoint_ids],
+            })
+        with self._lock:
+            self._place_graph = {
+                'map_version': str(msg.map_version),
+                'places': places,
+            }
 
     def _on_rosout(self, msg: Log) -> None:
         # rcl_interfaces/Log defines level as `byte`. In rclpy Humble the
@@ -191,6 +235,13 @@ class RosBridge(Node):
     def get_waypoints(self) -> List[Dict]:
         with self._lock:
             return list(self._waypoints)
+
+    def get_place_graph(self) -> Dict:
+        with self._lock:
+            return {
+                'map_version': self._place_graph.get('map_version', ''),
+                'places': list(self._place_graph.get('places', [])),
+            }
 
     def get_events(self, limit: int = 100) -> List[Dict]:
         with self._lock:
