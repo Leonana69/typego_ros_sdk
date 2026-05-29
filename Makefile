@@ -228,7 +228,8 @@ console: $(ROBOT_ENV)
 
 # Save the current SLAM map. Auto-picks the right workflow from AUTONOMY_TYPE
 # (base → slam_toolbox via docker; full → ARISE SLAM on host). All logic
-# lives in scripts/save_map.py.
+# lives in scripts/save_map.py. Pass MODE=base|full to override the autonomy
+# type from robot.yaml (e.g. when the running stack differs from the config).
 .PHONY: save_map
 save_map: SHELL := /bin/bash
 save_map: $(ROBOT_ENV)
@@ -236,7 +237,7 @@ save_map: $(ROBOT_ENV)
 		echo "Error: FILE=<map-name> is required."; exit 1; \
 	fi
 	@set -a; source $(ROBOT_ENV); set +a; \
-	 python3 $(CURDIR)/scripts/save_map.py $(FILE)
+	 python3 $(CURDIR)/scripts/save_map.py $(FILE) $(if $(MODE),--mode $(MODE))
 
 # Reset iox: stop any running RouDi daemon, then clear its lock files and
 # shared memory so the next `iox-roudi` starts clean. Without killing RouDi
