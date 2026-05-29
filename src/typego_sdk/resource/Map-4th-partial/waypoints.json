@@ -1,9 +1,0 @@
-{
-  "version": 2,
-  "waypoints": [
-    {"id": 0, "x": 0.21777, "y": 0.360126, "yaw": 0.0, "label": "room", "semantic_context": "Loaded waypoint labeled room with persisted navigation pose.", "confidence": 0.0, "source": "loaded", "clearance_m": 0.0, "generation_reason": "loaded"},
-    {"id": 1, "x": -2.153, "y": 1.05626, "yaw": 0.0, "label": "room", "semantic_context": "Loaded waypoint labeled room with persisted navigation pose.", "confidence": 0.0, "source": "loaded", "clearance_m": 0.0, "generation_reason": "loaded"},
-    {"id": 2, "x": -1.80355, "y": 3.39175, "yaw": 0.0, "label": "hallway", "semantic_context": "Loaded waypoint labeled hallway with persisted navigation pose.", "confidence": 0.0, "source": "loaded", "clearance_m": 0.0, "generation_reason": "loaded"},
-    {"id": 3, "x": 1.21299, "y": 3.57399, "yaw": 0.0, "label": "hallway", "semantic_context": "Loaded waypoint labeled hallway with persisted navigation pose.", "confidence": 0.0, "source": "loaded", "clearance_m": 0.0, "generation_reason": "loaded"}
-  ]
-}
