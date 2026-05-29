@@ -4,10 +4,10 @@
 Asks for autonomy mode (base/full), and for full mode asks which layer's
 config to load (mirrors MODE=0/1/2 in src/autonomy/real_robot.sh):
 
-    0  base_autonomy        vehicle_simulator.rviz
-    1  route_planner         far_planner/default.rviz
-    2  exploration_planner   tare_planner_ground.rviz
-    3  PCD route planner     pcd_grid_planner/default.rviz
+    0  base_autonomy         vehicle_simulator.rviz
+    1  FAR route planner     far_planner/default.rviz
+    2  PCD grid planner      pcd_grid_planner/default.rviz
+    3  exploration (TARE)    tare_planner_ground.rviz
 
 Base mode runs plain rviz (no -d). Once launched, rviz's stdout/stderr
 streams into the log pane; type `q` + Enter to quit, or `m` + Enter to go
@@ -46,10 +46,10 @@ FULL_CONFIGS = [
      AUTONOMY / "base_autonomy/vehicle_simulator/rviz/vehicle_simulator.rviz"),
     ("1", "FAR route planner",
      AUTONOMY / "route_planner/far_planner/rviz/default.rviz"),
-    ("2", "TARE exploration planner",
-     AUTONOMY / "exploration_planner/tare_planner/rviz/tare_planner_ground.rviz"),
-    ("3", "PCD grid planner",
+    ("2", "PCD grid planner",
      AUTONOMY / "route_planner/pcd_grid_planner/rviz/default.rviz"),
+    ("3", "TARE exploration planner",
+     AUTONOMY / "exploration_planner/tare_planner/rviz/tare_planner_ground.rviz"),
 ]
 
 

@@ -56,7 +56,9 @@ FULL_SUB_OPTIONS = [
         "PCD grid planner",
         "1",
         ("route_planner_backend:=pcd_grid",),
-        True,
+        # Builds its 2D map live from /registered_scan — no saved map required,
+        # so the "new map" option must stay available.
+        False,
     ),
     FullSubOption("3", "TARE exploration planner", "2"),
 ]
