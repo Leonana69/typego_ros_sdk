@@ -304,7 +304,7 @@ ARGUMENTS = [
     DeclareLaunchArgument(
         'launch_place_graph_viz',
         default_value='false',
-        description='If "true", spawns typego_place_graph_ros/place_graph_node, '
+        description='If "true", spawns place_graph_ros/place_graph_node, '
                     'which republishes the place-graph segmentation as RViz '
                     'markers (debug visualization on /place_graph_node/markers).'
     ),
@@ -413,7 +413,7 @@ def generate_launch_description():
 
         # --- place_graph_node (debug RViz visualization of the segmentation) ---
         place_graph_viz_node = Node(
-            package='typego_place_graph_ros',
+            package='place_graph_ros',
             executable='place_graph_node',
             output='screen',
             parameters=[{

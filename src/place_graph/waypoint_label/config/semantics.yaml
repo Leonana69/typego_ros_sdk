@@ -1,0 +1,28 @@
+# Parameters for the semantic_labeler node. Kept here (not in typego_config)
+# because typego_config's pydantic schema forbids unknown fields.
+/**:
+  ros__parameters:
+    camera_topic: /camera/color/image_raw
+    map_frame: map
+    base_frame: base_link
+
+    # VLM backend (OpenAI-compatible /v1). Swap base_url/model for a different
+    # local checkpoint or a cloud endpoint. Set vlm_structured: false for
+    # servers that reject the vLLM guided_json field (e.g. OpenAI/Anthropic).
+    vlm_base_url: http://localhost:8000/v1
+    vlm_model: Qwen2.5-VL-7B-Instruct
+    vlm_api_key: EMPTY
+    vlm_structured: true
+
+    # Capture + selection
+    frame_hz: 2.0          # max kept camera frames per second
+    max_image_px: 1024     # longest edge sent to the VLM
+    min_frames: 3          # frames needed in a region before labeling
+    max_views: 4           # images sent per VLM call
+    forward_dist_m: 2.0    # forward-ray bucketing distance ahead of the robot
+    min_blur: 40.0         # variance-of-Laplacian floor (drop blurry frames)
+
+    # Labeling policy
+    conf_threshold: 0.4    # below this -> source "vlm_lowconf"
+    label_period_s: 5.0    # labeling worker tick
+    cooldown_s: 60.0       # min seconds between attempts on the same place

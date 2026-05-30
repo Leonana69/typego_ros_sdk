@@ -157,14 +157,37 @@ def build_app(
             return p.get('instance_label') or p.get('semantic_label') \
                 or p['place_id']
 
-        lines = ['Places:']
+        # id -> waypoint_role, so the planner can pick a waypoint by role
+        # within the region it chose.
+        wp_role = {int(w['id']): str(w.get('waypoint_role', ''))
+                   for w in bridge.get_waypoints()}
+
+        def wp_str(ids: list) -> str:
+            parts = []
+            for i in ids:
+                r = wp_role.get(int(i), '')
+                parts.append(f"{i}({r})" if r else str(i))
+            return ' '.join(parts) or '-'
+
+        # Region-first block: the planner matches a task to a region via
+        # type / affordances / objects / summary, then picks a waypoint by role.
+        lines = [f"PLACES (map {graph.get('map_version', '')}):", '']
         for p in rooms:
             wps = p.get('member_waypoint_ids', [])
-            state = 'provisional' if p.get('provisional') else 'complete'
+            rtype = p.get('semantic_label') or '?'
+            conf = float(p.get('confidence', 0.0))
             neighbors = ', '.join(sorted(adj.get(p['place_id'], []))) or '-'
+            state = ' provisional' if p.get('provisional') else ''
             lines.append(
-                f"- {label(p)} [{p['kind']}] waypoints {wps} "
-                f"{state} adj: {neighbors}")
+                f"[{p['place_id']}] {label(p)} ({rtype}) conf {conf:.2f}"
+                f"{state}  adj: {neighbors}")
+            if p.get('affordances'):
+                lines.append(f"  for: {', '.join(p['affordances'])}")
+            if p.get('objects'):
+                lines.append(f"  objects: {', '.join(p['objects'])}")
+            if p.get('summary'):
+                lines.append(f"  \"{p['summary']}\"")
+            lines.append(f"  waypoints: {wp_str(wps)}")
         lines.append('')
         lines.append('Portals:')
         for c in portals:

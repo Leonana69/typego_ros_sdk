@@ -15,11 +15,11 @@
 #include <unordered_set>
 #include <vector>
 
-#include "typego_place_graph/types.hpp"
+#include "place_graph/types.hpp"
 
 namespace typego_sdk {
 
-namespace tpg = typego_place_graph;
+namespace tpg = place_graph;
 
 // Volatile (frontier) waypoint IDs live in a reserved high range so they never
 // advance the persistent next_id counter.

@@ -1,0 +1,17 @@
+# Write a semantic label onto a place. The place_graph_waypoints node is the
+# single owner of semantic fields; this service is the only sanctioned write
+# path (a Python VLM labeler must not edit the JSON directly). The node applies
+# the update on its worker thread, re-publishes /place_graph, persists, and lets
+# Phase-6 matching propagate the label across map refreshes.
+string place_id
+string semantic_label     # room TYPE, controlled vocab (e.g. "bedroom")
+string instance_label     # short rich label (e.g. "bedroom with nightstand")
+string[] objects          # salient, task-relevant objects
+string[] affordances      # supported tasks, controlled vocab (e.g. "sleep")
+string summary            # one-sentence natural-language description
+string source             # "vlm" | "vlm_lowconf" | "operator"
+float64 confidence        # [0, 1]
+bool lock                 # operator override: sets operator_label + label_locked
+---
+bool success
+string message            # reason on failure (unknown id, locked, invalid field)

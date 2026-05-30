@@ -3,10 +3,10 @@
 #include <string>
 #include <vector>
 
-#include "typego_place_graph/place_graph.hpp"
+#include "place_graph/place_graph.hpp"
 #include "typego_sdk/waypoint_anchor.hpp"
 
-namespace tpg = typego_place_graph;
+namespace tpg = place_graph;
 using typego_sdk::AnchorRegistry;
 using typego_sdk::Candidate;
 using typego_sdk::PublishedWaypoint;

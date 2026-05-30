@@ -15,7 +15,7 @@ find_package(visualization_msgs REQUIRED)
 find_package(std_msgs REQUIRED)
 find_package(tf2 REQUIRED)
 find_package(ament_index_cpp REQUIRED)
-find_package(typego_place_graph REQUIRED)
+find_package(place_graph REQUIRED)
 find_package(typego_interface REQUIRED)
 
 # Add include directory
@@ -31,7 +31,7 @@ if(BUILD_TESTING)
   # comment the line when this package is in a git repo and when
   # a copyright and license is added to all source files
   set(ament_cmake_cpplint_FOUND TRUE)
-  # uncrustify is skipped (as in typego_place_graph): the project does not
+  # uncrustify is skipped (as in place_graph): the project does not
   # enforce a uniform auto-format across packages.
   set(ament_cmake_uncrustify_FOUND TRUE)
   ament_lint_auto_find_test_dependencies()
@@ -40,7 +40,7 @@ if(BUILD_TESTING)
   ament_add_gtest(test_waypoint_anchor
     test/test_waypoint_anchor.cpp
     src/waypoint_anchor.cpp)
-  ament_target_dependencies(test_waypoint_anchor typego_place_graph)
+  ament_target_dependencies(test_waypoint_anchor place_graph)
 endif()
 
 # ----------- place_graph_waypoints_node -----------
@@ -58,7 +58,7 @@ ament_target_dependencies(place_graph_waypoints_node
   visualization_msgs
   std_msgs
   typego_interface
-  typego_place_graph
+  place_graph
   ament_index_cpp
 )
 if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" AND CMAKE_CXX_COMPILER_VERSION VERSION_LESS "9.0")

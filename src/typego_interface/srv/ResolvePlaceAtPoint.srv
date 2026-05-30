@@ -1,0 +1,9 @@
+# Resolve world points (map frame, meters) to the place_id that owns them,
+# using the place graph's cell assignment grid. This lives in the C++ node
+# because place_id_at_world() needs the cell_region / place_assignment data,
+# which is not published on /place_graph. An empty string at index i means no
+# place owns point (xs[i], ys[i]). xs and ys must have equal length.
+float64[] xs
+float64[] ys
+---
+string[] place_ids

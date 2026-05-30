@@ -6,6 +6,9 @@ string operator_label
 bool label_locked
 float64 confidence
 string source
+string[] objects
+string[] affordances
+string summary
 float64 centroid_x
 float64 centroid_y
 float64 peak_x

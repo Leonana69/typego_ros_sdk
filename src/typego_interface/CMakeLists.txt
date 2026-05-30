@@ -30,9 +30,13 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/WayPointArray.msg"
   "msg/PlaceRegion.msg"
   "msg/PlaceGraph.msg"
+  "msg/PlaceEvent.msg"
+  "msg/PlaceEventArray.msg"
   "msg/CustomPoint.msg"
   "msg/CustomMsg.msg"
   "srv/SetSpeed.srv"
+  "srv/SetPlaceLabel.srv"
+  "srv/ResolvePlaceAtPoint.srv"
   DEPENDENCIES std_msgs
 )
 

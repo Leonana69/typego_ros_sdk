@@ -1,7 +1,7 @@
 // place_graph_waypoints_node
 //
 // Generates LLM-selectable navigation waypoints from the geometry-only
-// typego_place_graph and exposes the place graph itself. Waypoints are
+// place_graph and exposes the place graph itself. Waypoints are
 // "fixed anchors": once minted, an anchor keeps its ID *and* its frozen
 // pose until that pose becomes invalid, so downstream object graphs keyed
 // on (waypoint id, x, y) stay consistent across map refreshes. Semantic
@@ -11,18 +11,21 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cctype>
 #include <chrono>
 #include <cmath>
 #include <condition_variable>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
+#include <future>
 #include <mutex>
 #include <optional>
 #include <string>
 #include <thread>
 #include <unordered_map>
 #include <unordered_set>
+#include <utility>
 #include <vector>
 
 #include <ament_index_cpp/get_package_share_directory.hpp>
@@ -30,21 +33,26 @@
 
 #include <nav_msgs/msg/occupancy_grid.hpp>
 #include <rclcpp/rclcpp.hpp>
+#include <rclcpp/executors/multi_threaded_executor.hpp>
 #include <visualization_msgs/msg/marker.hpp>
 #include <visualization_msgs/msg/marker_array.hpp>
 
+#include "typego_interface/msg/place_event.hpp"
+#include "typego_interface/msg/place_event_array.hpp"
 #include "typego_interface/msg/place_graph.hpp"
 #include "typego_interface/msg/place_region.hpp"
 #include "typego_interface/msg/way_point.hpp"
 #include "typego_interface/msg/way_point_array.hpp"
+#include "typego_interface/srv/resolve_place_at_point.hpp"
+#include "typego_interface/srv/set_place_label.hpp"
 
-#include "typego_place_graph/matching.hpp"
-#include "typego_place_graph/place_graph.hpp"
+#include "place_graph/matching.hpp"
+#include "place_graph/place_graph.hpp"
 
 #include "typego_sdk/namespace_utils.hpp"
 #include "typego_sdk/waypoint_anchor.hpp"
 
-namespace tpg = typego_place_graph;
+namespace tpg = place_graph;
 using json = nlohmann::json;
 using typego_sdk::AnchorRecord;
 using typego_sdk::AnchorRegistry;
@@ -73,6 +81,71 @@ std::pair<double, double> cell_to_world(const tpg::PlaceGraphSnapshot& g,
             g.origin_y + (cy + 0.5) * g.resolution_m};
 }
 
+const char* event_kind_to_string(tpg::PlaceEventKind k) {
+    switch (k) {
+        case tpg::PlaceEventKind::kBirth: return "birth";
+        case tpg::PlaceEventKind::kSplit: return "split";
+        case tpg::PlaceEventKind::kMerge: return "merge";
+        case tpg::PlaceEventKind::kDeath: return "death";
+        case tpg::PlaceEventKind::kRefresh: return "refresh";
+        case tpg::PlaceEventKind::kProvisionalCleared:
+            return "provisional_cleared";
+    }
+    return "unknown";
+}
+
+// Trim surrounding whitespace and lowercase.
+std::string normalize_token(const std::string& s) {
+    std::size_t b = s.find_first_not_of(" \t\n\r");
+    if (b == std::string::npos) return "";
+    std::size_t e = s.find_last_not_of(" \t\n\r");
+    std::string t = s.substr(b, e - b + 1);
+    for (char& c : t)
+        c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    return t;
+}
+
+std::string clip_len(const std::string& s, std::size_t n) {
+    return s.size() <= n ? s : s.substr(0, n);
+}
+
+// Controlled vocabularies (kept in sync with doc/semantic.md). semantic_label
+// outside the room-type vocab is mapped to "unknown"; affordances outside the
+// vocab are dropped.
+const std::unordered_set<std::string>& room_type_vocab() {
+    static const std::unordered_set<std::string> v = {
+        "bedroom", "living_room", "kitchen", "dining_room", "bathroom",
+        "toilet", "office", "study", "meeting_room", "hallway", "corridor",
+        "foyer", "entryway", "closet", "storage", "pantry", "laundry_room",
+        "garage", "lobby", "open_area", "unknown"};
+    return v;
+}
+const std::unordered_set<std::string>& affordance_vocab() {
+    static const std::unordered_set<std::string> v = {
+        "sleep", "rest", "cook", "make_beverages", "eat", "wash", "toilet",
+        "work", "meet", "transit", "wait", "store", "seating",
+        "entertainment", "plant_care"};
+    return v;
+}
+
+// Trim/lowercase/dedupe a token list; if `vocab` is non-null drop tokens not in
+// it; cap to `max_n`.
+std::vector<std::string> normalize_list(
+    const std::vector<std::string>& in, std::size_t max_n,
+    const std::unordered_set<std::string>* vocab) {
+    std::vector<std::string> out;
+    std::unordered_set<std::string> seen;
+    for (const auto& raw : in) {
+        std::string t = normalize_token(raw);
+        if (t.empty()) continue;
+        if (vocab && !vocab->count(t)) continue;
+        if (!seen.insert(t).second) continue;
+        out.push_back(std::move(t));
+        if (out.size() >= max_n) break;
+    }
+    return out;
+}
+
 }  // namespace
 
 class PlaceGraphWaypointsNode : public rclcpp::Node {
@@ -97,6 +170,28 @@ class PlaceGraphWaypointsNode : public rclcpp::Node {
         marker_pub_ =
             create_publisher<visualization_msgs::msg::MarkerArray>(
                 "waypoint_markers", latched);
+        // Events are transient happenings, not state: a normal (non-latched)
+        // queue so late subscribers don't replay stale births.
+        events_pub_ =
+            create_publisher<typego_interface::msg::PlaceEventArray>(
+                "typego/place_events", rclcpp::QoS(10));
+
+        // Services run in a reentrant group so a SetPlaceLabel call that blocks
+        // on the worker (to report real application) does not stall map intake
+        // under the multi-threaded executor.
+        service_cb_group_ =
+            create_callback_group(rclcpp::CallbackGroupType::Reentrant);
+        set_label_srv_ = create_service<typego_interface::srv::SetPlaceLabel>(
+            "typego/set_place_label",
+            std::bind(&PlaceGraphWaypointsNode::on_set_label, this,
+                      std::placeholders::_1, std::placeholders::_2),
+            rmw_qos_profile_services_default, service_cb_group_);
+        resolve_srv_ =
+            create_service<typego_interface::srv::ResolvePlaceAtPoint>(
+                "typego/resolve_place_at_point",
+                std::bind(&PlaceGraphWaypointsNode::on_resolve, this,
+                          std::placeholders::_1, std::placeholders::_2),
+                rmw_qos_profile_services_default, service_cb_group_);
 
         load_persisted();
 
@@ -202,14 +297,23 @@ class PlaceGraphWaypointsNode : public rclcpp::Node {
         bool have_processed = false;
         while (!stop_) {
             nav_msgs::msg::OccupancyGrid::SharedPtr grid;
+            std::vector<LabelRequest> labels;
             {
                 std::unique_lock<std::mutex> lk(pending_mutex_);
-                cv_.wait(lk, [&] { return stop_ || pending_map_ != nullptr; });
+                cv_.wait(lk, [&] {
+                    return stop_ || pending_map_ != nullptr ||
+                           !pending_labels_.empty();
+                });
                 if (stop_) break;
                 grid = pending_map_;
                 pending_map_ = nullptr;
+                labels.swap(pending_labels_);
             }
-            if (!grid) continue;
+
+            // Apply label writes promptly, independent of map processing, so a
+            // label-only update does not wait for the next /map.
+            if (!labels.empty()) apply_labels(labels);
+            if (!grid) continue;  // label-only wake
 
             tpg::MapSnapshot snap = to_snapshot(*grid);
             std::size_t changed = count_changed(snap);
@@ -245,14 +349,11 @@ class PlaceGraphWaypointsNode : public rclcpp::Node {
 
     void process(const tpg::MapSnapshot& snap) {
         tpg::PlaceGraphSnapshot fresh = tpg::build_place_graph(snap, cfg_);
-        tpg::PlaceGraphSnapshot matched;
-        if (have_prev_) {
-            tpg::MatchResult mr =
-                tpg::match_place_graphs(prev_, fresh, cfg_);
-            matched = std::move(mr.snapshot);
-        } else {
-            matched = std::move(fresh);
-        }
+        // Always match — match_place_graphs accepts an empty prev (first graph
+        // or fresh start), in which case every place is a birth. This both
+        // mints stable IDs and gives us the PlaceEvent stream on run one.
+        tpg::MatchResult mr = tpg::match_place_graphs(prev_, fresh, cfg_);
+        tpg::PlaceGraphSnapshot matched = std::move(mr.snapshot);
         prev_ = matched;
         have_prev_ = true;
 
@@ -268,6 +369,152 @@ class PlaceGraphWaypointsNode : public rclcpp::Node {
         publish_graph(matched, members);
         publish_markers(published);
         persist(matched, published, members);
+        publish_events(mr.events, matched.map_version);
+
+        // Cache so a label-only update can re-publish/persist without a map,
+        // and refresh the read-only snapshot used by ResolvePlaceAtPoint.
+        last_published_ = std::move(published);
+        last_members_ = std::move(members);
+        refresh_pub_snapshot();
+    }
+
+    // ----- semantic labels + place resolution -----
+
+    // Pending semantic-label writes, applied on the worker thread so the
+    // worker-owned prev_ is never touched off-thread.
+    struct LabelRequest {
+        std::shared_ptr<typego_interface::srv::SetPlaceLabel::Request> req;
+        std::promise<std::pair<bool, std::string>> done;
+    };
+
+    void on_set_label(
+        const std::shared_ptr<typego_interface::srv::SetPlaceLabel::Request> req,
+        std::shared_ptr<typego_interface::srv::SetPlaceLabel::Response> res) {
+        std::promise<std::pair<bool, std::string>> pr;
+        auto fut = pr.get_future();
+        {
+            std::lock_guard<std::mutex> lk(pending_mutex_);
+            pending_labels_.push_back({req, std::move(pr)});
+        }
+        cv_.notify_one();
+        // Block until the worker applies (or times out), so success/message
+        // reflect the actual outcome rather than mere receipt.
+        if (fut.wait_for(std::chrono::seconds(5)) ==
+            std::future_status::ready) {
+            auto [ok, msg] = fut.get();
+            res->success = ok;
+            res->message = msg;
+        } else {
+            res->success = false;
+            res->message = "timed out applying label";
+        }
+    }
+
+    void apply_labels(std::vector<LabelRequest>& labels) {
+        bool any = false;
+        for (auto& lr : labels) {
+            const auto& req = *lr.req;
+            tpg::PlaceRegion* place = nullptr;
+            for (auto& p : prev_.places)
+                if (p.place_id == req.place_id) { place = &p; break; }
+            if (!place) {
+                lr.done.set_value(
+                    {false, "unknown place_id: " + req.place_id});
+                continue;
+            }
+            if (place->label_locked && normalize_token(req.source) != "operator") {
+                lr.done.set_value({false, "place label locked by operator"});
+                continue;
+            }
+            // Monotonic confidence: a lower-confidence VLM pass must not clobber
+            // a more-confident existing VLM label (operator writes bypass this).
+            if (!req.lock && normalize_token(req.source) != "operator" &&
+                (place->source == "vlm" || place->source == "vlm_lowconf") &&
+                req.confidence < place->confidence) {
+                lr.done.set_value({false, "existing label more confident"});
+                continue;
+            }
+            apply_one_label(*place, req);
+            any = true;
+            lr.done.set_value({true, ""});
+        }
+        if (any) {
+            // Re-publish/persist the updated graph using the cached waypoint
+            // outputs (geometry is unchanged by a label write).
+            publish_graph(prev_, last_members_);
+            persist(prev_, last_published_, last_members_);
+            refresh_pub_snapshot();
+        }
+    }
+
+    void apply_one_label(
+        tpg::PlaceRegion& p,
+        const typego_interface::srv::SetPlaceLabel::Request& req) {
+        std::string type = normalize_token(req.semantic_label);
+        if (!type.empty() && !room_type_vocab().count(type)) type = "unknown";
+        p.semantic_label = type;
+        p.instance_label = clip_len(req.instance_label, 200);
+        p.summary = clip_len(req.summary, 500);
+        p.objects = normalize_list(req.objects, 32, nullptr);
+        p.affordances = normalize_list(req.affordances, 32, &affordance_vocab());
+        p.confidence = std::clamp(req.confidence, 0.0, 1.0);
+        std::string src = normalize_token(req.source);
+        if (src != "vlm" && src != "vlm_lowconf" && src != "operator")
+            src = "vlm";
+        if (req.lock) {
+            p.operator_label = !p.instance_label.empty()
+                                   ? p.instance_label
+                                   : (!p.semantic_label.empty()
+                                          ? p.semantic_label
+                                          : p.operator_label);
+            p.label_locked = true;
+            p.source = "operator";
+        } else {
+            p.source = src;
+        }
+    }
+
+    void on_resolve(
+        const std::shared_ptr<
+            typego_interface::srv::ResolvePlaceAtPoint::Request> req,
+        std::shared_ptr<typego_interface::srv::ResolvePlaceAtPoint::Response>
+            res) {
+        std::shared_ptr<const tpg::PlaceGraphSnapshot> snap;
+        {
+            std::lock_guard<std::mutex> lk(snap_mutex_);
+            snap = pub_snapshot_;
+        }
+        std::size_t n = std::min(req->xs.size(), req->ys.size());
+        res->place_ids.assign(n, std::string());
+        if (!snap) return;  // no graph yet -> all empty
+        for (std::size_t i = 0; i < n; ++i) {
+            const std::string* id =
+                snap->place_id_at_world(req->xs[i], req->ys[i]);
+            if (id) res->place_ids[i] = *id;
+        }
+    }
+
+    void refresh_pub_snapshot() {
+        auto copy = std::make_shared<tpg::PlaceGraphSnapshot>(prev_);
+        std::lock_guard<std::mutex> lk(snap_mutex_);
+        pub_snapshot_ = std::move(copy);
+    }
+
+    void publish_events(const std::vector<tpg::PlaceEvent>& events,
+                        const std::string& map_version) {
+        if (events.empty()) return;
+        typego_interface::msg::PlaceEventArray arr;
+        arr.header.frame_id = map_frame_;
+        arr.header.stamp = now();
+        arr.map_version = map_version;
+        for (const auto& e : events) {
+            typego_interface::msg::PlaceEvent m;
+            m.kind = event_kind_to_string(e.kind);
+            m.old_ids = e.old_ids;
+            m.new_ids = e.new_ids;
+            arr.events.push_back(std::move(m));
+        }
+        events_pub_->publish(arr);
     }
 
     // ----- candidate generation -----
@@ -617,6 +864,9 @@ class PlaceGraphWaypointsNode : public rclcpp::Node {
             r.label_locked = p.label_locked;
             r.confidence = p.confidence;
             r.source = p.source;
+            r.objects = p.objects;
+            r.affordances = p.affordances;
+            r.summary = p.summary;
             r.centroid_x = p.centroid.x;
             r.centroid_y = p.centroid.y;
             r.peak_x = p.peak.x;
@@ -750,6 +1000,9 @@ class PlaceGraphWaypointsNode : public rclcpp::Node {
                 {"label_locked", p.label_locked},
                 {"confidence", p.confidence},
                 {"source", p.source},
+                {"objects", p.objects},
+                {"affordances", p.affordances},
+                {"summary", p.summary},
                 {"centroid", {{"x", p.centroid.x}, {"y", p.centroid.y}}},
                 {"peak", {{"x", p.peak.x}, {"y", p.peak.y}}},
                 {"area_m2", p.area_m2},
@@ -808,6 +1061,9 @@ class PlaceGraphWaypointsNode : public rclcpp::Node {
                 {"label_locked", p.label_locked},
                 {"confidence", p.confidence},
                 {"source", p.source},
+                {"objects", p.objects},
+                {"affordances", p.affordances},
+                {"summary", p.summary},
                 {"centroid_x", p.centroid.x},
                 {"centroid_y", p.centroid.y},
                 {"peak_x", p.peak.x},
@@ -906,6 +1162,10 @@ class PlaceGraphWaypointsNode : public rclcpp::Node {
                 p.label_locked = jp.value("label_locked", false);
                 p.confidence = jp.value("confidence", 0.0);
                 p.source = jp.value("source", "map");
+                p.objects = jp.value("objects", std::vector<std::string>{});
+                p.affordances =
+                    jp.value("affordances", std::vector<std::string>{});
+                p.summary = jp.value("summary", "");
                 p.centroid.x = jp.value("centroid_x", 0.0);
                 p.centroid.y = jp.value("centroid_y", 0.0);
                 p.peak.x = jp.value("peak_x", 0.0);
@@ -974,23 +1234,44 @@ class PlaceGraphWaypointsNode : public rclcpp::Node {
     rclcpp::Publisher<typego_interface::msg::PlaceGraph>::SharedPtr graph_pub_;
     rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr
         marker_pub_;
+    rclcpp::Publisher<typego_interface::msg::PlaceEventArray>::SharedPtr
+        events_pub_;
+    rclcpp::CallbackGroup::SharedPtr service_cb_group_;
+    rclcpp::Service<typego_interface::srv::SetPlaceLabel>::SharedPtr
+        set_label_srv_;
+    rclcpp::Service<typego_interface::srv::ResolvePlaceAtPoint>::SharedPtr
+        resolve_srv_;
 
     std::thread worker_;
     std::atomic<bool> stop_{false};
     std::condition_variable cv_;
     std::mutex pending_mutex_;
     nav_msgs::msg::OccupancyGrid::SharedPtr pending_map_;
+    std::vector<LabelRequest> pending_labels_;  // guarded by pending_mutex_
     std::vector<tpg::CellState> last_cells_;
 
     // Worker-thread-owned (no lock needed; only the worker touches these).
     tpg::PlaceGraphSnapshot prev_;
     bool have_prev_ = false;
     AnchorRegistry registry_;
+    // Cached last outputs so a label-only write can re-publish/persist.
+    std::vector<PublishedWaypoint> last_published_;
+    std::unordered_map<std::string, std::vector<std::uint32_t>> last_members_;
+
+    // Immutable snapshot copy for ResolvePlaceAtPoint reads off the worker
+    // thread (guarded by snap_mutex_).
+    std::mutex snap_mutex_;
+    std::shared_ptr<const tpg::PlaceGraphSnapshot> pub_snapshot_;
 };
 
 int main(int argc, char** argv) {
     rclcpp::init(argc, argv);
-    rclcpp::spin(std::make_shared<PlaceGraphWaypointsNode>());
+    // Multi-threaded so a SetPlaceLabel call that blocks on the worker (to
+    // return a real apply result) does not stall the map subscription.
+    rclcpp::executors::MultiThreadedExecutor exec;
+    auto node = std::make_shared<PlaceGraphWaypointsNode>();
+    exec.add_node(node);
+    exec.spin();
     rclcpp::shutdown();
     return 0;
 }
