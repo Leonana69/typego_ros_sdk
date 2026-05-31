@@ -308,6 +308,13 @@ ARGUMENTS = [
                     'which republishes the place-graph segmentation as RViz '
                     'markers (debug visualization on /place_graph_node/markers).'
     ),
+    DeclareLaunchArgument(
+        'launch_semantics',
+        default_value='true',
+        description='If "true", spawns waypoint_label/semantic_labeler_node, '
+                    'which labels place-graph regions via the qwenvl VLM '
+                    '(endpoint from robot.yaml network.edge_service).'
+    ),
 ]
 
 
@@ -361,6 +368,8 @@ def generate_launch_description():
             LaunchConfiguration('launch_config_service')).lower() == 'true'
         launch_place_graph_viz = context.perform_substitution(
             LaunchConfiguration('launch_place_graph_viz')).lower() == 'true'
+        launch_semantics = context.perform_substitution(
+            LaunchConfiguration('launch_semantics')).lower() == 'true'
 
         map_name = slam_map_name[4:] if slam_map_name.startswith('Map-') else slam_map_name
         robot_index = f'robot{robot_id}' if robot_id else ''
@@ -486,6 +495,40 @@ def generate_launch_description():
 
         if launch_place_graph_viz:
             actions.append(place_graph_viz_node)
+
+        # --- semantic_labeler_node (VLM region labeling) ---
+        if launch_semantics:
+            try:
+                sem_pkg = get_package_share_directory('waypoint_label')
+            except Exception as exc:  # package not built yet — skip with a log
+                actions.append(LogInfo(
+                    msg=f'waypoint_label share dir not found ({exc}); '
+                        'skipping semantic labeler.'
+                ))
+            else:
+                # qwenvl /process endpoint from robot.yaml network.edge_service;
+                # an empty string lets the node fall back to $EDGE_SERVICE_IP /
+                # localhost (make console/launch export those from robot.yaml).
+                edge = _dig(_ROBOT_YAML_RAW, 'network', 'edge_service') or {}
+                vlm_ip = str((edge.get('ip') if isinstance(edge, dict)
+                              else '') or '').strip()
+                vlm_port = str((edge.get('port') if isinstance(edge, dict)
+                                else '') or '50049').strip()
+                vlm_endpoint = (
+                    f'http://{vlm_ip}:{vlm_port}/process' if vlm_ip else '')
+                sem_cfg = os.path.join(sem_pkg, 'config', 'semantics.yaml')
+                actions.append(Node(
+                    package='waypoint_label',
+                    executable='semantic_labeler_node',
+                    name='semantic_labeler',
+                    output='screen',
+                    remappings=waypoints_remappings,
+                    # The YAML file sets defaults; the inline dict applied after
+                    # overrides vlm_endpoint with the robot.yaml-derived value.
+                    parameters=[sem_cfg, {
+                        'vlm_endpoint': vlm_endpoint,
+                    }],
+                ))
 
         # --- typego_config service node (runtime introspection of robot.yaml) ---
         if launch_config_service:
