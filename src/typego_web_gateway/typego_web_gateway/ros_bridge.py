@@ -177,6 +177,9 @@ class RosBridge(Node):
                 'area_m2': float(p.area_m2),
                 'clearance_m': float(p.clearance_m),
                 'frontier_ratio': float(p.frontier_ratio),
+                'elongation': float(getattr(p, 'elongation', 1.0)),
+                'extent_long_m': float(getattr(p, 'extent_long_m', 0.0)),
+                'extent_short_m': float(getattr(p, 'extent_short_m', 0.0)),
                 'provisional': bool(p.provisional),
                 'stale': bool(p.stale),
                 'approach_yaw': (float(p.approach_yaw)

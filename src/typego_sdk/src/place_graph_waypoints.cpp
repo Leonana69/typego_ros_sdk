@@ -874,6 +874,9 @@ class PlaceGraphWaypointsNode : public rclcpp::Node {
             r.area_m2 = p.area_m2;
             r.clearance_m = p.clearance_m;
             r.frontier_ratio = p.frontier_ratio;
+            r.elongation = p.elongation;
+            r.extent_long_m = p.extent_long_m;
+            r.extent_short_m = p.extent_short_m;
             r.provisional = p.provisional;
             r.stale = p.stale;
             r.has_approach_yaw = p.approach_yaw.has_value();
@@ -1008,6 +1011,9 @@ class PlaceGraphWaypointsNode : public rclcpp::Node {
                 {"area_m2", p.area_m2},
                 {"clearance_m", p.clearance_m},
                 {"frontier_ratio", p.frontier_ratio},
+                {"elongation", p.elongation},
+                {"extent_long_m", p.extent_long_m},
+                {"extent_short_m", p.extent_short_m},
                 {"provisional", p.provisional},
                 {"stale", p.stale},
                 {"adjacent_place_ids", p.adjacent_place_ids},
@@ -1071,6 +1077,9 @@ class PlaceGraphWaypointsNode : public rclcpp::Node {
                 {"area_m2", p.area_m2},
                 {"clearance_m", p.clearance_m},
                 {"frontier_ratio", p.frontier_ratio},
+                {"elongation", p.elongation},
+                {"extent_long_m", p.extent_long_m},
+                {"extent_short_m", p.extent_short_m},
                 {"provisional", p.provisional},
                 {"stale", p.stale},
                 {"age_refreshes", p.age_refreshes},
@@ -1173,6 +1182,9 @@ class PlaceGraphWaypointsNode : public rclcpp::Node {
                 p.area_m2 = jp.value("area_m2", 0.0);
                 p.clearance_m = jp.value("clearance_m", 0.0);
                 p.frontier_ratio = jp.value("frontier_ratio", 0.0);
+                p.elongation = jp.value("elongation", 1.0);
+                p.extent_long_m = jp.value("extent_long_m", 0.0);
+                p.extent_short_m = jp.value("extent_short_m", 0.0);
                 p.provisional = jp.value("provisional", false);
                 p.stale = jp.value("stale", false);
                 p.age_refreshes = jp.value("age_refreshes", 0);

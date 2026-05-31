@@ -181,6 +181,13 @@ def build_app(
             lines.append(
                 f"[{p['place_id']}] {label(p)} ({rtype}) conf {conf:.2f}"
                 f"{state}  adj: {neighbors}")
+            elong = float(p.get('elongation', 1.0))
+            ext_l, ext_s = (float(p.get('extent_long_m', 0.0)),
+                            float(p.get('extent_short_m', 0.0)))
+            shape = f"  shape: {p.get('kind', '?')}, elongation {elong:.1f}:1"
+            if ext_s >= 0.1:
+                shape += f" (~{ext_l:.1f} x {ext_s:.1f} m)"
+            lines.append(shape)
             if p.get('affordances'):
                 lines.append(f"  for: {', '.join(p['affordances'])}")
             if p.get('objects'):

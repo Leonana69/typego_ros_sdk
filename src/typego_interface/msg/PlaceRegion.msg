@@ -16,6 +16,9 @@ float64 peak_y
 float64 area_m2
 float64 clearance_m
 float64 frontier_ratio
+float64 elongation
+float64 extent_long_m
+float64 extent_short_m
 bool provisional
 bool stale
 bool has_approach_yaw

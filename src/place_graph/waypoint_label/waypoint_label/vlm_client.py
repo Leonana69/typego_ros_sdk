@@ -97,8 +97,10 @@ class VlmClient:
             'fields: semantic_label (string), instance_label (string), objects '
             '(array of strings), affordances (array of strings), summary '
             '(string), confidence (number 0-1).')
+        # geom_hint goes right after the header so the shape cue isn't buried
+        # under the output-format boilerplate; it is self-scoped to shape only.
         return '\n'.join(s for s in
-                         (PROMPT_HEADER, instr, vocab, fields, geom_hint) if s)
+                         (PROMPT_HEADER, geom_hint, instr, vocab, fields) if s)
 
     def _post(self, meta, image_jpeg):
         boundary = '----placegraph' + uuid.uuid4().hex

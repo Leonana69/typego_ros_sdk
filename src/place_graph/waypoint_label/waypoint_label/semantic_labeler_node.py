@@ -128,6 +128,9 @@ class SemanticLabeler(Node):
                 'label_locked': bool(pl.label_locked),
                 'provisional': bool(pl.provisional),
                 'area_m2': float(pl.area_m2),
+                'elongation': float(pl.elongation),
+                'extent_long_m': float(pl.extent_long_m),
+                'extent_short_m': float(pl.extent_short_m),
             }
         with self._graph_lock:
             self._places = places
@@ -212,6 +215,39 @@ class SemanticLabeler(Node):
                 buckets.setdefault(pid, []).append(f)
         return buckets
 
+    @staticmethod
+    def _geom_hint(place):
+        """A shape-first geometry sentence for the VLM prompt. Authority is
+        scoped to region shape only (never the visible objects), so the model
+        still reads objects/affordances from the images. The elongation is a
+        rotation-invariant length/width ratio computed from the map, so it
+        separates a long hallway from a same-area square office even when both
+        look alike in the camera views."""
+        elong = float(place.get('elongation', 1.0))
+        length = float(place.get('extent_long_m', 0.0))
+        width = float(place.get('extent_short_m', 0.0))
+        if elong >= 3.0:
+            shape = ('long and narrow (a corridor/hallway shape) — label it a '
+                     'hallway or corridor even if chairs, desks, or other '
+                     'furniture are visible, since rooms are not this elongated')
+        elif elong >= 1.8:
+            shape = ('somewhat elongated, between a room and a corridor — weigh '
+                     'the visible contents')
+        else:
+            shape = ('roughly square/compact (a room shape), consistent with an '
+                     'office, bedroom, or similar enclosed room rather than a '
+                     'corridor')
+        if width >= 0.1:
+            desc = (f'roughly {length:.1f} m long by {width:.1f} m wide, '
+                    f'elongation {elong:.1f}:1')
+        else:
+            desc = f'elongation {elong:.1f}:1'
+        return (f'Map geometry, authoritative for region shape (not for the '
+                f'visible objects): {desc}, area {place["area_m2"]:.0f} m^2, '
+                f'segmenter kind={place["kind"]}. The region is {shape}. Use the '
+                f'shape to disambiguate visually similar spaces; still read the '
+                f'objects and affordances from the images.')
+
     def _label_place(self, pid, place, frames):
         views = select_diverse(frames, self.max_views, self.min_blur)
         if not views:
@@ -220,8 +256,7 @@ class SemanticLabeler(Node):
         image = montage_jpeg([f.img for f in views], self.max_image_px)
         if image is None:
             return
-        hint = (f"Map geometry: kind={place['kind']}, "
-                f"area={place['area_m2']:.0f} m^2.")
+        hint = self._geom_hint(place)
         self.get_logger().info(f'labeling {pid} from {len(views)} views...')
         result = self.vlm.label_region(image, hint)
         if not result:

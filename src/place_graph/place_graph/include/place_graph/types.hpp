@@ -104,6 +104,15 @@ struct PlaceRegion {
     double area_m2 = 0.0;
     double clearance_m = 0.0;
     double frontier_ratio = 0.0;
+    // Rotation-invariant shape descriptors of the final cell_region, used to
+    // distinguish elongated regions (corridors/hallways) from compact ones
+    // (rooms) for both kind classification and the VLM labeling hint.
+    // elongation = max(PCA major/minor axis ratio, ribbon area/(4*clearance^2)),
+    // clamped to [1, 20]; 1.0 = square/round. extent_long/short_m are the
+    // human-readable length/width derived from the clearance ribbon model.
+    double elongation = 1.0;
+    double extent_long_m = 0.0;
+    double extent_short_m = 0.0;
     bool provisional = false;
 
     // For connectors: enumerates the endpoint place_ids. For non-

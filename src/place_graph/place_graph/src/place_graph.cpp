@@ -188,17 +188,50 @@ PlaceGraphSnapshot build_place_graph(const MapSnapshot& map,
         p.cell_region = std::move(cells_of[pi]);
         p.area_m2 = p.cell_region.size() * cell_area;
         if (!p.cell_region.empty()) {
-            double sx = 0, sy = 0;
-            for (const auto& c : p.cell_region) { sx += c.x; sy += c.y; }
+            const double n = static_cast<double>(p.cell_region.size());
+            double sx = 0, sy = 0, sxx = 0, syy = 0, sxy = 0;
+            for (const auto& c : p.cell_region) {
+                double cx = c.x, cy = c.y;
+                sx += cx; sy += cy;
+                sxx += cx * cx; syy += cy * cy; sxy += cx * cy;
+            }
             // Connectors already have an explicit centroid; keep it.
             if (p.centroid.x == 0.0 && p.centroid.y == 0.0) {
                 p.centroid.x = cell_to_world_x(
-                    static_cast<int>(sx / p.cell_region.size()),
-                    seg.origin_x, seg.resolution_m);
+                    static_cast<int>(sx / n), seg.origin_x, seg.resolution_m);
                 p.centroid.y = cell_to_world_y(
-                    static_cast<int>(sy / p.cell_region.size()),
-                    seg.origin_y, seg.resolution_m);
+                    static_cast<int>(sy / n), seg.origin_y, seg.resolution_m);
             }
+            // Rotation-invariant elongation of the cell cloud. Two estimators,
+            // max-combined so a corridor trips if either is confident: PCA
+            // underestimates sharp L-bends, the clearance ribbon underestimates
+            // corridors with a wide bulge.
+            double pca_elong = 1.0;
+            if (p.cell_region.size() >= 3) {
+                double mx = sx / n, my = sy / n;
+                double cxx = sxx / n - mx * mx;
+                double cyy = syy / n - my * my;
+                double cxy = sxy / n - mx * my;
+                double tr = cxx + cyy;
+                double det = cxx * cyy - cxy * cxy;
+                double disc = std::sqrt(std::max(0.0, tr * tr / 4.0 - det));
+                double l_major = tr / 2.0 + disc;
+                double l_minor = tr / 2.0 - disc;
+                if (l_minor > 1e-9) pca_elong = std::sqrt(l_major / l_minor);
+            }
+            // Ribbon model: width ~= 2*clearance, length ~= area / width.
+            // clearance_m is the opened-core distance-transform max; the core
+            // seed sits at the free component's widest interior point, so it is
+            // a valid proxy for the final region's half-width (connector carving
+            // only trims narrow doorway cells far from that maximum).
+            p.extent_short_m = 2.0 * p.clearance_m;
+            double clearance_elong = 1.0;
+            if (p.extent_short_m > 1e-6) {
+                p.extent_long_m = p.area_m2 / p.extent_short_m;
+                clearance_elong = p.extent_long_m / p.extent_short_m;
+            }
+            p.elongation = std::max(
+                1.0, std::min(20.0, std::max(pca_elong, clearance_elong)));
         }
         p.frontier_ratio =
             perimeter[pi] > 0
@@ -215,11 +248,19 @@ PlaceGraphSnapshot build_place_graph(const MapSnapshot& map,
             p.kind == PlaceKind::kOpenArea) {
             int bw = bbox_maxx[pi] - bbox_minx[pi] + 1;
             int bh = bbox_maxy[pi] - bbox_miny[pi] + 1;
-            double aspect = static_cast<double>(std::max(bw, bh)) /
-                            std::max(1, std::min(bw, bh));
+            double bbox_aspect = static_cast<double>(std::max(bw, bh)) /
+                                 std::max(1, std::min(bw, bh));
             PlaceKind k = PlaceKind::kRoom;
-            if (p.area_m2 >= cfg.a_open_m2) k = PlaceKind::kOpenArea;
-            else if (aspect >= cfg.corridor_aspect) k = PlaceKind::kCorridor;
+            if (p.area_m2 >= cfg.a_open_m2) {
+                k = PlaceKind::kOpenArea;
+            } else if (p.elongation >= cfg.corridor_aspect ||
+                       bbox_aspect >= cfg.corridor_aspect) {
+                // Additive vs the old axis-aligned bbox test: the rotation-
+                // invariant elongation also catches diagonal/wide corridors the
+                // bbox aspect misses, while the bbox term preserves every
+                // corridor the old classifier would have assigned.
+                k = PlaceKind::kCorridor;
+            }
             // Keep the original ID prefix even if the kind shifts;
             // matching will re-mint or refresh as needed. Just update
             // the kind in place.
