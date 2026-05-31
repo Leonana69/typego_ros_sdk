@@ -11,6 +11,7 @@ keeps spinning (and completing service futures) on the main thread.
 """
 from __future__ import annotations
 
+import os
 import threading
 import time
 
@@ -29,8 +30,8 @@ from typego_interface.msg import PlaceGraph
 from typego_interface.srv import ResolvePlaceAtPoint, SetPlaceLabel
 
 from waypoint_label.frame_buffer import (Frame, FrameRing, blur_score,
-                                           encode_jpeg_b64, forward_point,
-                                           image_to_rgb, select_diverse,
+                                           forward_point, image_to_rgb,
+                                           montage_jpeg, select_diverse,
                                            yaw_from_quat)
 from waypoint_label.vlm_client import VlmClient
 
@@ -51,10 +52,10 @@ class SemanticLabeler(Node):
         self.camera_topic = p('camera_topic', '/camera/color/image_raw')
         self.map_frame = p('map_frame', 'map')
         self.base_frame = p('base_frame', 'base_link')
-        base_url = p('vlm_base_url', 'http://localhost:8000/v1')
-        model = p('vlm_model', 'Qwen2.5-VL-7B-Instruct')
-        api_key = p('vlm_api_key', 'EMPTY')
-        structured = bool(p('vlm_structured', True))
+        endpoint = self._resolve_endpoint(p('vlm_endpoint', ''))
+        robot_info = p('vlm_robot_info', 'place_graph_labeler')
+        max_new_tokens = int(p('vlm_max_new_tokens', 512))
+        temperature = float(p('vlm_temperature', 0.0))
         self.max_image_px = int(p('max_image_px', 1024))
         self.frame_hz = float(p('frame_hz', 2.0))
         self.min_frames = int(p('min_frames', 3))
@@ -65,7 +66,7 @@ class SemanticLabeler(Node):
         self.min_blur = float(p('min_blur', 40.0))
         self.cooldown_s = float(p('cooldown_s', 60.0))
 
-        self.vlm = VlmClient(base_url, model, api_key, structured,
+        self.vlm = VlmClient(endpoint, robot_info, max_new_tokens, temperature,
                              logger=self.get_logger())
         self.ring = FrameRing(maxlen=400)
         self._graph_lock = threading.Lock()
@@ -93,11 +94,28 @@ class SemanticLabeler(Node):
         self._worker.start()
         self.get_logger().info(
             f'semantic_labeler up: camera={self.camera_topic} '
-            f'vlm={base_url} model={model}')
+            f'vlm={self.vlm.endpoint} robot_info={robot_info}')
 
     def destroy_node(self):
         self._stop.set()
         super().destroy_node()
+
+    def _resolve_endpoint(self, explicit):
+        """qwenvl gateway URL. Precedence (matching config_utils.hpp): the
+        `vlm_endpoint` param > robot.yaml's `network.edge_service` (rendered to
+        $EDGE_SERVICE_IP/$EDGE_SERVICE_PORT by `typego-config env`) > localhost.
+        The launch file also passes the param from robot.yaml directly, so the
+        env path only matters for a bare `ros2 run`."""
+        if explicit:
+            return explicit
+        ip = os.environ.get('EDGE_SERVICE_IP', '').strip()
+        if ip:
+            port = os.environ.get('EDGE_SERVICE_PORT', '').strip() or '50049'
+            return f'http://{ip}:{port}/process'
+        self.get_logger().warning(
+            'vlm_endpoint unset and $EDGE_SERVICE_IP empty; falling back to '
+            'localhost:50049. Set network.edge_service in robot.yaml.')
+        return 'http://localhost:50049/process'
 
     # ----- subscriptions (run on the executor thread) -----
     def _on_graph(self, msg):
@@ -198,11 +216,14 @@ class SemanticLabeler(Node):
         views = select_diverse(frames, self.max_views, self.min_blur)
         if not views:
             return
-        images = [encode_jpeg_b64(f.img, self.max_image_px) for f in views]
+        # The gateway takes one image, so tile the diverse views into a montage.
+        image = montage_jpeg([f.img for f in views], self.max_image_px)
+        if image is None:
+            return
         hint = (f"Map geometry: kind={place['kind']}, "
                 f"area={place['area_m2']:.0f} m^2.")
-        self.get_logger().info(f'labeling {pid} from {len(images)} views...')
-        result = self.vlm.label_region(images, hint)
+        self.get_logger().info(f'labeling {pid} from {len(views)} views...')
+        result = self.vlm.label_region(image, hint)
         if not result:
             self.get_logger().warning(f'no VLM result for {pid}')
             return

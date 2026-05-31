@@ -22,6 +22,23 @@ $(ROBOT_ENV): $(ROBOT_YAML) $(CURDIR)/src/typego_config/typego_config/env.py
 robot_env: $(ROBOT_ENV)
 	@:
 
+# --- Load the robot's ROS env into your CURRENT shell ---
+# Standalone terminals (a bare `ros2 ...`, or `ros2 launch waypoint_label
+# semantics.launch.py`) default to a different DDS middleware than the stack
+# `make console` starts, so service calls reach "making request" and then hang.
+# This target hands you the exact env the stack uses (RMW_IMPLEMENTATION,
+# ROS_DOMAIN_ID, EDGE_SERVICE_*, ...). `make` can't modify the parent shell, so
+# it PRINTS source-able lines — run it as:
+#     source <(make -s env)
+# Tip: add an alias to your ~/.zshrc:
+#     alias rosenv='source <(make -s -C /home/guojun/Documents/typego_ros_sdk env)'
+SETUP_EXT := $(if $(findstring zsh,$(DETECTED_SHELL)),zsh,bash)
+.PHONY: env
+env: $(ROBOT_ENV)
+	@echo 'source /opt/ros/humble/local_setup.$(SETUP_EXT)'
+	@echo '[ -f "$(CURDIR)/install/local_setup.$(SETUP_EXT)" ] && source "$(CURDIR)/install/local_setup.$(SETUP_EXT)"'
+	@echo 'set -a; source "$(ROBOT_ENV)"; set +a'
+
 # Import the rendered variables. The file must exist on first `make`, so
 # commands that need it depend on `$(ROBOT_ENV)` explicitly; the -include
 # below merely folds values into $(AUTONOMY_TYPE) etc. once available.

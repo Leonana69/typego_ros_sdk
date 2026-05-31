@@ -25,3 +25,9 @@ src/autonomy/exploration_planner/tare_planner/or-tools/bin/
 doc/
 bags/
 Map-*/
+
+# rosbag2 recordings (e.g. `ros2 bag record -o semantic_test`): the data files
+# are huge. Ignore the bag formats anywhere plus the semantic test bag dir.
+*.db3
+*.mcap
+semantic_test/

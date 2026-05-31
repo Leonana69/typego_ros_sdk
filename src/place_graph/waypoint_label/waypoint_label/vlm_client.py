@@ -1,16 +1,23 @@
-"""Backend-agnostic VLM client (OpenAI-compatible /v1/chat/completions).
+"""VLM client for the qwenvl multipart inference gateway.
 
-Local vLLM by default; any cloud endpoint with the same API works by changing
-base_url/model/api_key. Uses only the standard library so the package adds no
-pip dependency. The place_graph node re-validates everything this returns, so
-this client is best-effort: on any failure it returns None and the caller
-skips the region.
+Talks to the gateway's ``POST /process`` endpoint, which takes
+``multipart/form-data`` with a ``json_data`` JSON part and exactly one ``image``
+file, and returns ``{"result": "<text>", "usage": {...}, ...}``. Stdlib-only so
+the package adds no pip dependency beyond the numpy/PIL that ``frame_buffer``
+already needs.
+
+The gateway has no schema-enforced (guided/structured) decoding, so the model
+returns free text that we extract JSON from best-effort. The place_graph node
+re-validates everything this returns against its own vocab, so this client is
+best-effort: on any failure it returns ``None`` and the caller skips the region.
 """
 from __future__ import annotations
 
 import json
+import re
 import urllib.error
 import urllib.request
+import uuid
 
 ROOM_TYPES = [
     'bedroom', 'living_room', 'kitchen', 'dining_room', 'bathroom', 'toilet',
@@ -24,98 +31,139 @@ AFFORDANCES = [
     'plant_care',
 ]
 
-RESULT_SCHEMA = {
-    'type': 'object',
-    'properties': {
-        'semantic_label': {'type': 'string', 'enum': ROOM_TYPES},
-        'instance_label': {'type': 'string'},
-        'objects': {'type': 'array', 'items': {'type': 'string'}},
-        'affordances': {
-            'type': 'array',
-            'items': {'type': 'string', 'enum': AFFORDANCES},
-        },
-        'summary': {'type': 'string'},
-        'confidence': {'type': 'number'},
-    },
-    'required': ['semantic_label', 'confidence'],
-}
-
-SYSTEM_PROMPT = (
+# The gateway exposes a single `prompt` (no system/user split) and does no
+# schema-enforced decoding, so the instruction has to carry the whole contract
+# and insist on raw JSON.
+PROMPT_HEADER = (
     'You label a region of an indoor building map from robot camera images. '
-    'The images are different viewpoints of the SAME region and may be blurry, '
+    'The image shows one or more viewpoints of the SAME region (when there are '
+    'several, they are tiled into a single grid). Some tiles may be blurry, '
     'partial, or show a doorway into an adjacent room. Describe ONLY what is '
-    'clearly part of this region, union the objects across views, and output '
-    'ONE label for the whole region. Return JSON only.'
-)
+    'clearly part of this region, union the objects across the views, and '
+    'output ONE label for the whole region.')
 
 
 class VlmClient:
-    def __init__(self, base_url, model, api_key='EMPTY', structured=True,
-                 timeout=60.0, logger=None):
-        self.base_url = base_url.rstrip('/')
-        self.model = model
-        self.api_key = api_key or 'EMPTY'
-        self.structured = structured
+    def __init__(self, endpoint, robot_info='place_graph_labeler',
+                 max_new_tokens=512, temperature=0.0, timeout=60.0,
+                 logger=None):
+        self.endpoint = self._normalize(endpoint)
+        self.robot_info = robot_info or 'place_graph_labeler'
+        # The gateway clamps these (tokens 1..4096, temp 0..2); clamp here too
+        # so our values match what the server will actually use.
+        self.max_new_tokens = max(1, min(4096, int(max_new_tokens)))
+        self.temperature = max(0.0, min(2.0, float(temperature)))
         self.timeout = timeout
         self._log = logger
 
-    def label_region(self, images_b64, geom_hint=''):
-        """Return a dict with the structured label, or None on failure."""
-        content = [{'type': 'text', 'text': self._user_text(geom_hint)}]
-        for uri in images_b64:
-            content.append({'type': 'image_url', 'image_url': {'url': uri}})
-        payload = {
-            'model': self.model,
-            'messages': [
-                {'role': 'system', 'content': SYSTEM_PROMPT},
-                {'role': 'user', 'content': content},
-            ],
-            'temperature': 0.0,
-            'max_tokens': 320,
-            'response_format': {'type': 'json_object'},
+    @staticmethod
+    def _normalize(endpoint):
+        e = (endpoint or '').rstrip('/')
+        if not e.endswith('/process'):
+            e += '/process'
+        return e
+
+    def label_region(self, image_jpeg, geom_hint=''):
+        """Label a region from one composited JPEG (raw bytes).
+
+        Returns a dict with the structured label, or None on any failure.
+        """
+        if not image_jpeg:
+            return None
+        meta = {
+            'service_type': 'qwenvl',
+            'prompt': self._prompt(geom_hint),
+            'robot_info': self.robot_info,
+            'max_new_tokens': self.max_new_tokens,
+            'temperature': self.temperature,
         }
-        if self.structured:
-            # vLLM structured outputs (formerly guided_json). Harmless to local
-            # vLLM; cloud APIs that reject unknown fields need vlm_structured
-            # set false.
-            payload['guided_json'] = RESULT_SCHEMA
         try:
-            raw = self._post(payload)
+            raw = self._post(meta, image_jpeg)
         except (urllib.error.URLError, OSError, ValueError) as e:
             self._warn(f'VLM request failed: {e}')
             return None
         return self._parse(raw)
 
-    def _user_text(self, geom_hint):
-        vocab = (f"room_type must be one of: {', '.join(ROOM_TYPES)}. "
-                 f"affordances must be from: {', '.join(AFFORDANCES)}.")
+    def _prompt(self, geom_hint):
+        vocab = (f"semantic_label must be one of: {', '.join(ROOM_TYPES)}. "
+                 f"affordances must be a subset of: {', '.join(AFFORDANCES)}.")
         instr = (
             'Identify the room type, the salient objects, the supported tasks '
             '(affordances), and a one-sentence summary. If the evidence is '
             'weak or mostly shows a doorway/adjacent room, use semantic_label '
-            '"unknown" and confidence below 0.4. Output fields: semantic_label, '
-            'instance_label, objects, affordances, summary, confidence (0-1).')
-        return '\n'.join(s for s in (instr, vocab, geom_hint) if s)
+            '"unknown" and confidence below 0.4.')
+        fields = (
+            'Return ONLY a JSON object (no prose, no markdown fences) with '
+            'fields: semantic_label (string), instance_label (string), objects '
+            '(array of strings), affordances (array of strings), summary '
+            '(string), confidence (number 0-1).')
+        return '\n'.join(s for s in
+                         (PROMPT_HEADER, instr, vocab, fields, geom_hint) if s)
 
-    def _post(self, payload):
-        url = f'{self.base_url}/chat/completions'
-        body = json.dumps(payload).encode()
+    def _post(self, meta, image_jpeg):
+        boundary = '----placegraph' + uuid.uuid4().hex
+        body = self._encode_multipart(boundary, meta, image_jpeg)
         req = urllib.request.Request(
-            url, data=body, method='POST',
-            headers={'Content-Type': 'application/json',
-                     'Authorization': f'Bearer {self.api_key}'})
+            self.endpoint, data=body, method='POST',
+            headers={'Content-Type':
+                     f'multipart/form-data; boundary={boundary}',
+                     'Content-Length': str(len(body))})
         with urllib.request.urlopen(req, timeout=self.timeout) as resp:
             return json.loads(resp.read().decode())
 
+    @staticmethod
+    def _encode_multipart(boundary, meta, image_jpeg, filename='region.jpg'):
+        """Build a multipart/form-data body (binary-safe) by hand: a JSON
+        `json_data` text part plus one `image` file part."""
+        b = boundary.encode()
+        crlf = b'\r\n'
+        buf = bytearray()
+        buf += b'--' + b + crlf
+        buf += b'Content-Disposition: form-data; name="json_data"' + crlf
+        buf += b'Content-Type: application/json' + crlf + crlf
+        buf += json.dumps(meta).encode('utf-8') + crlf
+        buf += b'--' + b + crlf
+        buf += (f'Content-Disposition: form-data; name="image"; '
+                f'filename="{filename}"').encode('utf-8') + crlf
+        buf += b'Content-Type: image/jpeg' + crlf + crlf
+        buf += image_jpeg + crlf
+        buf += b'--' + b + b'--' + crlf
+        return bytes(buf)
+
     def _parse(self, raw):
         try:
-            txt = raw['choices'][0]['message']['content']
-            data = json.loads(txt)
-        except (KeyError, IndexError, TypeError, json.JSONDecodeError) as e:
-            self._warn(f'VLM parse failed: {e}')
+            text = raw['result']
+        except (KeyError, TypeError) as e:
+            self._warn(f'VLM response missing result: {e}')
             return None
-        return data if isinstance(data, dict) else None
+        data = _extract_json(text)
+        if not isinstance(data, dict):
+            self._warn('VLM result was not a JSON object')
+            return None
+        return data
 
     def _warn(self, msg):
         if self._log is not None:
             self._log.warning(msg)
+
+
+def _extract_json(text):
+    """Best-effort: parse a JSON object out of free-form model text, tolerating
+    ```json fences or leading/trailing prose."""
+    if not isinstance(text, str):
+        return None
+    s = text.strip()
+    if s.startswith('```'):
+        s = re.sub(r'^```[a-zA-Z]*\s*', '', s)
+        s = re.sub(r'\s*```$', '', s).strip()
+    try:
+        return json.loads(s)
+    except json.JSONDecodeError:
+        pass
+    start, end = s.find('{'), s.rfind('}')
+    if 0 <= start < end:
+        try:
+            return json.loads(s[start:end + 1])
+        except json.JSONDecodeError:
+            return None
+    return None

@@ -6,7 +6,6 @@ to a place via a forward-ray point and sent to a VLM.
 """
 from __future__ import annotations
 
-import base64
 import io
 import math
 import threading
@@ -63,16 +62,45 @@ def blur_score(rgb: np.ndarray) -> float:
     return float(lap[1:-1, 1:-1].var()) if lap.size > 4 else 0.0
 
 
-def encode_jpeg_b64(rgb: np.ndarray, max_px: int) -> str:
-    """Downscale to `max_px` longest edge and return a JPEG data URI."""
+def encode_jpeg(rgb: np.ndarray, max_px: int, quality: int = 85) -> bytes:
+    """Downscale to `max_px` longest edge and return raw JPEG bytes."""
     im = PILImage.fromarray(np.ascontiguousarray(rgb), mode='RGB')
     w, h = im.size
     scale = max_px / float(max(w, h))
     if scale < 1.0:
         im = im.resize((max(1, int(w * scale)), max(1, int(h * scale))))
     buf = io.BytesIO()
-    im.save(buf, format='JPEG', quality=85)
-    return 'data:image/jpeg;base64,' + base64.b64encode(buf.getvalue()).decode()
+    im.save(buf, format='JPEG', quality=quality)
+    return buf.getvalue()
+
+
+def montage_jpeg(rgbs: list, max_px: int, quality: int = 85) -> bytes | None:
+    """Tile several views into one JPEG (longest edge ~`max_px`).
+
+    The gateway accepts exactly one image, so multiple diverse viewpoints are
+    composited into a single grid. A lone view is returned full-size; otherwise
+    each tile is aspect-preserved and centred on a black cell of an even grid.
+    Returns None if there is nothing to encode.
+    """
+    views = [r for r in rgbs if r is not None and getattr(r, 'size', 0)]
+    if not views:
+        return None
+    if len(views) == 1:
+        return encode_jpeg(views[0], max_px, quality)
+    cols = math.ceil(math.sqrt(len(views)))
+    rows = math.ceil(len(views) / cols)
+    cell = max(1, max_px // cols)
+    canvas = PILImage.new('RGB', (cols * cell, rows * cell), (0, 0, 0))
+    for i, rgb in enumerate(views):
+        tile = PILImage.fromarray(np.ascontiguousarray(rgb), mode='RGB')
+        tile.thumbnail((cell, cell))   # aspect-preserving, fits within the cell
+        r, c = divmod(i, cols)
+        ox = c * cell + (cell - tile.size[0]) // 2
+        oy = r * cell + (cell - tile.size[1]) // 2
+        canvas.paste(tile, (ox, oy))
+    buf = io.BytesIO()
+    canvas.save(buf, format='JPEG', quality=quality)
+    return buf.getvalue()
 
 
 def yaw_from_quat(x: float, y: float, z: float, w: float) -> float:
