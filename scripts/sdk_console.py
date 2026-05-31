@@ -92,7 +92,53 @@ def _safe_map_name(raw: str) -> str:
     return "_".join(cleaned.split())
 
 
+class FollowLog(RichLog):
+    """A RichLog that tails new output only while you're parked at the bottom.
+
+    RichLog's built-in ``auto_scroll`` yanks the viewport to the end on every
+    write, so you can't read back through history while logs keep streaming in.
+    Here a ``follow`` flag drives the scroll instead: it stays armed while you're
+    at the bottom and disarms the moment you scroll up, re-arming once you scroll
+    back down.
+
+    The flag is updated from ``watch_scroll_y`` — i.e. from a *settled* scroll
+    position — rather than sampled per-write. That matters because RichLog scrolls
+    via ``scroll_end(immediate=False)``, which defers the actual scroll to the next
+    refresh while ``max_scroll_y`` grows synchronously; a burst of writes between
+    two refreshes would otherwise read a half-updated position and get stuck part
+    way up.
+    """
+
+    def __init__(self, **kwargs) -> None:
+        # We manage following ourselves, so disable RichLog's own auto-scroll.
+        super().__init__(auto_scroll=False, **kwargs)
+        self._follow = True
+
+    def write(self, content, *args, **kwargs):  # type: ignore[override]
+        # RichLog.write is (content, width, expand, shrink, scroll_end, animate),
+        # so scroll_end is the 4th positional after content. RichLog's own
+        # deferred-render replay (on first resize) passes it positionally — honour
+        # that and only inject our follow default when the caller left it unset.
+        if len(args) < 4 and kwargs.get("scroll_end") is None:
+            kwargs["scroll_end"] = self._follow
+        return super().write(content, *args, **kwargs)
+
+    def watch_scroll_y(self, old_value: float, new_value: float) -> None:
+        super().watch_scroll_y(old_value, new_value)
+        # Re-arm following when parked at the bottom; disarm when scrolled up.
+        self._follow = self.is_vertical_scroll_end
+
+
 class TypegoConsole(App):
+    # The Input keeps focus, so plain arrows/Home/End belong to line editing.
+    # PageUp/PageDown aren't used by a single-line Input, so they bubble up here
+    # and let you page through log history without a mouse (e.g. over SSH).
+    BINDINGS = [
+        ("pageup", "log_scroll('up')", "Scroll log up"),
+        ("pagedown", "log_scroll('down')", "Scroll log down"),
+        ("ctrl+end", "log_bottom", "Jump to latest"),
+    ]
+
     CSS = """
     Screen { layout: vertical; }
     RichLog {
@@ -127,7 +173,7 @@ class TypegoConsole(App):
     # ---------- Layout ----------
 
     def compose(self) -> ComposeResult:
-        self.log_pane = RichLog(highlight=False, markup=True, wrap=True)
+        self.log_pane = FollowLog(highlight=False, markup=True, wrap=True)
         self.status = Static("", id="status")
         self.prompt = Input(placeholder="")
         yield Vertical(self.log_pane, self.status, self.prompt)
@@ -214,6 +260,18 @@ class TypegoConsole(App):
 
     def _set_status(self, text: str) -> None:
         self.status.update(text)
+
+    # ---------- Log scrolling ----------
+
+    def action_log_scroll(self, direction: str) -> None:
+        if direction == "up":
+            self.log_pane.scroll_page_up()
+        else:
+            self.log_pane.scroll_page_down()
+
+    def action_log_bottom(self) -> None:
+        # Re-follow: scroll_end pins us at the bottom; watch_scroll_y re-arms.
+        self.log_pane.scroll_end(animate=False)
 
     # ---------- Input dispatch ----------
 
