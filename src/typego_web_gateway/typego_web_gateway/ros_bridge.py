@@ -7,6 +7,7 @@ they do not stall the event loop.
 """
 from __future__ import annotations
 
+import io
 import math
 import threading
 import time
@@ -22,8 +23,14 @@ from rcl_interfaces.msg import Log
 from rclpy.action import ActionClient
 from rclpy.duration import Duration
 from rclpy.node import Node
-from rclpy.qos import QoSDurabilityPolicy, QoSProfile, QoSReliabilityPolicy
+from rclpy.qos import (
+    QoSDurabilityPolicy,
+    QoSProfile,
+    QoSReliabilityPolicy,
+    qos_profile_sensor_data,
+)
 from rclpy.time import Time as RclpyTime
+from sensor_msgs.msg import Image
 from tf2_ros import Buffer, TransformListener
 try:
     from tf2_ros import TransformException
@@ -32,7 +39,12 @@ except ImportError:  # older tf2_ros layouts keep it in the submodule
 
 try:
     from typego_interface.msg import PlaceGraph, WayPointArray
-    from typego_interface.srv import SetSpeed
+    from typego_interface.srv import (
+        EditWaypoint,
+        ResolvePlaceAtPoint,
+        SetPlaceLabel,
+        SetSpeed,
+    )
     _TYPEGO_INTERFACE = True
 except ImportError:
     _TYPEGO_INTERFACE = False
@@ -62,26 +74,30 @@ class MapSnapshot:
 
 
 class RosBridge(Node):
-    def __init__(self, robot_namespace: str = ''):
+    def __init__(self, robot_namespace: str = '',
+                 camera_topic: str = 'camera/color/image_raw'):
         super().__init__('typego_web_gateway')
         self._lock = threading.RLock()
         self._ns = robot_namespace.strip('/')
         self._prefix = f'/{self._ns}' if self._ns else ''
+        self._camera_topic = camera_topic.strip()
 
         self._map: Optional[MapSnapshot] = None
         self._waypoints: List[Dict] = []
+        self._parked: List[Dict] = []
         self._place_graph: Dict = {'map_version': '', 'places': []}
         self._pose: Optional[Pose2D] = None
         self._events: Deque[Dict] = deque(maxlen=500)
+        self._camera_msg: Optional[Image] = None
 
         latched = QoSProfile(
             depth=1,
             reliability=QoSReliabilityPolicy.RELIABLE,
             durability=QoSDurabilityPolicy.TRANSIENT_LOCAL,
         )
+        self._map_topic = f'{self._prefix}/map' if self._prefix else '/map'
         self._map_sub = self.create_subscription(
-            OccupancyGrid, f'{self._prefix}/map' if self._prefix else '/map',
-            self._on_map, latched,
+            OccupancyGrid, self._map_topic, self._on_map, latched,
         )
         self._rosout_sub = self.create_subscription(
             Log, '/rosout', self._on_rosout, 50,
@@ -91,16 +107,46 @@ class RosBridge(Node):
             self._waypoints_sub = self.create_subscription(
                 WayPointArray, 'waypoints', self._on_waypoints, 10,
             )
+            # Operator pins withheld from /waypoints (no longer resolve / lack
+            # clearance), shown by the UI dimmed and still Move/Delete-able.
+            self._parked_sub = self.create_subscription(
+                WayPointArray, 'waypoints_parked', self._on_parked, latched,
+            )
             self._place_graph_sub = self.create_subscription(
                 PlaceGraph, 'place_graph', self._on_place_graph, latched,
             )
             self._speed_client = self.create_client(
                 SetSpeed, 'typego/set_speed',
             )
+            self._label_client = self.create_client(
+                SetPlaceLabel, 'typego/set_place_label',
+            )
+            self._edit_client = self.create_client(
+                EditWaypoint, 'typego/edit_waypoint',
+            )
+            self._resolve_client = self.create_client(
+                ResolvePlaceAtPoint, 'typego/resolve_place_at_point',
+            )
         else:
             self._waypoints_sub = None
+            self._parked_sub = None
             self._place_graph_sub = None
             self._speed_client = None
+            self._label_client = None
+            self._edit_client = None
+            self._resolve_client = None
+
+        # Camera: subscribe VERBATIM to the configured image topic. The go2
+        # camera node runs in the GLOBAL namespace (unlike /map), so do NOT
+        # apply self._prefix; an absolute topic in robot.yaml handles a
+        # namespaced camera. Empty string disables the camera.
+        if self._camera_topic:
+            self._camera_sub = self.create_subscription(
+                Image, self._camera_topic, self._on_camera,
+                qos_profile_sensor_data,
+            )
+        else:
+            self._camera_sub = None
 
         # Optional: typego_config runs separately and may not be up. The
         # client is created eagerly but calls short-timeout so a missing
@@ -141,21 +187,33 @@ class RosBridge(Node):
         with self._lock:
             self._map = snapshot
 
+    @staticmethod
+    def _wp_to_dict(wp) -> Dict:
+        return {
+            'id': int(wp.id), 'x': float(wp.x), 'y': float(wp.y),
+            'label': str(wp.label),
+            'yaw': float(getattr(wp, 'yaw', 0.0)),
+            'semantic_context': str(getattr(wp, 'semantic_context', '')),
+            'confidence': float(getattr(wp, 'confidence', 0.0)),
+            'source': str(getattr(wp, 'source', '')),
+            'clearance_m': float(getattr(wp, 'clearance_m', 0.0)),
+            'generation_reason': str(getattr(wp, 'generation_reason', '')),
+            'place_id': str(getattr(wp, 'place_id', '')),
+            'waypoint_role': str(getattr(wp, 'waypoint_role', '')),
+        }
+
     def _on_waypoints(self, msg) -> None:
         with self._lock:
-            self._waypoints = [
-                {'id': int(wp.id), 'x': float(wp.x), 'y': float(wp.y),
-                 'label': str(wp.label),
-                 'yaw': float(getattr(wp, 'yaw', 0.0)),
-                 'semantic_context': str(getattr(wp, 'semantic_context', '')),
-                 'confidence': float(getattr(wp, 'confidence', 0.0)),
-                 'source': str(getattr(wp, 'source', '')),
-                 'clearance_m': float(getattr(wp, 'clearance_m', 0.0)),
-                 'generation_reason': str(getattr(wp, 'generation_reason', '')),
-                 'place_id': str(getattr(wp, 'place_id', '')),
-                 'waypoint_role': str(getattr(wp, 'waypoint_role', ''))}
-                for wp in msg.waypoints
-            ]
+            self._waypoints = [self._wp_to_dict(wp) for wp in msg.waypoints]
+
+    def _on_parked(self, msg) -> None:
+        with self._lock:
+            self._parked = [self._wp_to_dict(wp) for wp in msg.waypoints]
+
+    def _on_camera(self, msg: Image) -> None:
+        # Store the latest frame only; encode lazily in get_camera_jpeg.
+        with self._lock:
+            self._camera_msg = msg
 
     def _on_place_graph(self, msg) -> None:
         places = []
@@ -241,6 +299,73 @@ class RosBridge(Node):
     def get_waypoints(self) -> List[Dict]:
         with self._lock:
             return list(self._waypoints)
+
+    def get_parked_waypoints(self) -> List[Dict]:
+        with self._lock:
+            return list(self._parked)
+
+    @property
+    def camera_topic(self) -> str:
+        return self._camera_topic
+
+    @property
+    def map_topic(self) -> str:
+        return self._map_topic
+
+    def has_camera(self) -> bool:
+        with self._lock:
+            return self._camera_msg is not None
+
+    def camera_frame_id(self) -> Optional[str]:
+        with self._lock:
+            return (str(self._camera_msg.header.frame_id)
+                    if self._camera_msg is not None else None)
+
+    def get_camera_jpeg(self, max_px: int = 960,
+                        quality: int = 70) -> Optional[bytes]:
+        # Copy the raw frame fields under the lock, then release it before the
+        # numpy/Pillow encode (which is comparatively slow).
+        with self._lock:
+            msg = self._camera_msg
+            if msg is None:
+                return None
+            data = bytes(msg.data)
+            w = int(msg.width)
+            h = int(msg.height)
+            enc = str(msg.encoding)
+            step = int(msg.step)
+        if w <= 0 or h <= 0:
+            return None
+        import numpy as np
+        from PIL import Image as PILImage
+        # (channels, conversion) per encoding. Unknown -> give up (don't guess).
+        spec = {'rgb8': (3, None), 'bgr8': (3, 'bgr'), 'mono8': (1, None),
+                'rgba8': (4, 'rgba'), 'bgra8': (4, 'bgra')}.get(enc)
+        if spec is None:
+            return None
+        ch, kind = spec
+        arr = np.frombuffer(data, dtype=np.uint8)
+        if arr.size < step * h:
+            return None
+        # Honor the row stride (step): slicing to w*ch handles padded rows that
+        # a naive w*h*ch reshape would corrupt.
+        arr = arr.reshape(h, step)[:, :w * ch].reshape(h, w, ch)
+        if kind == 'bgr':
+            rgb = arr[..., ::-1]
+        elif kind == 'rgba':
+            rgb = arr[..., :3]
+        elif kind == 'bgra':
+            rgb = arr[..., 2::-1]  # BGR->RGB and drop alpha
+        elif ch == 1:
+            rgb = arr[..., 0]
+        else:
+            rgb = arr
+        mode = 'L' if ch == 1 else 'RGB'
+        img = PILImage.fromarray(np.ascontiguousarray(rgb), mode=mode)
+        img.thumbnail((max_px, max_px))
+        buf = io.BytesIO()
+        img.save(buf, format='JPEG', quality=quality)
+        return buf.getvalue()
 
     def get_place_graph(self) -> Dict:
         with self._lock:
@@ -387,6 +512,84 @@ class RosBridge(Node):
         if resp is None:
             return False, 'empty response'
         return bool(resp.success), str(resp.message)
+
+    def set_place_label(self, place_id: str, semantic_label: str,
+                        instance_label: str = '', objects=(), affordances=(),
+                        summary: str = '', confidence: float = 1.0,
+                        timeout_s: float = 3.0) -> Tuple[bool, str]:
+        # Operator override: always source='operator', lock=True (sets
+        # operator_label + label_locked, bypassing VLM confidence checks).
+        if self._label_client is None:
+            return False, 'typego_interface not available'
+        if not self._label_client.wait_for_service(timeout_sec=timeout_s):
+            return False, 'set_place_label service not ready'
+        req = SetPlaceLabel.Request()
+        req.place_id = str(place_id)
+        req.semantic_label = str(semantic_label)
+        req.instance_label = str(instance_label)
+        req.objects = [str(o) for o in objects]
+        req.affordances = [str(a) for a in affordances]
+        req.summary = str(summary)
+        req.source = 'operator'
+        req.confidence = float(confidence)
+        req.lock = True
+        fut = self._label_client.call_async(req)
+        event = threading.Event()
+        fut.add_done_callback(lambda _f: event.set())
+        if not event.wait(timeout=timeout_s + 1.0):
+            return False, 'set_place_label call timeout'
+        resp = fut.result()
+        if resp is None:
+            return False, 'empty response'
+        return bool(resp.success), str(resp.message)
+
+    def edit_waypoint(self, op: str, id: int = 0, x: float = 0.0, y: float = 0.0,
+                      yaw: float = 0.0, has_yaw: bool = False,
+                      timeout_s: float = 6.0) -> Tuple[bool, str, int]:
+        # The server blocks up to ~5 s on its worker thread, so the wait must
+        # exceed that.
+        if self._edit_client is None:
+            return False, 'typego_interface not available', 0
+        if not self._edit_client.wait_for_service(timeout_sec=timeout_s):
+            return False, 'edit_waypoint service not ready', 0
+        req = EditWaypoint.Request()
+        req.op = str(op)
+        req.id = int(id)
+        req.x = float(x)
+        req.y = float(y)
+        req.yaw = float(yaw)
+        req.has_yaw = bool(has_yaw)
+        fut = self._edit_client.call_async(req)
+        event = threading.Event()
+        fut.add_done_callback(lambda _f: event.set())
+        if not event.wait(timeout=timeout_s + 1.0):
+            return False, 'edit_waypoint call timeout', 0
+        resp = fut.result()
+        if resp is None:
+            return False, 'empty response', 0
+        return bool(resp.success), str(resp.message), int(resp.id)
+
+    def resolve_place_at_world(self, x: float, y: float,
+                               timeout_s: float = 2.0) -> Optional[str]:
+        # Synchronous read off the node's immutable snapshot (not the worker
+        # path). Returns None when no place owns the point.
+        if self._resolve_client is None:
+            return None
+        if not self._resolve_client.wait_for_service(timeout_sec=timeout_s):
+            return None
+        req = ResolvePlaceAtPoint.Request()
+        req.xs = [float(x)]
+        req.ys = [float(y)]
+        fut = self._resolve_client.call_async(req)
+        event = threading.Event()
+        fut.add_done_callback(lambda _f: event.set())
+        if not event.wait(timeout=timeout_s + 1.0):
+            return None
+        resp = fut.result()
+        if resp is None or not resp.place_ids:
+            return None
+        pid = str(resp.place_ids[0])
+        return pid or None
 
     def get_robot_config(self, timeout_s: float = 1.0) -> Optional[Dict]:
         """Call typego_config/get_config; return None if service is down."""

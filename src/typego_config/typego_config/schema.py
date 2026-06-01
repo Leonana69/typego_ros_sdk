@@ -103,6 +103,13 @@ class WebGatewayConfig(BaseModel):
     bag_dir: str = Field(default='~/.typego/bags')
     bag_chunk_seconds: int = Field(default=600, ge=30, le=24 * 3600)
     bag_retain: int = Field(default=6, ge=1, le=1000)
+    camera_topic: str = Field(
+        default='camera/color/image_raw',
+        description='Image topic the web gateway subscribes to. Relative => global '
+        '/camera/color/image_raw (the go2 camera node is not namespaced); absolute '
+        '(e.g. /robot1/camera/color/image_raw) for a namespaced camera; empty '
+        'string => camera disabled.',
+    )
 
 
 class MapConfig(BaseModel):

@@ -1,0 +1,15 @@
+# Create / move / delete an operator (user) waypoint. One op-dispatched service,
+# one handler. Operator waypoints live in a separate store from the auto/geometry
+# anchors; auto/frontier waypoints cannot be moved or deleted (relabel the region
+# instead). There is no per-pin name in v1 (the published WayPoint.msg has no name
+# field and nothing in the UI shows one).
+string op        # "add" | "move" | "delete"
+uint32 id        # move/delete target; ignored for add (server assigns)
+float64 x        # add/move (map frame, meters)
+float64 y
+float64 yaw      # add/move
+bool has_yaw     # if false, server derives a default (face place peak, else 0)
+---
+bool success
+string message   # rejection reason on failure (e.g. "too close to a wall/obstacle")
+uint32 id        # created/affected waypoint id

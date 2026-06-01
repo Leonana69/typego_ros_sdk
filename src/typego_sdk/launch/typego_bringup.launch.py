@@ -564,6 +564,7 @@ def generate_launch_description():
                     ('bag_dir', 'bag_dir'),
                     ('bag_chunk_seconds', 'bag_chunk_seconds'),
                     ('bag_retain', 'bag_retain'),
+                    ('camera_topic', 'camera_topic'),
                 ):
                     val = web_cfg.get(k_yaml) if isinstance(web_cfg, dict) else None
                     if val is not None:

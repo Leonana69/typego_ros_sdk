@@ -39,14 +39,16 @@ if(BUILD_TESTING)
   find_package(ament_cmake_gtest REQUIRED)
   ament_add_gtest(test_waypoint_anchor
     test/test_waypoint_anchor.cpp
-    src/waypoint_anchor.cpp)
+    src/waypoint_anchor.cpp
+    src/user_waypoint_store.cpp)
   ament_target_dependencies(test_waypoint_anchor place_graph)
 endif()
 
 # ----------- place_graph_waypoints_node -----------
 add_executable(place_graph_waypoints_node
   src/place_graph_waypoints.cpp
-  src/waypoint_anchor.cpp)
+  src/waypoint_anchor.cpp
+  src/user_waypoint_store.cpp)
 set_target_properties(place_graph_waypoints_node PROPERTIES
   CXX_STANDARD 17
   CXX_STANDARD_REQUIRED ON

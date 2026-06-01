@@ -44,6 +44,20 @@ class SpeedRequest(BaseModel):
     max_angular: float = -1.0
 
 
+class PlaceLabelRequest(BaseModel):
+    semantic_label: str
+    instance_label: str = ''
+    objects: List[str] = []
+    affordances: List[str] = []
+    summary: str = ''
+
+
+class WaypointEditRequest(BaseModel):
+    x: float
+    y: float
+    yaw: Optional[float] = None  # omitted => server derives a default yaw
+
+
 def build_app(
     bridge: RosBridge,
     patrol: PatrolController,
@@ -128,20 +142,75 @@ def build_app(
             'origin_yaw': snap.origin_yaw,
             'frame_id': snap.frame_id,
             'stamp': snap.stamp,
+            'topic': bridge.map_topic,
         })
 
     # ── waypoints ────────────────────────────────────────────────────────
     @app.get('/api/waypoints')
     async def waypoints() -> JSONResponse:
-        return JSONResponse({'waypoints': bridge.get_waypoints()})
+        return JSONResponse({
+            'waypoints': bridge.get_waypoints(),
+            'parked': bridge.get_parked_waypoints(),
+        })
+
+    @app.post('/api/waypoints')
+    async def add_waypoint(body: WaypointEditRequest) -> JSONResponse:
+        ok, msg, wid = await asyncio.to_thread(
+            bridge.edit_waypoint, 'add', 0, body.x, body.y,
+            body.yaw or 0.0, body.yaw is not None,
+        )
+        if not ok:
+            raise HTTPException(status_code=409, detail=msg)
+        return JSONResponse({'id': wid, 'message': msg})
+
+    @app.patch('/api/waypoints/{wp_id}')
+    async def move_waypoint(wp_id: int,
+                            body: WaypointEditRequest) -> JSONResponse:
+        ok, msg, wid = await asyncio.to_thread(
+            bridge.edit_waypoint, 'move', wp_id, body.x, body.y,
+            body.yaw or 0.0, body.yaw is not None,
+        )
+        if not ok:
+            raise HTTPException(status_code=409, detail=msg)
+        return JSONResponse({'id': wid, 'message': msg})
+
+    @app.delete('/api/waypoints/{wp_id}')
+    async def delete_waypoint(wp_id: int) -> JSONResponse:
+        ok, msg, wid = await asyncio.to_thread(
+            bridge.edit_waypoint, 'delete', wp_id,
+        )
+        if not ok:
+            raise HTTPException(status_code=409, detail=msg)
+        return JSONResponse({'id': wid, 'message': msg})
 
     # ── places (place graph) ─────────────────────────────────────────────
+    @app.post('/api/places/{place_id}/label')
+    async def set_place_label(place_id: str,
+                              body: PlaceLabelRequest) -> JSONResponse:
+        ok, msg = await asyncio.to_thread(
+            bridge.set_place_label, place_id, body.semantic_label,
+            body.instance_label, tuple(body.objects), tuple(body.affordances),
+            body.summary,
+        )
+        if not ok:
+            raise HTTPException(status_code=409, detail=msg)
+        return JSONResponse({'success': True, 'message': msg})
+
+    @app.get('/api/places/resolve')
+    async def resolve_place(x: float = Query(...),
+                            y: float = Query(...)) -> JSONResponse:
+        pid = await asyncio.to_thread(bridge.resolve_place_at_world, x, y)
+        return JSONResponse({'place_id': pid})
+
     @app.get('/api/places')
     async def places() -> JSONResponse:
         graph = bridge.get_place_graph()
         all_places = graph.get('places', [])
         connector_kinds = {'portal', 'open_transition', 'junction'}
-        rooms = [p for p in all_places if p['kind'] not in connector_kinds]
+        # Connectors AND frontier regions are non-labelable; keep both out of
+        # `places` so the label editor/list only ever see labelable regions.
+        non_labelable = connector_kinds | {'frontier_region'}
+        rooms = [p for p in all_places if p['kind'] not in non_labelable]
         portals = [p for p in all_places if p['kind'] in connector_kinds]
 
         # Room adjacency is derived from the connector graph.
@@ -286,6 +355,44 @@ def build_app(
     @app.get('/api/events')
     async def events(limit: int = Query(100, ge=1, le=500)) -> JSONResponse:
         return JSONResponse({'events': bridge.get_events(limit=limit)})
+
+    # ── camera ───────────────────────────────────────────────────────────
+    @app.get('/api/camera/latest.jpg')
+    async def camera_latest() -> Response:
+        jpg = await asyncio.to_thread(bridge.get_camera_jpeg)
+        if jpg is None:
+            raise HTTPException(status_code=503, detail='no camera frame')
+        return Response(content=jpg, media_type='image/jpeg',
+                        headers={'Cache-Control': 'no-store'})
+
+    @app.get('/api/camera/topics')
+    async def camera_topics() -> JSONResponse:
+        return JSONResponse({
+            'available': bridge.has_camera(),
+            'frame_id': bridge.camera_frame_id(),
+            'topic': bridge.camera_topic,
+        })
+
+    @app.get('/api/camera/stream')
+    async def camera_stream() -> StreamingResponse:
+        boundary = 'frame'
+
+        async def gen():
+            while True:
+                jpg = await asyncio.to_thread(bridge.get_camera_jpeg)
+                if jpg is not None:
+                    yield (
+                        b'--' + boundary.encode() + b'\r\n'
+                        + b'Content-Type: image/jpeg\r\n'
+                        + b'Content-Length: ' + str(len(jpg)).encode()
+                        + b'\r\n\r\n' + jpg + b'\r\n'
+                    )
+                await asyncio.sleep(0.125)  # ~8 fps cap
+
+        return StreamingResponse(
+            gen(),
+            media_type=f'multipart/x-mixed-replace; boundary={boundary}',
+        )
 
     # ── bag download ─────────────────────────────────────────────────────
     @app.get('/api/bag/latest')

@@ -25,6 +25,10 @@ namespace tpg = place_graph;
 // advance the persistent next_id counter.
 constexpr std::uint32_t kFrontierIdBase = 1000000000u;
 
+// Operator-created (user) waypoint IDs live above the frontier range so an id
+// alone disambiguates origin: auto [0, 1e9), frontier [1e9, 2e9), user [2e9, …).
+constexpr std::uint32_t kUserIdBase = 2000000000u;
+
 // A waypoint as published / persisted.
 struct PublishedWaypoint {
     std::uint32_t id = 0;
@@ -62,6 +66,25 @@ struct AnchorRecord {
 };
 
 bool is_connector(tpg::PlaceKind k);
+
+// Wrap an angle to (-pi, pi].
+double normalize_angle(double a);
+
+// The denormalized display label derived from a place:
+// operator_label (if locked) > instance_label > semantic_label > place_id.
+std::string effective_label(const tpg::PlaceRegion& p);
+
+// True if every cell whose center is within `min_clear` *meters* of (x,y) is
+// in-bounds and free in `map`. The metric (not inflated-integer) threshold is
+// exact. This is the near-wall safety check `pose_valid` layers on top of
+// place resolution, and the gate operator pins reuse.
+bool clearance_ok(double x, double y, const tpg::MapSnapshot& map,
+                  double min_clear);
+
+// Re-derive the place-owned fields (label, clearance_m) on `w` from its
+// `place_id` against graph `g`. Single definition of the denormalization,
+// shared by reconcile, user-waypoint publishing, and the label-edit refresh.
+void refresh_place_info(const tpg::PlaceGraphSnapshot& g, PublishedWaypoint& w);
 
 // True if the (frozen) pose is still a usable anchor for `place_id` in graph
 // `g`: it resolves to that place (for connectors, to the connector or one of

@@ -7,6 +7,7 @@ export interface MapMeta {
   origin_yaw: number;
   frame_id: string;
   stamp: number;
+  topic?: string;
 }
 
 export interface Pose {
@@ -49,6 +50,90 @@ export interface Waypoint {
   source?: string;
   clearance_m?: number;
   generation_reason?: string;
+  place_id?: string;
+  waypoint_role?: string;
+}
+
+export interface PlaceRegion {
+  place_id: string;
+  kind: string;
+  semantic_label: string;
+  instance_label: string;
+  operator_label: string;
+  label_locked: boolean;
+  confidence: number;
+  source: string;
+  objects: string[];
+  affordances: string[];
+  summary: string;
+  centroid_x: number;
+  centroid_y: number;
+  peak_x: number;
+  peak_y: number;
+  area_m2: number;
+  clearance_m: number;
+  frontier_ratio: number;
+  elongation: number;
+  extent_long_m: number;
+  extent_short_m: number;
+  provisional: boolean;
+  stale: boolean;
+  has_approach_yaw: boolean;
+  approach_yaw: number;
+  has_width_m: boolean;
+  width_m: number;
+  adjacent_place_ids: string[];
+  member_waypoint_ids: number[];
+}
+
+export interface PlacesResponse {
+  map_version: string;
+  places: PlaceRegion[];
+  portals: PlaceRegion[];
+  summary: string;
+}
+
+export interface WaypointsResponse {
+  waypoints: Waypoint[];
+  parked: Waypoint[];
+}
+
+export interface CameraTopics {
+  available: boolean;
+  frame_id: string | null;
+  topic: string;
+}
+
+// User/operator waypoints have ids >= kUserIdBase (auto [0,1e9), frontier
+// [1e9,2e9), user [2e9,…)) — mirrors typego_sdk/.../waypoint_anchor.hpp.
+export const kUserIdBase = 2_000_000_000;
+
+// Mirrors src/place_graph/waypoint_label/waypoint_label/vlm_client.py:22-33.
+export const ROOM_TYPES = [
+  'bedroom', 'living_room', 'kitchen', 'dining_room', 'bathroom', 'toilet',
+  'office', 'study', 'meeting_room', 'hallway', 'corridor', 'foyer',
+  'entryway', 'closet', 'storage', 'pantry', 'laundry_room', 'garage',
+  'lobby', 'open_area', 'unknown',
+];
+export const AFFORDANCES = [
+  'sleep', 'rest', 'cook', 'make_beverages', 'eat', 'wash', 'toilet',
+  'work', 'meet', 'transit', 'wait', 'store', 'seating', 'entertainment',
+  'plant_care',
+];
+
+// Only region kinds are labelable; mirrors the VLM labeler's ROOM_KINDS
+// (src/place_graph/waypoint_label/waypoint_label/semantic_labeler_node.py:39).
+export const LABELABLE_KINDS = new Set(['room', 'corridor', 'open_area']);
+export function isLabelableKind(kind: string | undefined): boolean {
+  return kind !== undefined && LABELABLE_KINDS.has(kind);
+}
+
+export interface PlaceLabelBody {
+  semantic_label: string;
+  instance_label?: string;
+  objects?: string[];
+  affordances?: string[];
+  summary?: string;
 }
 
 export interface RobotConfigIdentity {
@@ -86,7 +171,43 @@ export const api = {
   mapMeta: () => jsonOrThrow<MapMeta>(fetch('/api/map/meta')),
   mapUrl: () => `/api/map?ts=${Date.now()}`,
   waypoints: () =>
-    jsonOrThrow<{ waypoints: Waypoint[] }>(fetch('/api/waypoints')),
+    jsonOrThrow<WaypointsResponse>(fetch('/api/waypoints')),
+  places: () => jsonOrThrow<PlacesResponse>(fetch('/api/places')),
+  setPlaceLabel: (placeId: string, body: PlaceLabelBody) =>
+    jsonOrThrow<{ success: boolean; message: string }>(
+      fetch(`/api/places/${encodeURIComponent(placeId)}/label`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      }),
+    ),
+  addWaypoint: (x: number, y: number, yaw?: number) =>
+    jsonOrThrow<{ id: number }>(
+      fetch('/api/waypoints', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(yaw === undefined ? { x, y } : { x, y, yaw }),
+      }),
+    ),
+  moveWaypoint: (id: number, x: number, y: number, yaw?: number) =>
+    jsonOrThrow<{ success?: boolean; message?: string }>(
+      fetch(`/api/waypoints/${id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(yaw === undefined ? { x, y } : { x, y, yaw }),
+      }),
+    ),
+  deleteWaypoint: (id: number) =>
+    jsonOrThrow<{ success?: boolean; message?: string }>(
+      fetch(`/api/waypoints/${id}`, { method: 'DELETE' }),
+    ),
+  resolvePlace: (x: number, y: number) =>
+    jsonOrThrow<{ place_id: string | null }>(
+      fetch(`/api/places/resolve?x=${x}&y=${y}`),
+    ),
+  cameraStreamUrl: () => '/api/camera/stream',
+  cameraTopics: () =>
+    jsonOrThrow<CameraTopics>(fetch('/api/camera/topics')),
   events: (limit = 100) =>
     jsonOrThrow<{ events: Array<Record<string, unknown>> }>(
       fetch(`/api/events?limit=${limit}`),

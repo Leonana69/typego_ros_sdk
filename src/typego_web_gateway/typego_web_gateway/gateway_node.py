@@ -62,6 +62,9 @@ def _parse_args(argv) -> argparse.Namespace:
                         default=int(os.environ.get('TYPEGO_BAG_RETAIN', '6')))
     parser.add_argument('--no-bag', action='store_true',
                         help='disable always-on rosbag recording')
+    parser.add_argument('--camera-topic',
+                        default=os.environ.get('TYPEGO_CAMERA_TOPIC',
+                                               'camera/color/image_raw'))
     # Ignore unknown args so the ros2 launcher can pass --ros-args etc.
     args, _ = parser.parse_known_args(argv)
     # Expand ~ here too so env-var / CLI values (e.g. from robot.yaml's
@@ -78,7 +81,8 @@ def main(argv=None) -> int:
     args = _parse_args(argv)
 
     rclpy.init(args=argv)
-    bridge = RosBridge(robot_namespace=args.robot_namespace)
+    bridge = RosBridge(robot_namespace=args.robot_namespace,
+                       camera_topic=args.camera_topic)
     patrol = PatrolController(bridge)
 
     executor = MultiThreadedExecutor()

@@ -37,6 +37,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "srv/SetSpeed.srv"
   "srv/SetPlaceLabel.srv"
   "srv/ResolvePlaceAtPoint.srv"
+  "srv/EditWaypoint.srv"
   DEPENDENCIES std_msgs
 )
 

@@ -8,21 +8,8 @@ namespace {
 
 constexpr double kPi = 3.14159265358979323846;
 
-double normalize_angle(double a) {
-    while (a > kPi) a -= 2.0 * kPi;
-    while (a < -kPi) a += 2.0 * kPi;
-    return a;
-}
-
 bool is_soft_role(const std::string& role) {
     return role == "center" || role == "coverage";
-}
-
-std::string effective_label(const tpg::PlaceRegion& p) {
-    if (p.label_locked && !p.operator_label.empty()) return p.operator_label;
-    if (!p.instance_label.empty()) return p.instance_label;
-    if (!p.semantic_label.empty()) return p.semantic_label;
-    return p.place_id;
 }
 
 const tpg::PlaceRegion* find_place(const tpg::PlaceGraphSnapshot& g,
@@ -32,13 +19,27 @@ const tpg::PlaceRegion* find_place(const tpg::PlaceGraphSnapshot& g,
     return nullptr;
 }
 
-// Fill the place-derived fields (label, clearance) on a published waypoint,
-// falling back to the raw place_id and zero clearance when the place is not
-// present in the graph.
-void fill_place_info(const tpg::PlaceGraphSnapshot& g,
-                     const std::string& place_id, PublishedWaypoint& w) {
-    const tpg::PlaceRegion* p = find_place(g, place_id);
-    w.label = p ? effective_label(*p) : place_id;
+}  // namespace
+
+double normalize_angle(double a) {
+    while (a > kPi) a -= 2.0 * kPi;
+    while (a < -kPi) a += 2.0 * kPi;
+    return a;
+}
+
+std::string effective_label(const tpg::PlaceRegion& p) {
+    if (p.label_locked && !p.operator_label.empty()) return p.operator_label;
+    if (!p.instance_label.empty()) return p.instance_label;
+    if (!p.semantic_label.empty()) return p.semantic_label;
+    return p.place_id;
+}
+
+// Re-derive the place-owned fields (label, clearance) on a published waypoint
+// from its place_id, falling back to the raw place_id and zero clearance when
+// the place is not present in the graph.
+void refresh_place_info(const tpg::PlaceGraphSnapshot& g, PublishedWaypoint& w) {
+    const tpg::PlaceRegion* p = find_place(g, w.place_id);
+    w.label = p ? effective_label(*p) : w.place_id;
     w.clearance_m = p ? p->clearance_m : 0.0;
 }
 
@@ -65,8 +66,6 @@ bool clearance_ok(double x, double y, const tpg::MapSnapshot& map,
     }
     return true;
 }
-
-}  // namespace
 
 bool is_connector(tpg::PlaceKind k) {
     return k == tpg::PlaceKind::kPortal ||
@@ -214,7 +213,7 @@ PublishedWaypoint AnchorRegistry::make_published(
     w.waypoint_role = cand.waypoint_role;
     w.generation_reason = cand.waypoint_role;
     w.semantic_context = cand.semantic_context;
-    fill_place_info(g, cand.place_id, w);
+    refresh_place_info(g, w);
     return w;
 }
 
@@ -229,7 +228,7 @@ PublishedWaypoint AnchorRegistry::make_published_from_record(
     w.waypoint_role = rec.waypoint_role;
     w.generation_reason = rec.waypoint_role;
     w.semantic_context = rec.waypoint_role + " in " + rec.place_id;
-    fill_place_info(g, rec.place_id, w);
+    refresh_place_info(g, w);
     return w;
 }
 

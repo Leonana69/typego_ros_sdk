@@ -4,12 +4,18 @@
 #include <vector>
 
 #include "place_graph/place_graph.hpp"
+#include "typego_sdk/user_waypoint_store.hpp"
 #include "typego_sdk/waypoint_anchor.hpp"
 
 namespace tpg = place_graph;
 using typego_sdk::AnchorRegistry;
 using typego_sdk::Candidate;
+using typego_sdk::EditResult;
+using typego_sdk::kFrontierIdBase;
+using typego_sdk::kUserIdBase;
 using typego_sdk::PublishedWaypoint;
+using typego_sdk::UserWaypoint;
+using typego_sdk::UserWaypointStore;
 
 namespace {
 
@@ -200,4 +206,146 @@ TEST(WaypointAnchor, ConnectorPoseValidationScope) {
     // Resolves to no place at all: invalid.
     EXPECT_FALSE(typego_sdk::pose_valid(wc(0), wc(0), "portal_0", true, gb.g,
                                         map, 0.25));
+}
+
+// ---------------- UserWaypointStore (operator waypoints) ----------------
+
+TEST(UserWaypointStore, SchemaV4RoundTrip) {
+    UserWaypointStore s;
+    s.next_id = kUserIdBase + 7;
+    s.waypoints.push_back({kUserIdBase, 1.0, 2.0, 0.5, true, "room_0"});
+    s.waypoints.push_back({kUserIdBase + 3, 3.0, 4.0, 0.0, false, "room_1"});
+
+    UserWaypointStore t;
+    t.from_json(s.to_json());
+    ASSERT_EQ(t.waypoints.size(), 2u);
+    EXPECT_EQ(t.next_id, kUserIdBase + 7);
+    EXPECT_EQ(t.waypoints[0].id, kUserIdBase);
+    EXPECT_DOUBLE_EQ(t.waypoints[0].x, 1.0);
+    EXPECT_DOUBLE_EQ(t.waypoints[0].y, 2.0);
+    EXPECT_DOUBLE_EQ(t.waypoints[0].yaw, 0.5);
+    EXPECT_TRUE(t.waypoints[0].has_yaw);
+    EXPECT_EQ(t.waypoints[0].place_id, "room_0");
+    EXPECT_EQ(t.waypoints[1].id, kUserIdBase + 3);
+    EXPECT_FALSE(t.waypoints[1].has_yaw);
+    EXPECT_EQ(t.waypoints[1].place_id, "room_1");
+}
+
+TEST(UserWaypointStore, IdAllocationMonotonic) {
+    GraphBuilder gb;
+    gb.add("room_0", tpg::PlaceKind::kRoom, 5, 5, 25, 25);
+    auto map = make_free_map();
+    UserWaypointStore s;
+
+    auto r1 = s.apply_edit("add", 0, wc(10), wc(10), 0, false, gb.g, map);
+    ASSERT_TRUE(r1.success);
+    EXPECT_EQ(r1.id, kUserIdBase);
+    auto r2 = s.apply_edit("add", 0, wc(12), wc(12), 0, false, gb.g, map);
+    ASSERT_TRUE(r2.success);
+    EXPECT_EQ(r2.id, kUserIdBase + 1);
+    // Deleting never recycles ids.
+    auto rd = s.apply_edit("delete", kUserIdBase, 0, 0, 0, false, gb.g, map);
+    ASSERT_TRUE(rd.success);
+    auto r3 = s.apply_edit("add", 0, wc(14), wc(14), 0, false, gb.g, map);
+    ASSERT_TRUE(r3.success);
+    EXPECT_EQ(r3.id, kUserIdBase + 2);
+    EXPECT_EQ(s.waypoints.size(), 2u);
+}
+
+TEST(UserWaypointStore, RejectMoveDeleteOnNonUserIds) {
+    GraphBuilder gb;
+    gb.add("room_0", tpg::PlaceKind::kRoom, 5, 5, 25, 25);
+    auto map = make_free_map();
+    UserWaypointStore s;
+
+    // Auto id (< kFrontierIdBase): move rejected.
+    auto m_auto = s.apply_edit("move", 42, wc(10), wc(10), 0, false, gb.g, map);
+    EXPECT_FALSE(m_auto.success);
+    EXPECT_EQ(m_auto.message, "only operator waypoints can be moved");
+    // Frontier id (in [kFrontierIdBase, kUserIdBase)): delete rejected.
+    auto d_frontier =
+        s.apply_edit("delete", kFrontierIdBase + 1, 0, 0, 0, false, gb.g, map);
+    EXPECT_FALSE(d_frontier.success);
+    EXPECT_NE(d_frontier.message.find("relabel"), std::string::npos);
+    // A user id that doesn't exist: move fails as not-found.
+    auto m_missing =
+        s.apply_edit("move", kUserIdBase, wc(10), wc(10), 0, false, gb.g, map);
+    EXPECT_FALSE(m_missing.success);
+    EXPECT_EQ(m_missing.message, "waypoint not found");
+}
+
+TEST(UserWaypointStore, HardRejectUnsafeAdd) {
+    auto map = make_free_map();
+    UserWaypointStore s;
+    // Room hugging the border so an in-room cell can still be wall-adjacent.
+    GraphBuilder gb;
+    gb.add("room_0", tpg::PlaceKind::kRoom, 1, 1, 15, 15);
+
+    // Free cell outside any region resolves to no place: rejected.
+    auto off = s.apply_edit("add", 0, wc(20), wc(20), 0, false, gb.g, map);
+    EXPECT_FALSE(off.success);
+    EXPECT_EQ(off.message, "point is in unknown/obstacle space");
+
+    // In the room but within 0.375 m of the occupied border: clearance rejects.
+    auto near = s.apply_edit("add", 0, wc(2), wc(2), 0, false, gb.g, map);
+    EXPECT_FALSE(near.success);
+    EXPECT_EQ(near.message, "too close to a wall/obstacle");
+
+    // Interior with clearance: accepted, place_id set.
+    auto ok = s.apply_edit("add", 0, wc(8), wc(8), 0, false, gb.g, map);
+    ASSERT_TRUE(ok.success);
+    ASSERT_EQ(s.waypoints.size(), 1u);
+    EXPECT_EQ(s.waypoints[0].place_id, "room_0");
+}
+
+TEST(UserWaypointStore, MergeRefreshesLabelFromPlace) {
+    auto map = make_free_map();
+    UserWaypointStore s;
+    GraphBuilder gb;
+    gb.add("room_0", tpg::PlaceKind::kRoom, 5, 5, 25, 25);
+    ASSERT_TRUE(s.apply_edit("add", 0, wc(15), wc(15), 0, false, gb.g, map)
+                    .success);
+
+    std::vector<PublishedWaypoint> active, parked;
+    s.merge_into(active, parked, gb.g, map);
+    ASSERT_EQ(active.size(), 1u);
+    EXPECT_TRUE(parked.empty());
+    EXPECT_EQ(active[0].label, "room_0");  // falls back to place_id
+    EXPECT_EQ(active[0].place_id, "room_0");
+    EXPECT_EQ(active[0].source, "operator");
+
+    // Operator relabels the owning region; merge picks up effective_label.
+    gb.g.places[0].operator_label = "kitchen";
+    gb.g.places[0].label_locked = true;
+    active.clear();
+    parked.clear();
+    s.merge_into(active, parked, gb.g, map);
+    ASSERT_EQ(active.size(), 1u);
+    EXPECT_EQ(active[0].label, "kitchen");
+}
+
+TEST(UserWaypointStore, WithholdsParkedPinButKeepsIt) {
+    auto map = make_free_map();
+    UserWaypointStore s;
+    GraphBuilder gb;
+    gb.add("room_0", tpg::PlaceKind::kRoom, 5, 5, 25, 25);
+    ASSERT_TRUE(s.apply_edit("add", 0, wc(15), wc(15), 0, false, gb.g, map)
+                    .success);
+
+    // A refresh whose graph no longer covers the pin's cell: parked, not dropped.
+    GraphBuilder shrunk;
+    shrunk.add("room_0", tpg::PlaceKind::kRoom, 5, 5, 10, 10);  // excludes (15,15)
+    std::vector<PublishedWaypoint> active, parked;
+    s.merge_into(active, parked, shrunk.g, map);
+    EXPECT_TRUE(active.empty());
+    ASSERT_EQ(parked.size(), 1u);
+    EXPECT_EQ(parked[0].id, kUserIdBase);
+    EXPECT_EQ(s.waypoints.size(), 1u);  // still held + serialized
+
+    // When the region grows back over the pin, it re-activates automatically.
+    active.clear();
+    parked.clear();
+    s.merge_into(active, parked, gb.g, map);
+    EXPECT_EQ(active.size(), 1u);
+    EXPECT_TRUE(parked.empty());
 }

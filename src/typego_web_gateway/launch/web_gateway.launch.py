@@ -16,6 +16,7 @@ def generate_launch_description():
     bag_chunk = LaunchConfiguration('bag_chunk_seconds')
     bag_retain = LaunchConfiguration('bag_retain')
     disable_bag = LaunchConfiguration('disable_bag')
+    camera_topic = LaunchConfiguration('camera_topic')
     foxglove_enabled = LaunchConfiguration('enable_foxglove_bridge')
     foxglove_port = LaunchConfiguration('foxglove_bridge_port')
 
@@ -39,6 +40,11 @@ def generate_launch_description():
             description='set to "true" to skip the always-on rosbag recorder',
         ),
         DeclareLaunchArgument(
+            'camera_topic', default_value='camera/color/image_raw',
+            description='Image topic the gateway subscribes to for the camera '
+                        'view; empty string disables the camera.',
+        ),
+        DeclareLaunchArgument(
             'enable_foxglove_bridge', default_value='false',
             description='run foxglove_bridge alongside the gateway for '
                         'Foxglove Studio / Lichtblick clients',
@@ -59,6 +65,7 @@ def generate_launch_description():
                 '--bag-dir', bag_dir,
                 '--bag-chunk-seconds', bag_chunk,
                 '--bag-retain', bag_retain,
+                '--camera-topic', camera_topic,
             ],
             parameters=[{
                 'use_sim_time': False,

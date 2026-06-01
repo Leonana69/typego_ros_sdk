@@ -27,6 +27,21 @@ def test_shipped_robot_yaml_loads(tmp_path):
     assert 'web_gateway.bag_retain' in cfg.dynamic
 
 
+def test_web_gateway_camera_topic_default():
+    assert RobotConfig().web_gateway.camera_topic == 'camera/color/image_raw'
+
+
+def test_web_gateway_camera_topic_absolute_override_accepted():
+    cfg = RobotConfig.model_validate(
+        {'web_gateway': {'camera_topic': '/robot1/camera/color/image_raw'}})
+    assert cfg.web_gateway.camera_topic == '/robot1/camera/color/image_raw'
+
+
+def test_web_gateway_unknown_key_rejected():
+    with pytest.raises(ValidationError):
+        RobotConfig.model_validate({'web_gateway': {'mystery_cam': 'x'}})
+
+
 def test_invalid_domain_rejected():
     with pytest.raises(ValidationError):
         RobotConfig.model_validate({'network': {'ros_domain_id': 300}})

@@ -22,7 +22,7 @@ robot:
   name: robot-alpha
 
 autonomy:
-  type: full         # base | full
+  type: base         # base | full
   slam_backend: arise  # arise | lightning  (only used when type=full)
 
 network:
@@ -46,6 +46,7 @@ web_gateway:
   bag_dir: ~/.typego/bags
   bag_chunk_seconds: 600
   bag_retain: 6
+  camera_topic: camera/color/image_raw   # gateway camera sub; "" disables
 
 map:
   slam_map_name: empty_map

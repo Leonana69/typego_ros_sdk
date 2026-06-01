@@ -11,13 +11,16 @@ html, body, #root {
 
 .app {
   display: grid;
-  grid-template-columns: 1fr 360px;
+  grid-template-columns: 320px 340px 1fr;
   grid-template-rows: auto 1fr;
+  grid-template-areas:
+    "header header header"
+    "sidebar camera map";
   height: 100%;
 }
 
 .app header {
-  grid-column: 1 / -1;
+  grid-area: header;
   padding: 10px 16px;
   background: #1a1f26;
   border-bottom: 1px solid #232a33;
@@ -45,9 +48,66 @@ html, body, #root {
 .app header .pill.bad { color: #ff8888; background: #3a1e1e; }
 
 .map-pane {
+  grid-area: map;
+  background: #151a21;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.map-pane h2 {
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: #8d95a1;
+  margin: 0 0 8px 0;
+  font-weight: 600;
+}
+
+.map-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+
+.map-head h2 { margin: 0; }
+
+/* segmented Navigate/Label toggle */
+.seg { display: flex; }
+
+.seg button {
+  background: #1a1f26;
+  color: #a9b1bc;
+  border: 1px solid #232a33;
+  padding: 4px 12px;
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.seg button:first-child { border-radius: 4px 0 0 4px; }
+.seg button:last-child { border-radius: 0 4px 4px 0; border-left: 0; }
+.seg button.active {
+  background: #2a6cf0;
+  color: #fff;
+  border-color: #2a6cf0;
+}
+
+.map-frame {
+  flex: 1;
   position: relative;
   overflow: hidden;
   background: #0d1013;
+  border-radius: 4px;
+  min-height: 0;
+}
+
+.map-topic {
+  margin-top: 6px;
+  font-size: 11px;
 }
 
 .map-pane canvas {
@@ -58,7 +118,8 @@ html, body, #root {
 }
 
 .sidebar {
-  border-left: 1px solid #232a33;
+  grid-area: sidebar;
+  border-right: 1px solid #232a33;
   padding: 12px;
   overflow-y: auto;
   background: #151a21;
@@ -148,3 +209,219 @@ html, body, #root {
 .events .ev.level-error { color: #ff8888; }
 
 .muted { color: #7a828f; font-size: 12px; }
+
+/* --- tab bar --- */
+.tab-bar {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 10px;
+}
+
+.tab-bar button {
+  flex: 1;
+  background: #1a1f26;
+  color: #a9b1bc;
+  border: 1px solid #232a33;
+  padding: 6px 8px;
+  border-radius: 4px;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.tab-bar button.active {
+  background: #2a6cf0;
+  color: #fff;
+  border-color: #2a6cf0;
+}
+
+/* --- inline notice / toast --- */
+.notice {
+  background: #2b333d;
+  color: #f2c15d;
+  border: 1px solid #3a4250;
+  border-radius: 4px;
+  padding: 6px 10px;
+  font-size: 12px;
+  margin-bottom: 10px;
+}
+
+/* --- pills inside panels (waypoint rows etc.) --- */
+.panel .pill {
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: 9px;
+  background: #2b333d;
+  color: #a9b1bc;
+}
+.panel .pill.ok { color: #7ed491; background: #1e3423; }
+
+/* --- waypoint list --- */
+.wp-group {
+  border-top: 1px solid #232a33;
+  padding-top: 6px;
+  margin-top: 6px;
+}
+
+.wp-group-head {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 4px;
+}
+
+.wp-group-head .wp-region {
+  font-size: 12px;
+  font-weight: 600;
+  color: #e7eaee;
+}
+
+.wp-group-head button {
+  margin-left: auto;
+  padding: 2px 8px;
+  font-size: 11px;
+}
+
+.wp-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 0;
+  font-size: 12px;
+}
+
+.wp-row.parked { opacity: 0.5; }
+
+.wp-main {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.wp-glyph { color: #f2c15d; }
+.wp-id { color: #8d95a1; font-family: ui-monospace, monospace; }
+.wp-pos { font-family: ui-monospace, monospace; color: #b4bac3; }
+
+.wp-actions { display: flex; gap: 4px; }
+.wp-actions button { padding: 2px 8px; font-size: 11px; }
+
+/* --- marker legend --- */
+.marker-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  font-size: 11px;
+  color: #8d95a1;
+  margin-top: 6px;
+}
+.marker-legend .dot {
+  display: inline-block;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  margin-right: 3px;
+  vertical-align: middle;
+}
+.marker-legend .dot.user { background: #f2c15d; border-radius: 1px; }
+.marker-legend .dot.auto { background: #7ed491; }
+.marker-legend .dot.frontier { background: #7aa2ff; }
+
+/* --- modal --- */
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 50;
+  padding: 20px;
+}
+
+.modal {
+  width: 420px;
+  max-width: 100%;
+  max-height: 90vh;
+  overflow-y: auto;
+  margin: 0;
+}
+
+.panel select,
+.panel textarea {
+  flex: 1;
+  background: #0f1318;
+  border: 1px solid #2a323c;
+  color: #e7eaee;
+  padding: 4px 6px;
+  border-radius: 4px;
+  font: inherit;
+  font-size: 13px;
+  min-width: 0;
+}
+
+.panel textarea { resize: vertical; }
+
+/* affordance chips */
+.chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  flex: 1;
+}
+.chip {
+  background: #0f1318;
+  color: #a9b1bc;
+  border: 1px solid #2a323c;
+  border-radius: 10px;
+  padding: 2px 8px;
+  font-size: 11px;
+  cursor: pointer;
+}
+.chip.on { background: #2a6cf0; color: #fff; border-color: #2a6cf0; }
+
+/* --- camera (column directly left of the map) --- */
+.camera-pane {
+  grid-area: camera;
+  border-right: 1px solid #232a33;
+  background: #151a21;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.camera-pane h2 {
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: #8d95a1;
+  margin: 0 0 8px 0;
+  font-weight: 600;
+}
+
+.camera-pane .camera-frame {
+  flex: 1;
+  background: #000;
+  border-radius: 4px;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 0;
+}
+
+.camera-pane .camera-frame img {
+  max-width: 100%;
+  max-height: 100%;
+  display: block;
+  object-fit: contain;
+}
+
+.camera-pane .camera-offline {
+  padding: 40px 0;
+  text-align: center;
+}

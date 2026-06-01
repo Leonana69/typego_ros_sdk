@@ -43,6 +43,7 @@
 #include "typego_interface/msg/place_region.hpp"
 #include "typego_interface/msg/way_point.hpp"
 #include "typego_interface/msg/way_point_array.hpp"
+#include "typego_interface/srv/edit_waypoint.hpp"
 #include "typego_interface/srv/resolve_place_at_point.hpp"
 #include "typego_interface/srv/set_place_label.hpp"
 
@@ -50,6 +51,7 @@
 #include "place_graph/place_graph.hpp"
 
 #include "typego_sdk/namespace_utils.hpp"
+#include "typego_sdk/user_waypoint_store.hpp"
 #include "typego_sdk/waypoint_anchor.hpp"
 
 namespace tpg = place_graph;
@@ -57,10 +59,14 @@ using json = nlohmann::json;
 using typego_sdk::AnchorRecord;
 using typego_sdk::AnchorRegistry;
 using typego_sdk::Candidate;
+using typego_sdk::EditResult;
 using typego_sdk::is_connector;
 using typego_sdk::kFrontierIdBase;
+using typego_sdk::kUserIdBase;
 using typego_sdk::pose_valid;
 using typego_sdk::PublishedWaypoint;
+using typego_sdk::refresh_place_info;
+using typego_sdk::UserWaypointStore;
 
 namespace {
 
@@ -165,6 +171,11 @@ class PlaceGraphWaypointsNode : public rclcpp::Node {
         waypoint_pub_ =
             create_publisher<typego_interface::msg::WayPointArray>(
                 "waypoints", latched);
+        // Operator pins that no longer resolve/clear are withheld from
+        // /waypoints but published here so the UI can still show + manage them.
+        parked_pub_ =
+            create_publisher<typego_interface::msg::WayPointArray>(
+                "waypoints_parked", latched);
         graph_pub_ = create_publisher<typego_interface::msg::PlaceGraph>(
             "place_graph", latched);
         marker_pub_ =
@@ -192,6 +203,11 @@ class PlaceGraphWaypointsNode : public rclcpp::Node {
                 std::bind(&PlaceGraphWaypointsNode::on_resolve, this,
                           std::placeholders::_1, std::placeholders::_2),
                 rmw_qos_profile_services_default, service_cb_group_);
+        edit_srv_ = create_service<typego_interface::srv::EditWaypoint>(
+            "typego/edit_waypoint",
+            std::bind(&PlaceGraphWaypointsNode::on_edit_waypoint, this,
+                      std::placeholders::_1, std::placeholders::_2),
+            rmw_qos_profile_services_default, service_cb_group_);
 
         load_persisted();
 
@@ -226,6 +242,10 @@ class PlaceGraphWaypointsNode : public rclcpp::Node {
             declare_parameter<double>("entrance_offset_m", 0.5);
         min_anchor_clearance_m_ =
             declare_parameter<double>("min_anchor_clearance_m", 0.25);
+        // Operator pins are held to their own clearance floor (default the go2
+        // footprint half-length), independent of the auto-anchor clearance.
+        user_waypoint_clearance_m_ =
+            declare_parameter<double>("user_waypoint_clearance_m", 0.375);
         waypoint_spacing_m_ =
             declare_parameter<double>("waypoint_spacing_m", 2.0);
         coverage_min_area_m2_ =
@@ -238,6 +258,7 @@ class PlaceGraphWaypointsNode : public rclcpp::Node {
         registry_.min_anchor_clearance_m = min_anchor_clearance_m_;
         registry_.stale_anchor_retire_refreshes = stale_anchor_retire_refreshes_;
         registry_.publish_stale_anchors = publish_stale_anchors_;
+        user_store_.min_clearance_m = user_waypoint_clearance_m_;
 
         if (!wf.empty()) {
             waypoint_file_ = wf;
@@ -298,22 +319,33 @@ class PlaceGraphWaypointsNode : public rclcpp::Node {
         while (!stop_) {
             nav_msgs::msg::OccupancyGrid::SharedPtr grid;
             std::vector<LabelRequest> labels;
+            std::vector<EditRequest> edits;
             {
                 std::unique_lock<std::mutex> lk(pending_mutex_);
                 cv_.wait(lk, [&] {
                     return stop_ || pending_map_ != nullptr ||
-                           !pending_labels_.empty();
+                           !pending_labels_.empty() || !pending_edits_.empty();
                 });
                 if (stop_) break;
                 grid = pending_map_;
                 pending_map_ = nullptr;
                 labels.swap(pending_labels_);
+                edits.swap(pending_edits_);
             }
 
-            // Apply label writes promptly, independent of map processing, so a
-            // label-only update does not wait for the next /map.
-            if (!labels.empty()) apply_labels(labels);
-            if (!grid) continue;  // label-only wake
+            // Apply label + waypoint writes promptly, independent of map
+            // processing, so an edit-only update does not wait for the next /map.
+            // Both feed the single republish_after_edit() path so /waypoints, the
+            // parked topic, markers, persistence, and the resolve snapshot stay
+            // consistent. When a /map is also pending, process() does the full
+            // (re)publish instead.
+            bool edited = false;
+            if (!labels.empty() && apply_labels(labels)) edited = true;
+            if (!edits.empty() && apply_waypoint_edits(edits)) edited = true;
+            if (!grid) {
+                if (edited) republish_after_edit();
+                continue;  // label/edit-only wake
+            }
 
             tpg::MapSnapshot snap = to_snapshot(*grid);
             std::size_t changed = count_changed(snap);
@@ -358,8 +390,17 @@ class PlaceGraphWaypointsNode : public rclcpp::Node {
         have_prev_ = true;
 
         std::vector<Candidate> candidates = generate_candidates(matched, snap);
-        std::vector<PublishedWaypoint> published =
-            registry_.reconcile(candidates, matched, snap);
+        last_auto_published_ = registry_.reconcile(candidates, matched, snap);
+        // Cache the full map so an edit-only re-publish can re-validate operator
+        // pins (pose_valid/clearance need a MapSnapshot, not just last_cells_).
+        last_map_ = snap;
+        have_snap_ = true;
+
+        // Merge operator pins: active ones into the published list, invalid ones
+        // (no longer resolve / lack clearance) into the withheld "parked" list.
+        std::vector<PublishedWaypoint> published = last_auto_published_;
+        std::vector<PublishedWaypoint> parked;
+        user_store_.merge_into(published, parked, matched, snap);
 
         // Group member waypoint ids per place for the published graph.
         std::unordered_map<std::string, std::vector<std::uint32_t>> members;
@@ -368,11 +409,12 @@ class PlaceGraphWaypointsNode : public rclcpp::Node {
         publish_waypoints(published);
         publish_graph(matched, members);
         publish_markers(published);
+        publish_parked(parked);
         persist(matched, published, members);
         publish_events(mr.events, matched.map_version);
 
-        // Cache so a label-only update can re-publish/persist without a map,
-        // and refresh the read-only snapshot used by ResolvePlaceAtPoint.
+        // Cache so a label/edit-only update can re-publish/persist without a
+        // map, and refresh the read-only snapshot used by ResolvePlaceAtPoint.
         last_published_ = std::move(published);
         last_members_ = std::move(members);
         refresh_pub_snapshot();
@@ -385,6 +427,13 @@ class PlaceGraphWaypointsNode : public rclcpp::Node {
     struct LabelRequest {
         std::shared_ptr<typego_interface::srv::SetPlaceLabel::Request> req;
         std::promise<std::pair<bool, std::string>> done;
+    };
+
+    // Pending operator-waypoint edits, applied on the worker thread so the
+    // worker-owned user_store_/prev_ are never touched off-thread.
+    struct EditRequest {
+        std::shared_ptr<typego_interface::srv::EditWaypoint::Request> req;
+        std::promise<EditResult> done;
     };
 
     void on_set_label(
@@ -410,7 +459,33 @@ class PlaceGraphWaypointsNode : public rclcpp::Node {
         }
     }
 
-    void apply_labels(std::vector<LabelRequest>& labels) {
+    void on_edit_waypoint(
+        const std::shared_ptr<typego_interface::srv::EditWaypoint::Request> req,
+        std::shared_ptr<typego_interface::srv::EditWaypoint::Response> res) {
+        std::promise<EditResult> pr;
+        auto fut = pr.get_future();
+        {
+            std::lock_guard<std::mutex> lk(pending_mutex_);
+            pending_edits_.push_back({req, std::move(pr)});
+        }
+        cv_.notify_one();
+        if (fut.wait_for(std::chrono::seconds(5)) ==
+            std::future_status::ready) {
+            EditResult r = fut.get();
+            res->success = r.success;
+            res->message = r.message;
+            res->id = r.id;
+        } else {
+            res->success = false;
+            res->message = "timed out applying edit";
+            res->id = 0;
+        }
+    }
+
+    // Apply pending label writes to prev_ (worker thread). Returns whether any
+    // label actually changed; the worker then re-publishes via the shared
+    // republish_after_edit() path (geometry is unchanged by a label write).
+    bool apply_labels(std::vector<LabelRequest>& labels) {
         bool any = false;
         for (auto& lr : labels) {
             const auto& req = *lr.req;
@@ -420,6 +495,14 @@ class PlaceGraphWaypointsNode : public rclcpp::Node {
             if (!place) {
                 lr.done.set_value(
                     {false, "unknown place_id: " + req.place_id});
+                continue;
+            }
+            // Only region kinds are labelable; refuse connectors/frontiers (the
+            // VLM labeler already skips them — this closes the manual-API hole).
+            if (is_connector(place->kind) ||
+                place->kind == tpg::PlaceKind::kFrontierRegion) {
+                lr.done.set_value(
+                    {false, "cannot label a connector/frontier region"});
                 continue;
             }
             if (place->label_locked && normalize_token(req.source) != "operator") {
@@ -438,13 +521,51 @@ class PlaceGraphWaypointsNode : public rclcpp::Node {
             any = true;
             lr.done.set_value({true, ""});
         }
-        if (any) {
-            // Re-publish/persist the updated graph using the cached waypoint
-            // outputs (geometry is unchanged by a label write).
-            publish_graph(prev_, last_members_);
-            persist(prev_, last_published_, last_members_);
-            refresh_pub_snapshot();
+        return any;
+    }
+
+    // Apply pending operator-waypoint edits via the ROS-free store (worker
+    // thread). Each edit hard-rejects (success=false) when its pose is unsafe.
+    // Returns whether any edit changed store state (so the worker re-publishes).
+    bool apply_waypoint_edits(std::vector<EditRequest>& edits) {
+        bool changed = false;
+        for (auto& er : edits) {
+            const auto& req = *er.req;
+            if (!have_snap_ || !have_prev_) {
+                er.done.set_value({false, "map not ready", 0});
+                continue;
+            }
+            EditResult r = user_store_.apply_edit(req.op, req.id, req.x, req.y,
+                                                  req.yaw, req.has_yaw, prev_,
+                                                  last_map_);
+            if (r.success) changed = true;
+            er.done.set_value(r);
         }
+        return changed;
+    }
+
+    // Single edit-only re-publish path (worker thread, no fresh /map). Shared by
+    // label edits and waypoint CRUD: refresh auto labels in place from prev_,
+    // re-validate operator pins (active vs parked), then re-emit everything and
+    // persist. Does NOT re-run reconcile (geometry is unchanged on this wake).
+    void republish_after_edit() {
+        std::vector<PublishedWaypoint> published = last_auto_published_;
+        for (auto& w : published) refresh_place_info(prev_, w);
+        std::vector<PublishedWaypoint> parked;
+        user_store_.merge_into(published, parked, prev_, last_map_);
+
+        std::unordered_map<std::string, std::vector<std::uint32_t>> members;
+        for (const auto& w : published) members[w.place_id].push_back(w.id);
+
+        publish_waypoints(published);
+        publish_graph(prev_, members);
+        publish_markers(published);
+        publish_parked(parked);
+        persist(prev_, published, members);
+        refresh_pub_snapshot();
+
+        last_published_ = std::move(published);
+        last_members_ = std::move(members);
     }
 
     void apply_one_label(
@@ -825,7 +946,8 @@ class PlaceGraphWaypointsNode : public rclcpp::Node {
     }
 
     // ----- publishing -----
-    void publish_waypoints(const std::vector<PublishedWaypoint>& wps) {
+    static typego_interface::msg::WayPointArray to_waypoint_array(
+        const std::vector<PublishedWaypoint>& wps) {
         typego_interface::msg::WayPointArray arr;
         for (const auto& w : wps) {
             typego_interface::msg::WayPoint m;
@@ -843,7 +965,17 @@ class PlaceGraphWaypointsNode : public rclcpp::Node {
             m.waypoint_role = w.waypoint_role;
             arr.waypoints.push_back(m);
         }
-        waypoint_pub_->publish(arr);
+        return arr;
+    }
+
+    void publish_waypoints(const std::vector<PublishedWaypoint>& wps) {
+        waypoint_pub_->publish(to_waypoint_array(wps));
+    }
+
+    // Operator pins withheld from /waypoints (no longer resolve / lack
+    // clearance), on a separate latched topic so the UI can show + manage them.
+    void publish_parked(const std::vector<PublishedWaypoint>& wps) {
+        parked_pub_->publish(to_waypoint_array(wps));
     }
 
     void publish_graph(
@@ -969,13 +1101,23 @@ class PlaceGraphWaypointsNode : public rclcpp::Node {
         const std::unordered_map<std::string, std::vector<std::uint32_t>>&
             members) {
         json doc;
-        doc["version"] = 3;
+        doc["version"] = 4;
         doc["map_version"] = g.map_version;
         doc["next_waypoint_id"] = registry_.next_id;
 
+        // Operator waypoints (all of them, incl. currently-parked ones). Active
+        // ones additionally appear in the derived waypoints[] below (so
+        // PatrolController can target them); parked ones never reached `wps`.
+        json uj = user_store_.to_json();
+        doc["user_waypoints"] = uj["user_waypoints"];
+        doc["next_user_waypoint_id"] = uj["next_user_waypoint_id"];
+
         doc["waypoints"] = json::array();
         for (const auto& w : wps) {
-            if (w.id >= kFrontierIdBase) continue;  // volatile, not persisted
+            // Frontier ids are volatile; user ids (>= kUserIdBase) are persisted
+            // in their own array above but still emitted here so they reload.
+            if (w.id >= kFrontierIdBase && w.id < kUserIdBase)
+                continue;
             doc["waypoints"].push_back({
                 {"id", w.id},
                 {"x", w.x},
@@ -1133,9 +1275,11 @@ class PlaceGraphWaypointsNode : public rclcpp::Node {
                         registry_.records[r.generation_key] = r;
                 }
             }
+            user_store_.from_json(doc);  // v4: user_waypoints + next id
             RCLCPP_INFO(get_logger(),
-                        "loaded %zu anchors, next_id=%u",
-                        registry_.records.size(), registry_.next_id);
+                        "loaded %zu anchors, %zu user waypoints, next_id=%u",
+                        registry_.records.size(), user_store_.waypoints.size(),
+                        registry_.next_id);
         } catch (const std::exception& e) {
             RCLCPP_WARN(get_logger(), "failed to load %s: %s",
                         waypoint_file_.c_str(), e.what());
@@ -1234,6 +1378,7 @@ class PlaceGraphWaypointsNode : public rclcpp::Node {
     int map_change_cell_threshold_ = 500;
     double entrance_offset_m_ = 0.5;
     double min_anchor_clearance_m_ = 0.25;
+    double user_waypoint_clearance_m_ = 0.375;
     double waypoint_spacing_m_ = 2.0;
     double coverage_min_area_m2_ = 12.0;
     int stale_anchor_retire_refreshes_ = 3;
@@ -1243,6 +1388,8 @@ class PlaceGraphWaypointsNode : public rclcpp::Node {
     rclcpp::Subscription<nav_msgs::msg::OccupancyGrid>::SharedPtr map_sub_;
     rclcpp::Publisher<typego_interface::msg::WayPointArray>::SharedPtr
         waypoint_pub_;
+    rclcpp::Publisher<typego_interface::msg::WayPointArray>::SharedPtr
+        parked_pub_;
     rclcpp::Publisher<typego_interface::msg::PlaceGraph>::SharedPtr graph_pub_;
     rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr
         marker_pub_;
@@ -1253,6 +1400,7 @@ class PlaceGraphWaypointsNode : public rclcpp::Node {
         set_label_srv_;
     rclcpp::Service<typego_interface::srv::ResolvePlaceAtPoint>::SharedPtr
         resolve_srv_;
+    rclcpp::Service<typego_interface::srv::EditWaypoint>::SharedPtr edit_srv_;
 
     std::thread worker_;
     std::atomic<bool> stop_{false};
@@ -1260,13 +1408,22 @@ class PlaceGraphWaypointsNode : public rclcpp::Node {
     std::mutex pending_mutex_;
     nav_msgs::msg::OccupancyGrid::SharedPtr pending_map_;
     std::vector<LabelRequest> pending_labels_;  // guarded by pending_mutex_
+    std::vector<EditRequest> pending_edits_;     // guarded by pending_mutex_
     std::vector<tpg::CellState> last_cells_;
 
     // Worker-thread-owned (no lock needed; only the worker touches these).
     tpg::PlaceGraphSnapshot prev_;
     bool have_prev_ = false;
     AnchorRegistry registry_;
-    // Cached last outputs so a label-only write can re-publish/persist.
+    UserWaypointStore user_store_;
+    // Full last map for edit-time pose_valid/clearance re-validation, plus a
+    // ready flag (last_cells_ alone lacks resolution/origin/size).
+    tpg::MapSnapshot last_map_;
+    bool have_snap_ = false;
+    // Cached reconcile-only output so an edit-only re-publish can rebuild the
+    // published list (auto + user pins) without re-running reconcile.
+    std::vector<PublishedWaypoint> last_auto_published_;
+    // Cached last outputs so a label/edit-only write can re-publish/persist.
     std::vector<PublishedWaypoint> last_published_;
     std::unordered_map<std::string, std::vector<std::uint32_t>> last_members_;
 
