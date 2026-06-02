@@ -96,6 +96,10 @@ public:
         "/pcd_grid_path", rclcpp::QoS(1).transient_local());
     grid_map_pub_ = create_publisher<nav_msgs::msg::OccupancyGrid>(
         "/pcd_2d_map", rclcpp::QoS(1).transient_local());
+    // Same grid on the standard /map topic so base-autonomy consumers
+    // (Nav2, place_graph, waypoints, web gateway) work in full autonomy too.
+    map_pub_ = create_publisher<nav_msgs::msg::OccupancyGrid>(
+        "/map", rclcpp::QoS(1).transient_local());
     grid_marker_pub_ = create_publisher<visualization_msgs::msg::MarkerArray>(
         "/pcd_grid_markers", rclcpp::QoS(1).transient_local());
     path_marker_pub_ = create_publisher<visualization_msgs::msg::MarkerArray>(
@@ -2668,6 +2672,7 @@ private:
     }
 
     grid_map_pub_->publish(map);
+    map_pub_->publish(map);
   }
 
   void publishGridMarkers()
@@ -2876,6 +2881,7 @@ private:
   rclcpp::Publisher<geometry_msgs::msg::PointStamped>::SharedPtr waypoint_pub_;
   rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr path_pub_;
   rclcpp::Publisher<nav_msgs::msg::OccupancyGrid>::SharedPtr grid_map_pub_;
+  rclcpp::Publisher<nav_msgs::msg::OccupancyGrid>::SharedPtr map_pub_;
   rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr grid_marker_pub_;
   rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr path_marker_pub_;
   rclcpp::TimerBase::SharedPtr mapping_timer_;
