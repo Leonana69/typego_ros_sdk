@@ -107,6 +107,7 @@ double minRelZ = -0.5;
 double maxRelZ = 0.25;
 double maxSpeed = 1.0;
 double maxAccel = 1.0;
+double maxDecel = 2.0;
 double dirWeight = 0.02;
 double dirThre = 90.0;
 bool dirToVehicle = false;
@@ -215,9 +216,10 @@ void publishJoy(bool autonomy)
 static void publishSpeedConfig()
 {
   std_msgs::msg::Float32MultiArray msg;
-  // [maxSpeed, autonomySpeed, maxAccel] — pathFollower reads index 2 if present.
+  // [maxSpeed, autonomySpeed, maxAccel, maxDecel] — pathFollower reads index 2
+  // (accel) and index 3 (decel) if present; older readers ignore the extras.
   msg.data = {static_cast<float>(maxSpeed), static_cast<float>(autonomySpeed),
-              static_cast<float>(maxAccel)};
+              static_cast<float>(maxAccel), static_cast<float>(maxDecel)};
   pubSpeedConfig_->publish(msg);
 }
 
@@ -498,23 +500,26 @@ void setSpeedHandler(
   const std::shared_ptr<typego_interface::srv::SetSpeed::Request> request,
   std::shared_ptr<typego_interface::srv::SetSpeed::Response> response)
 {
-  // Report the fields this local_planner manages (speed, autonomy speed, accel).
-  // Reverse / angular speed and decel / angular accel are Nav2-only and are
-  // left at their response defaults here.
+  // Report the fields this local_planner manages (speed, autonomy speed, accel,
+  // decel). Reverse / angular speed and angular accel are Nav2-only and are left
+  // at their response defaults here.
   auto fillCurrent = [&]() {
     response->current_max_speed = maxSpeed;
     response->current_max_autonomy_speed = autonomySpeed;
     response->current_max_accel = maxAccel;
+    response->current_max_decel = maxDecel;
   };
 
   double newMaxSpeed = request->max_speed;
   double newAutonomySpeed = request->max_autonomy_speed;
   double newMaxAccel = request->max_accel;
+  double newMaxDecel = request->max_decel;
   bool changeMax = (newMaxSpeed >= 0);
   bool changeAutonomy = (newAutonomySpeed >= 0);
   bool changeAccel = (newMaxAccel >= 0);
+  bool changeDecel = (newMaxDecel >= 0);
 
-  if (!changeMax && !changeAutonomy && !changeAccel) {
+  if (!changeMax && !changeAutonomy && !changeAccel && !changeDecel) {
     response->success = true;
     response->message = "No changes requested. Returning current values.";
     fillCurrent();
@@ -524,6 +529,7 @@ void setSpeedHandler(
   if (!changeMax) newMaxSpeed = maxSpeed;
   if (!changeAutonomy) newAutonomySpeed = autonomySpeed;
   if (!changeAccel) newMaxAccel = maxAccel;
+  if (!changeDecel) newMaxDecel = maxDecel;
 
   if (newMaxSpeed <= 0) {
     response->success = false;
@@ -540,6 +546,12 @@ void setSpeedHandler(
   if (newMaxAccel <= 0) {
     response->success = false;
     response->message = "max_accel must be > 0, got " + std::to_string(newMaxAccel);
+    fillCurrent();
+    return;
+  }
+  if (newMaxDecel <= 0) {
+    response->success = false;
+    response->message = "max_decel must be > 0, got " + std::to_string(newMaxDecel);
     fillCurrent();
     return;
   }
@@ -560,6 +572,7 @@ void setSpeedHandler(
   maxSpeed = newMaxSpeed;
   autonomySpeed = newAutonomySpeed;
   maxAccel = newMaxAccel;
+  maxDecel = newMaxDecel;
 
   if (autonomyMode) {
     joySpeed = clampedAutonomySpeed();
@@ -568,8 +581,8 @@ void setSpeedHandler(
   publishSpeedConfig();
 
   RCLCPP_INFO(nh->get_logger(),
-              "Speed updated: maxSpeed=%.3f, maxAutonomySpeed=%.3f, maxAccel=%.3f",
-              maxSpeed, autonomySpeed, maxAccel);
+              "Speed updated: maxSpeed=%.3f, maxAutonomySpeed=%.3f, maxAccel=%.3f, maxDecel=%.3f",
+              maxSpeed, autonomySpeed, maxAccel, maxDecel);
 
   response->success = true;
   response->message = "Speed parameters updated successfully.";
@@ -875,6 +888,7 @@ int main(int argc, char** argv)
   nh->declare_parameter<double>("maxRelZ", maxRelZ);
   nh->declare_parameter<double>("maxSpeed", maxSpeed);
   nh->declare_parameter<double>("maxAccel", maxAccel);
+  nh->declare_parameter<double>("maxDecel", maxDecel);
   nh->declare_parameter<double>("dirWeight", dirWeight);
   nh->declare_parameter<double>("dirThre", dirThre);
   nh->declare_parameter<bool>("dirToVehicle", dirToVehicle);
@@ -933,6 +947,7 @@ int main(int argc, char** argv)
   nh->get_parameter("maxRelZ", maxRelZ);
   nh->get_parameter("maxSpeed", maxSpeed);
   nh->get_parameter("maxAccel", maxAccel);
+  nh->get_parameter("maxDecel", maxDecel);
   nh->get_parameter("dirWeight", dirWeight);
   nh->get_parameter("dirThre", dirThre);
   nh->get_parameter("dirToVehicle", dirToVehicle);

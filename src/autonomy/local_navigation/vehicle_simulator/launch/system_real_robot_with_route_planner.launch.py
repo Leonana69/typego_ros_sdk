@@ -27,6 +27,7 @@ def generate_launch_description():
   maxSpeed = LaunchConfiguration('maxSpeed')
   autonomySpeed = LaunchConfiguration('autonomySpeed')
   maxAccel = LaunchConfiguration('maxAccel')
+  maxDecel = LaunchConfiguration('maxDecel')
 
   declare_route_planner_backend = DeclareLaunchArgument(
     'route_planner_backend',
@@ -56,6 +57,7 @@ def generate_launch_description():
   declare_maxSpeed = DeclareLaunchArgument('maxSpeed', default_value='1.375', description='Local-planner top linear speed (m/s)')
   declare_autonomySpeed = DeclareLaunchArgument('autonomySpeed', default_value='0.875', description='Local-planner autonomy cruise speed (m/s)')
   declare_maxAccel = DeclareLaunchArgument('maxAccel', default_value='2.0', description='Local-planner acceleration ramp (m/s^2)')
+  declare_maxDecel = DeclareLaunchArgument('maxDecel', default_value='2.0', description='Local-planner deceleration ramp / braking (m/s^2)')
 
   use_arise = IfCondition(PythonExpression(["'", slam_backend, "' == 'arise'"]))
   use_lightning = IfCondition(PythonExpression(["'", slam_backend, "' == 'lightning'"]))
@@ -83,6 +85,7 @@ def generate_launch_description():
       'maxSpeed': maxSpeed,
       'autonomySpeed': autonomySpeed,
       'maxAccel': maxAccel,
+      'maxDecel': maxDecel,
       'vehicleLength': vehicleLength,
       'vehicleWidth': vehicleWidth,
       'enableActionServer': local_action_server,
@@ -210,6 +213,7 @@ def generate_launch_description():
   ld.add_action(declare_maxSpeed)
   ld.add_action(declare_autonomySpeed)
   ld.add_action(declare_maxAccel)
+  ld.add_action(declare_maxDecel)
 
   ld.add_action(start_local_planner)
   ld.add_action(start_terrain_analysis)

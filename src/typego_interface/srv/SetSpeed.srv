@@ -5,7 +5,7 @@ float64 max_autonomy_speed -1     # Autonomous driving speed limit (m/s), used b
 float64 max_reverse_speed -1      # Reverse speed limit (m/s, positive value), Nav2 only
 float64 max_angular_speed -1      # Angular speed limit (rad/s), Nav2 only
 float64 max_accel -1              # Linear acceleration limit (m/s^2), used by both stacks
-float64 max_decel -1              # Linear deceleration limit (m/s^2, positive value), Nav2 only
+float64 max_decel -1              # Linear deceleration limit (m/s^2, positive value), used by both stacks
 float64 max_angular_accel -1      # Angular acceleration limit (rad/s^2), Nav2 only
 ---
 bool success

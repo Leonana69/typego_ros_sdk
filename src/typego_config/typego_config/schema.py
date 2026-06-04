@@ -206,6 +206,10 @@ class MotionConfig(BaseModel):
         default=2.0, gt=0.0, le=20.0,
         description='Local-planner acceleration ramp (m/s^2). -> local_planner maxAccel.',
     )
+    max_decel: float = Field(
+        default=2.0, gt=0.0, le=20.0,
+        description='Local-planner deceleration / braking ramp (m/s^2). -> local_planner maxDecel.',
+    )
     cmd_vel_max_linear: float = Field(
         default=0.8, gt=0.0, le=5.0,
         description='cmd_vel_controller linear clamp (m/s, vx and vy).',

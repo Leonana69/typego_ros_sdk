@@ -52,6 +52,7 @@ double stopYawRateGain = 7.5;
 double maxYawRate = 45.0;
 double maxSpeed = 1.0;
 double maxAccel = 1.0;
+double maxDecel = 2.0;
 double switchTimeThre = 1.0;
 double dirDiffThre = 0.1;
 double omniDirGoalThre = 1.0;
@@ -260,12 +261,16 @@ void speedConfigHandler(const std_msgs::msg::Float32MultiArray::ConstSharedPtr m
   if (msg->data.size() >= 3 && msg->data[2] > 0) {
     maxAccel = msg->data[2];
   }
+  // Optional 4th element carries the deceleration (braking) ramp limit (m/s^2).
+  if (msg->data.size() >= 4 && msg->data[3] > 0) {
+    maxDecel = msg->data[3];
+  }
   if (autonomyMode) {
     joySpeed = clampedAutonomySpeed();
   }
   RCLCPP_INFO(nh->get_logger(),
-              "Speed config updated: maxSpeed=%.3f, autonomySpeed=%.3f, maxAccel=%.3f",
-              maxSpeed, autonomySpeed, maxAccel);
+              "Speed config updated: maxSpeed=%.3f, autonomySpeed=%.3f, maxAccel=%.3f, maxDecel=%.3f",
+              maxSpeed, autonomySpeed, maxAccel, maxDecel);
 }
 
 int main(int argc, char** argv)
@@ -284,6 +289,7 @@ int main(int argc, char** argv)
   nh->declare_parameter<double>("maxYawRate", maxYawRate);
   nh->declare_parameter<double>("maxSpeed", maxSpeed);
   nh->declare_parameter<double>("maxAccel", maxAccel);
+  nh->declare_parameter<double>("maxDecel", maxDecel);
   nh->declare_parameter<double>("switchTimeThre", switchTimeThre);
   nh->declare_parameter<double>("dirDiffThre", dirDiffThre);
   nh->declare_parameter<double>("omniDirGoalThre", omniDirGoalThre);
@@ -320,6 +326,7 @@ int main(int argc, char** argv)
   nh->get_parameter("maxYawRate", maxYawRate);
   nh->get_parameter("maxSpeed", maxSpeed);
   nh->get_parameter("maxAccel", maxAccel);
+  nh->get_parameter("maxDecel", maxDecel);
   nh->get_parameter("switchTimeThre", switchTimeThre);
   nh->get_parameter("dirDiffThre", dirDiffThre);
   nh->get_parameter("omniDirGoalThre", omniDirGoalThre);
@@ -353,6 +360,11 @@ int main(int argc, char** argv)
   }
   if (maxAccel <= 0) {
     RCLCPP_FATAL(nh->get_logger(), "maxAccel must be > 0, got %f", maxAccel);
+    rclcpp::shutdown();
+    return 1;
+  }
+  if (maxDecel <= 0) {
+    RCLCPP_FATAL(nh->get_logger(), "maxDecel must be > 0, got %f", maxDecel);
     rclcpp::shutdown();
     return 1;
   }
@@ -555,12 +567,32 @@ int main(int argc, char** argv)
         moveAllowed = (fabs(dirDiff) < dirDiffThre ||
                        (dis < omniDirGoalThre && fabs(dirDiff) < omniDirDiffThre)) && dis > stopDisThre;
       }
+      // Acceleration grows |vehicleSpeed|; deceleration (braking) shrinks it.
+      // Braking uses maxDecel so stops stay crisp even when maxAccel is small —
+      // the local_planner analogue of Nav2's independent max_decel. Sign matters
+      // under twoWayDrive: a += step accelerates only when already moving forward
+      // (>= 0) and brakes toward 0 when reversing (< 0); a -= step is the mirror.
       if (moveAllowed) {
-        if (vehicleSpeed < joySpeed3) vehicleSpeed += maxAccel / 100.0;
-        else if (vehicleSpeed > joySpeed3) vehicleSpeed -= maxAccel / 100.0;
+        // Clamp to joySpeed3 on each step so a large decel step cannot overshoot a
+        // nonzero target and sawtooth around it (decel down, accel creep back up).
+        if (vehicleSpeed < joySpeed3) {
+          vehicleSpeed += (vehicleSpeed >= 0 ? maxAccel : maxDecel) / 100.0;
+          if (vehicleSpeed > joySpeed3) vehicleSpeed = joySpeed3;
+        } else if (vehicleSpeed > joySpeed3) {
+          vehicleSpeed -= (vehicleSpeed > 0 ? maxDecel : maxAccel) / 100.0;
+          if (vehicleSpeed < joySpeed3) vehicleSpeed = joySpeed3;
+        }
       } else {
-        if (vehicleSpeed > 0) vehicleSpeed -= maxAccel / 100.0;
-        else if (vehicleSpeed < 0) vehicleSpeed += maxAccel / 100.0;
+        // Braking to a full stop from either direction. Snap to 0 within one decel
+        // step so the residual settles to an exact zero: the publish deadband below
+        // is keyed to maxAccel, which may now be smaller than the maxDecel step.
+        if (vehicleSpeed > 0) {
+          vehicleSpeed -= maxDecel / 100.0;
+          if (vehicleSpeed < 0) vehicleSpeed = 0;
+        } else if (vehicleSpeed < 0) {
+          vehicleSpeed += maxDecel / 100.0;
+          if (vehicleSpeed > 0) vehicleSpeed = 0;
+        }
       }
 
       if (odomTime < stopInitTime + stopTime && stopInitTime > 0) {
@@ -577,6 +609,8 @@ int main(int argc, char** argv)
         cmd_vel.linear.y = 0;
         cmd_vel.angular.z = vehicleYawRate;
 
+        // Deadband stays keyed to maxAccel (the min step size), not maxDecel: the
+        // brake branch above snaps to exactly 0, so the residual lands inside this.
         if (fabs(vehicleSpeed) > maxAccel / 100.0) {
           if (omniDirDrive || omniDirGoalThre > 0) {
             // Decompose the path-frame translation speed into the current body

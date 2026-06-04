@@ -52,6 +52,7 @@ _DEFAULT_FALLBACKS = {
     'max_speed': '1.375',
     'autonomy_speed': '0.875',
     'max_accel': '2.0',
+    'max_decel': '2.0',
     'cmd_vel_max_linear': '0.8',
     'cmd_vel_max_angular': '1.0',
     'cmd_vel_min_angular': '0.2',
@@ -145,6 +146,7 @@ def _load_defaults():
         'max_speed': ('motion', 'max_speed'),
         'autonomy_speed': ('motion', 'autonomy_speed'),
         'max_accel': ('motion', 'max_accel'),
+        'max_decel': ('motion', 'max_decel'),
         'cmd_vel_max_linear': ('motion', 'cmd_vel_max_linear'),
         'cmd_vel_max_angular': ('motion', 'cmd_vel_max_angular'),
         'cmd_vel_min_angular': ('motion', 'cmd_vel_min_angular'),
@@ -287,6 +289,11 @@ ARGUMENTS = [
         description='Local-planner acceleration ramp, m/s^2 (motion.max_accel).'
     ),
     DeclareLaunchArgument(
+        'max_decel',
+        default_value=_DEFAULTS['max_decel'],
+        description='Local-planner deceleration ramp / braking, m/s^2 (motion.max_decel).'
+    ),
+    DeclareLaunchArgument(
         'cmd_vel_max_linear',
         default_value=_DEFAULTS['cmd_vel_max_linear'],
         description='cmd_vel_controller linear clamp, m/s (motion.cmd_vel_max_linear).'
@@ -367,6 +374,8 @@ def generate_launch_description():
             LaunchConfiguration('autonomy_speed'))
         max_accel = context.perform_substitution(
             LaunchConfiguration('max_accel'))
+        max_decel = context.perform_substitution(
+            LaunchConfiguration('max_decel'))
         cmd_vel_max_linear = context.perform_substitution(
             LaunchConfiguration('cmd_vel_max_linear'))
         cmd_vel_max_angular = context.perform_substitution(
@@ -464,6 +473,7 @@ def generate_launch_description():
                 'maxSpeed': max_speed,
                 'autonomySpeed': autonomy_speed,
                 'maxAccel': max_accel,
+                'maxDecel': max_decel,
                 'local_planner_config': local_planner_profile,
             }
             # Mode-specific args — only pass an arg the chosen file declares.

@@ -78,6 +78,7 @@ motion:
   max_speed: 1.375         # m/s   local-planner top speed        -> local_planner maxSpeed
   autonomy_speed: 0.875    # m/s   autonomy-mode cruise speed     -> local_planner autonomySpeed
   max_accel: 2.0           # m/s^2 local-planner accel ramp       -> local_planner maxAccel
+  max_decel: 2.0           # m/s^2 local-planner braking ramp     -> local_planner maxDecel
   cmd_vel_max_linear: 0.8  # m/s   cmd_vel_controller clamp (vx & vy)
   cmd_vel_max_angular: 1.0 # rad/s cmd_vel_controller yaw clamp
   cmd_vel_min_angular: 0.2 # rad/s cmd_vel_controller yaw deadband floor
