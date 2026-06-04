@@ -4,7 +4,7 @@
 Asks for autonomy mode (base/full), and for full mode asks which layer's
 config to load (mirrors MODE=0/1/2 in src/autonomy/real_robot.sh):
 
-    0  base_autonomy         vehicle_simulator.rviz
+    0  local_navigation      vehicle_simulator.rviz
     1  FAR route planner     far_planner/default.rviz
     2  PCD grid planner      pcd_grid_planner/default.rviz
     3  exploration (TARE)    tare_planner_ground.rviz
@@ -42,8 +42,8 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 AUTONOMY = PROJECT_ROOT / "src/autonomy"
 
 FULL_CONFIGS = [
-    ("0", "vehicle simulator (base layer)",
-     AUTONOMY / "base_autonomy/vehicle_simulator/rviz/vehicle_simulator.rviz"),
+    ("0", "vehicle simulator (local navigation layer)",
+     AUTONOMY / "local_navigation/vehicle_simulator/rviz/vehicle_simulator.rviz"),
     ("1", "FAR route planner",
      AUTONOMY / "route_planner/far_planner/rviz/default.rviz"),
     ("2", "PCD grid planner",

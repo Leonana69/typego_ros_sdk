@@ -30,7 +30,7 @@ sleep 1
 if [ "${RUN_RVIZ:-1}" -eq 1 ]; then
   case "$MODE" in
     0)
-      ros2 run rviz2 rviz2 -d $SCRIPT_DIR/base_autonomy/vehicle_simulator/rviz/vehicle_simulator.rviz
+      ros2 run rviz2 rviz2 -d $SCRIPT_DIR/local_navigation/vehicle_simulator/rviz/vehicle_simulator.rviz
       ;;
     1)
       ros2 run rviz2 rviz2 -d $SCRIPT_DIR/route_planner/far_planner/rviz/default.rviz

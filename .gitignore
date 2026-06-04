@@ -8,7 +8,7 @@ __pycache__/
 .vscode/
 .DS_Store
 
-./src/autonomy/base_autonomy/vehicle_simulator/mesh/
+./src/autonomy/local_navigation/vehicle_simulator/mesh/
 temp/
 src/typego_sdk/resource/Map-*/
 !src/typego_sdk/resource/Map-*/

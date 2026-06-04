@@ -324,7 +324,7 @@ src/
 ├── go2_sdk/                   # Unitree Go2 robot driver
 ├── kami_sdk/                  # Kami robot driver
 └── autonomy/
-    ├── base_autonomy/         # Terrain analysis, local planner, vehicle simulator
+    ├── local_navigation/      # Terrain analysis, local planner, vehicle simulator
     ├── slam/                  # ARISE SLAM + dependencies (Sophus, gtsam)
     ├── route_planner/         # FAR planner, boundary/graph handlers
     ├── exploration_planner/   # TARE planner + OR-Tools
