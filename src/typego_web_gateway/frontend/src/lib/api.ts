@@ -236,12 +236,16 @@ export const api = {
     jsonOrThrow<{ stopped: boolean; message: string }>(
       fetch('/api/patrol/stop', { method: 'POST' }),
     ),
-  setSpeed: (max_linear: number, max_angular: number) =>
+  setSpeed: (
+    max_linear: number,
+    max_angular: number,
+    accel?: { max_accel?: number; max_decel?: number; max_angular_accel?: number },
+  ) =>
     jsonOrThrow<{ success: boolean; message: string }>(
       fetch('/api/speed', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ max_linear, max_angular }),
+        body: JSON.stringify({ max_linear, max_angular, ...accel }),
       }),
     ),
   bagDownloadHref: (minutes = 60) => `/api/bag/latest?minutes=${minutes}`,

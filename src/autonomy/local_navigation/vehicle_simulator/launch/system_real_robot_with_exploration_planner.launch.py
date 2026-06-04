@@ -23,6 +23,7 @@ def generate_launch_description():
   vehicleWidth = LaunchConfiguration('vehicleWidth')
   maxSpeed = LaunchConfiguration('maxSpeed')
   autonomySpeed = LaunchConfiguration('autonomySpeed')
+  maxAccel = LaunchConfiguration('maxAccel')
 
   declare_exploration_planner_config = DeclareLaunchArgument('exploration_planner_config', default_value='indoor_small', description='TARE planner scenario profile')
   declare_world_name = DeclareLaunchArgument('world_name', default_value='real_world', description='')
@@ -48,6 +49,7 @@ def generate_launch_description():
   declare_vehicleWidth = DeclareLaunchArgument('vehicleWidth', default_value='0.3', description='Vehicle footprint width (m)')
   declare_maxSpeed = DeclareLaunchArgument('maxSpeed', default_value='1.375', description='Local-planner top linear speed (m/s)')
   declare_autonomySpeed = DeclareLaunchArgument('autonomySpeed', default_value='0.875', description='Local-planner autonomy cruise speed (m/s)')
+  declare_maxAccel = DeclareLaunchArgument('maxAccel', default_value='2.0', description='Local-planner acceleration ramp (m/s^2)')
 
   use_arise = IfCondition(PythonExpression(["'", slam_backend, "' == 'arise'"]))
   use_lightning = IfCondition(PythonExpression(["'", slam_backend, "' == 'lightning'"]))
@@ -66,6 +68,7 @@ def generate_launch_description():
       'config': local_planner_config,
       'maxSpeed': maxSpeed,
       'autonomySpeed': autonomySpeed,
+      'maxAccel': maxAccel,
       'vehicleLength': vehicleLength,
       'vehicleWidth': vehicleWidth,
     }.items()
@@ -153,6 +156,7 @@ def generate_launch_description():
   ld.add_action(declare_vehicleWidth)
   ld.add_action(declare_maxSpeed)
   ld.add_action(declare_autonomySpeed)
+  ld.add_action(declare_maxAccel)
 
   ld.add_action(start_local_planner)
   ld.add_action(start_terrain_analysis)

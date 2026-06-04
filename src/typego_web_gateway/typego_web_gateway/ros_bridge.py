@@ -493,6 +493,8 @@ class RosBridge(Node):
 
     def set_speed(self, max_linear: float = -1.0, max_autonomy: float = -1.0,
                   max_reverse: float = -1.0, max_angular: float = -1.0,
+                  max_accel: float = -1.0, max_decel: float = -1.0,
+                  max_angular_accel: float = -1.0,
                   timeout_s: float = 3.0) -> Tuple[bool, str]:
         if self._speed_client is None:
             return False, 'typego_interface not available'
@@ -503,6 +505,9 @@ class RosBridge(Node):
         req.max_autonomy_speed = float(max_autonomy)
         req.max_reverse_speed = float(max_reverse)
         req.max_angular_speed = float(max_angular)
+        req.max_accel = float(max_accel)
+        req.max_decel = float(max_decel)
+        req.max_angular_accel = float(max_angular_accel)
         fut = self._speed_client.call_async(req)
         event = threading.Event()
         fut.add_done_callback(lambda _f: event.set())

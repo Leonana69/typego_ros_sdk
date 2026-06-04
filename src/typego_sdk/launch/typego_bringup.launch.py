@@ -51,6 +51,7 @@ _DEFAULT_FALLBACKS = {
     # motion.* — speed / yaw limits
     'max_speed': '1.375',
     'autonomy_speed': '0.875',
+    'max_accel': '2.0',
     'cmd_vel_max_linear': '0.8',
     'cmd_vel_max_angular': '1.0',
     'cmd_vel_min_angular': '0.2',
@@ -143,6 +144,7 @@ def _load_defaults():
         'vehicle_width': ('vehicle', 'width'),
         'max_speed': ('motion', 'max_speed'),
         'autonomy_speed': ('motion', 'autonomy_speed'),
+        'max_accel': ('motion', 'max_accel'),
         'cmd_vel_max_linear': ('motion', 'cmd_vel_max_linear'),
         'cmd_vel_max_angular': ('motion', 'cmd_vel_max_angular'),
         'cmd_vel_min_angular': ('motion', 'cmd_vel_min_angular'),
@@ -280,6 +282,11 @@ ARGUMENTS = [
         description='Local-planner autonomy cruise speed, m/s (motion.autonomy_speed).'
     ),
     DeclareLaunchArgument(
+        'max_accel',
+        default_value=_DEFAULTS['max_accel'],
+        description='Local-planner acceleration ramp, m/s^2 (motion.max_accel).'
+    ),
+    DeclareLaunchArgument(
         'cmd_vel_max_linear',
         default_value=_DEFAULTS['cmd_vel_max_linear'],
         description='cmd_vel_controller linear clamp, m/s (motion.cmd_vel_max_linear).'
@@ -358,6 +365,8 @@ def generate_launch_description():
             LaunchConfiguration('max_speed'))
         autonomy_speed = context.perform_substitution(
             LaunchConfiguration('autonomy_speed'))
+        max_accel = context.perform_substitution(
+            LaunchConfiguration('max_accel'))
         cmd_vel_max_linear = context.perform_substitution(
             LaunchConfiguration('cmd_vel_max_linear'))
         cmd_vel_max_angular = context.perform_substitution(
@@ -454,6 +463,7 @@ def generate_launch_description():
                 'vehicleWidth': vehicle_width,
                 'maxSpeed': max_speed,
                 'autonomySpeed': autonomy_speed,
+                'maxAccel': max_accel,
                 'local_planner_config': local_planner_profile,
             }
             # Mode-specific args — only pass an arg the chosen file declares.

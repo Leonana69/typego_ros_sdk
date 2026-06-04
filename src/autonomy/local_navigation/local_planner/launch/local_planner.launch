@@ -8,6 +8,7 @@
   <arg name="vehicleWidth" default="0.3"/>
   <arg name="twoWayDrive" default="false"/>
   <arg name="maxSpeed" default="1.375"/>
+  <arg name="maxAccel" default="2.0"/>
   <arg name="autonomyMode" default="false"/>
   <arg name="autonomySpeed" default="0.875"/>
   <arg name="joyToSpeedDelay" default="2.0"/>
@@ -45,6 +46,7 @@
     <param name="minRelZ" value="-0.4" />
     <param name="maxRelZ" value="0.3" />
     <param name="maxSpeed" value="$(var maxSpeed)" />
+    <param name="maxAccel" value="$(var maxAccel)" />
     <param name="dirWeight" value="0.02" />
     <param name="dirThre" value="90.0" />
     <param name="dirToVehicle" value="false" />
@@ -84,7 +86,7 @@
     <param name="twoWayDrive" value="$(var twoWayDrive)" />
     <param name="lookAheadDis" value="0.5" />
     <param name="maxSpeed" value="$(var maxSpeed)" />
-    <param name="maxAccel" value="2.0" />
+    <param name="maxAccel" value="$(var maxAccel)" />
     <param name="switchTimeThre" value="1.0" />
     <param name="omniDirDiffThre" value="1.5" />
     <param name="slowDwnDisThre" value="0.875" />

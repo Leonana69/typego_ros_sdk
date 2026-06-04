@@ -42,6 +42,9 @@ class SpeedRequest(BaseModel):
     max_autonomy: float = -1.0
     max_reverse: float = -1.0
     max_angular: float = -1.0
+    max_accel: float = -1.0
+    max_decel: float = -1.0
+    max_angular_accel: float = -1.0
 
 
 class PlaceLabelRequest(BaseModel):
@@ -333,6 +336,7 @@ def build_app(
             bridge.set_speed,
             req.max_linear, req.max_autonomy,
             req.max_reverse, req.max_angular,
+            req.max_accel, req.max_decel, req.max_angular_accel,
         )
         return JSONResponse(
             {'success': ok, 'message': msg},

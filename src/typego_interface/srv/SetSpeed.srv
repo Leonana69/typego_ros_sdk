@@ -1,9 +1,12 @@
-# Set speed parameters at runtime.
+# Set speed and acceleration parameters at runtime.
 # Omitted fields default to -1 (no change).
 float64 max_speed -1              # Manual mode speed ceiling (m/s), autonomy stack only
 float64 max_autonomy_speed -1     # Autonomous driving speed limit (m/s), used by both stacks
 float64 max_reverse_speed -1      # Reverse speed limit (m/s, positive value), Nav2 only
 float64 max_angular_speed -1      # Angular speed limit (rad/s), Nav2 only
+float64 max_accel -1              # Linear acceleration limit (m/s^2), used by both stacks
+float64 max_decel -1              # Linear deceleration limit (m/s^2, positive value), Nav2 only
+float64 max_angular_accel -1      # Angular acceleration limit (rad/s^2), Nav2 only
 ---
 bool success
 string message
@@ -11,3 +14,6 @@ float64 current_max_speed
 float64 current_max_autonomy_speed
 float64 current_max_reverse_speed
 float64 current_max_angular_speed
+float64 current_max_accel
+float64 current_max_decel
+float64 current_max_angular_accel

@@ -256,11 +256,16 @@ void speedConfigHandler(const std_msgs::msg::Float32MultiArray::ConstSharedPtr m
 
   maxSpeed = newMax;
   autonomySpeed = newAutonomy;
+  // Optional 3rd element carries the acceleration ramp limit (m/s^2).
+  if (msg->data.size() >= 3 && msg->data[2] > 0) {
+    maxAccel = msg->data[2];
+  }
   if (autonomyMode) {
     joySpeed = clampedAutonomySpeed();
   }
-  RCLCPP_INFO(nh->get_logger(), "Speed config updated: maxSpeed=%.3f, autonomySpeed=%.3f",
-              maxSpeed, autonomySpeed);
+  RCLCPP_INFO(nh->get_logger(),
+              "Speed config updated: maxSpeed=%.3f, autonomySpeed=%.3f, maxAccel=%.3f",
+              maxSpeed, autonomySpeed, maxAccel);
 }
 
 int main(int argc, char** argv)
