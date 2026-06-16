@@ -45,7 +45,7 @@ pcd_grid_planner:
     # of the center is an obstacle, below the band is floor/free, above is
     # overhead (ignored). The band follows the robot, so it is immune to SLAM
     # z-drift and floor-level changes. Misses obstacles shorter than the lidar.
-    slice_band_half: 0.10                   # half-thickness of the obstacle band (m)  → ±10 cm
+    slice_band_half: 0.2                    # half-thickness of the obstacle band (m)  → ±20 cm
     slice_band_offset: 0.0                  # band center = robot_z + this (lidar plane); raise to slice higher
 
     # Spatial cleanup of the published/planned map (never alters log-odds state).
