@@ -21,6 +21,7 @@
 #include <future>
 #include <mutex>
 #include <optional>
+#include <random>
 #include <string>
 #include <thread>
 #include <unordered_map>
@@ -44,11 +45,13 @@
 #include "typego_interface/msg/way_point.hpp"
 #include "typego_interface/msg/way_point_array.hpp"
 #include "typego_interface/srv/edit_waypoint.hpp"
+#include "typego_interface/srv/get_random_location_in_region.hpp"
 #include "typego_interface/srv/resolve_place_at_point.hpp"
 #include "typego_interface/srv/set_place_label.hpp"
 
 #include "place_graph/matching.hpp"
 #include "place_graph/place_graph.hpp"
+#include "place_graph/sampling.hpp"
 
 #include "typego_sdk/namespace_utils.hpp"
 #include "typego_sdk/user_waypoint_store.hpp"
@@ -208,6 +211,12 @@ class PlaceGraphWaypointsNode : public rclcpp::Node {
             std::bind(&PlaceGraphWaypointsNode::on_edit_waypoint, this,
                       std::placeholders::_1, std::placeholders::_2),
             rmw_qos_profile_services_default, service_cb_group_);
+        random_loc_srv_ =
+            create_service<typego_interface::srv::GetRandomLocationInRegion>(
+                "typego/get_random_location_in_region",
+                std::bind(&PlaceGraphWaypointsNode::on_get_random_location, this,
+                          std::placeholders::_1, std::placeholders::_2),
+                rmw_qos_profile_services_default, service_cb_group_);
 
         load_persisted();
 
@@ -613,6 +622,47 @@ class PlaceGraphWaypointsNode : public rclcpp::Node {
                 snap->place_id_at_world(req->xs[i], req->ys[i]);
             if (id) res->place_ids[i] = *id;
         }
+    }
+
+    void on_get_random_location(
+        const std::shared_ptr<
+            typego_interface::srv::GetRandomLocationInRegion::Request>
+            req,
+        std::shared_ptr<
+            typego_interface::srv::GetRandomLocationInRegion::Response>
+            res) {
+        // Pure read off the immutable snapshot, same pattern as on_resolve.
+        std::shared_ptr<const tpg::PlaceGraphSnapshot> snap;
+        {
+            std::lock_guard<std::mutex> lk(snap_mutex_);
+            snap = pub_snapshot_;
+        }
+        res->success = false;
+        res->x = 0.0;
+        res->y = 0.0;
+        if (!snap) {
+            res->message = "no place graph yet";
+            return;
+        }
+        std::uint32_t seed =
+            req->seed ? req->seed
+                      : static_cast<std::uint32_t>(
+                            std::chrono::steady_clock::now()
+                                .time_since_epoch()
+                                .count());
+        std::mt19937 rng(seed);
+        auto out = tpg::sample_in_region(*snap, req->x, req->y, req->range, rng,
+                                         tpg::SampleMode::kGeodesic,
+                                         req->min_clearance);
+        if (!out) {
+            res->message =
+                "no sampleable point in current region within range";
+            return;
+        }
+        res->success = true;
+        res->x = out->point.x;
+        res->y = out->point.y;
+        res->place_id = out->place_id;
     }
 
     void refresh_pub_snapshot() {
@@ -1401,6 +1451,8 @@ class PlaceGraphWaypointsNode : public rclcpp::Node {
     rclcpp::Service<typego_interface::srv::ResolvePlaceAtPoint>::SharedPtr
         resolve_srv_;
     rclcpp::Service<typego_interface::srv::EditWaypoint>::SharedPtr edit_srv_;
+    rclcpp::Service<typego_interface::srv::GetRandomLocationInRegion>::SharedPtr
+        random_loc_srv_;
 
     std::thread worker_;
     std::atomic<bool> stop_{false};

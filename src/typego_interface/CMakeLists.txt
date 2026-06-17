@@ -38,6 +38,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "srv/SetPlaceLabel.srv"
   "srv/ResolvePlaceAtPoint.srv"
   "srv/EditWaypoint.srv"
+  "srv/GetRandomLocationInRegion.srv"
   DEPENDENCIES std_msgs
 )
 

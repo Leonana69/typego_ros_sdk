@@ -17,6 +17,7 @@ add_library(${PROJECT_NAME} STATIC
   src/connectors.cpp
   src/place_graph.cpp
   src/matching.cpp
+  src/sampling.cpp
 )
 target_include_directories(${PROJECT_NAME} PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
@@ -48,6 +49,7 @@ if(BUILD_TESTING)
     test/test_fixtures.cpp
     test/test_pipeline.cpp
     test/test_matching.cpp
+    test/test_sampling.cpp
   )
   target_link_libraries(test_place_graph ${PROJECT_NAME})
 endif()

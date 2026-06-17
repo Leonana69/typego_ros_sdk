@@ -41,6 +41,7 @@ try:
     from typego_interface.msg import PlaceGraph, WayPointArray
     from typego_interface.srv import (
         EditWaypoint,
+        GetRandomLocationInRegion,
         ResolvePlaceAtPoint,
         SetPlaceLabel,
         SetSpeed,
@@ -127,6 +128,10 @@ class RosBridge(Node):
             self._resolve_client = self.create_client(
                 ResolvePlaceAtPoint, 'typego/resolve_place_at_point',
             )
+            self._random_loc_client = self.create_client(
+                GetRandomLocationInRegion,
+                'typego/get_random_location_in_region',
+            )
         else:
             self._waypoints_sub = None
             self._parked_sub = None
@@ -135,6 +140,7 @@ class RosBridge(Node):
             self._label_client = None
             self._edit_client = None
             self._resolve_client = None
+            self._random_loc_client = None
 
         # Camera: subscribe VERBATIM to the configured image topic. The go2
         # camera node runs in the GLOBAL namespace (unlike /map), so do NOT
@@ -595,6 +601,36 @@ class RosBridge(Node):
             return None
         pid = str(resp.place_ids[0])
         return pid or None
+
+    def get_random_location_within_current_region(
+            self, range: float, *, seed: int = 0, min_clearance: float = 0.0,
+            timeout_s: float = 2.0) -> Optional[Tuple[float, float]]:
+        """Sample a random (x, y) inside the place the robot currently occupies,
+        within `range` meters of in-region travel from the robot. Returns None
+        when the pose is unknown, the service is down, or the robot is not in any
+        place. Compose with send_goal()/wait_goal_result() to wander a room."""
+        if self._random_loc_client is None:
+            return None
+        pose = self.get_pose()
+        if pose is None:
+            return None
+        if not self._random_loc_client.wait_for_service(timeout_sec=timeout_s):
+            return None
+        req = GetRandomLocationInRegion.Request()
+        req.x = float(pose.x)
+        req.y = float(pose.y)
+        req.range = float(range)
+        req.seed = int(seed)
+        req.min_clearance = float(min_clearance)
+        fut = self._random_loc_client.call_async(req)
+        event = threading.Event()
+        fut.add_done_callback(lambda _f: event.set())
+        if not event.wait(timeout=timeout_s + 1.0):
+            return None
+        resp = fut.result()
+        if resp is None or not resp.success:
+            return None
+        return (float(resp.x), float(resp.y))
 
     def get_robot_config(self, timeout_s: float = 1.0) -> Optional[Dict]:
         """Call typego_config/get_config; return None if service is down."""

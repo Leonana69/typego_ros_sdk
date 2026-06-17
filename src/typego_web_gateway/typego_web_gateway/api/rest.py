@@ -205,6 +205,19 @@ def build_app(
         pid = await asyncio.to_thread(bridge.resolve_place_at_world, x, y)
         return JSONResponse({'place_id': pid})
 
+    @app.get('/api/region/random_point')
+    async def region_random_point(range: float = Query(..., gt=0),
+                                  seed: int = Query(0)) -> JSONResponse:
+        pt = await asyncio.to_thread(
+            bridge.get_random_location_within_current_region, range, seed=seed,
+        )
+        if pt is None:
+            raise HTTPException(
+                status_code=409,
+                detail='no in-region point (no pose / not in a place / '
+                       'none within range)')
+        return JSONResponse({'x': pt[0], 'y': pt[1]})
+
     @app.get('/api/places')
     async def places() -> JSONResponse:
         graph = bridge.get_place_graph()

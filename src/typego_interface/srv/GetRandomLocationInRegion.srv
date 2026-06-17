@@ -1,0 +1,21 @@
+# Sample a random reachable point inside the SAME place the robot is currently
+# in (the place that owns (x, y)) and within `range` meters of in-region travel.
+# Lives in the C++ node because it needs the cell_region / place_assignment grid,
+# which is not published on /place_graph. Used by "wander around a room" loops:
+# repeatedly call this from the robot pose, then navigate to the result.
+#
+# min_clearance is a per-point wall margin: the sampled point is kept at least
+# this far (m) from the nearest wall / obstacle / unknown cell (doorways to
+# adjacent rooms do not count). 0 disables it.
+# seed 0 => the server picks a nondeterministic seed.
+float64 x              # query point, map frame, meters (typically robot pose)
+float64 y
+float64 range          # max in-region travel distance from (x, y), meters
+uint32  seed           # RNG seed; 0 => nondeterministic
+float64 min_clearance  # region-level clearance floor, meters; 0 disables
+---
+bool    success
+float64 x              # sampled point, map frame, meters
+float64 y
+string  place_id       # place the sampled point belongs to
+string  message        # failure reason when success is false
