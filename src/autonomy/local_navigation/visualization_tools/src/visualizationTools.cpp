@@ -439,12 +439,8 @@ int main(int argc, char** argv)
   nh->get_parameter("saveTraj", saveTraj);
   nh->get_parameter("savePcd", savePcd);
 
-  // No direct replacement present for $(find pkg) in ROS2. Edit file path.
-  mapFile.replace(mapFile.find("/install/"), 8, "/src/autonomy/base_autonomy");
-  metricFile.replace(metricFile.find("/install/"), 8, "/src/autonomy/base_autonomy");
-  trajFile.replace(trajFile.find("/install/"), 8, "/src/autonomy/base_autonomy");
-  pcdFile.replace(pcdFile.find("/install/"), 8, "/src/autonomy/base_autonomy");
-  exploredAreaFile.replace(exploredAreaFile.find("/install/"), 8, "/src/autonomy/base_autonomy");
+  // Paths arrive fully resolved from visualization_tools.launch, which uses
+  // $(find-pkg-prefix vehicle_simulator). They are used verbatim.
 
   auto subOdometry = nh->create_subscription<nav_msgs::msg::Odometry>("/state_estimation", 5, odometryHandler);
 
