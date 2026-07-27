@@ -105,10 +105,20 @@ def generate_launch_description():
     condition=use_arise,
   )
 
-  start_lightning_lm = IncludeLaunchDescription(
-    PythonLaunchDescriptionSource(os.path.join(
+  # `lightning` is an optional SLAM backend. Resolving its share directory
+  # eagerly aborts description construction on an arise-only build that never
+  # built it -- even though `condition` would have skipped the include anyway.
+  # IncludeLaunchDescription loads its source lazily in execute(), and
+  # Action.visit() gates execute() on the condition, so this sentinel path can
+  # only surface when lightning is genuinely selected.
+  try:
+    lightning_launch_file = os.path.join(
       get_package_share_directory('lightning'), 'launch', 'lightning_lm.launch.py')
-    ),
+  except Exception:
+    lightning_launch_file = '<lightning-package-not-built>/lightning_lm.launch.py'
+
+  start_lightning_lm = IncludeLaunchDescription(
+    PythonLaunchDescriptionSource(lightning_launch_file),
     condition=use_lightning,
   )
 
