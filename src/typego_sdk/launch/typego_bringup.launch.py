@@ -1,4 +1,5 @@
 import os
+import sys
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
@@ -96,10 +97,36 @@ def _deep_merge_dict(base, overlay):
 _ROBOT_YAML_RAW = {}
 
 
+def _warn_fallback(reason):
+    """Never fail silently: the built-in fallbacks disagree with the shipped
+    robot.yaml on physical geometry (footprint 0.7x0.3 vs 0.75x0.4, lidar
+    offset 0.05 vs 0.30), and local_planner's collision table is baked for
+    the robot.yaml values. Launching on the fallbacks is a real hazard, so
+    say so loudly rather than proceeding quietly.
+    """
+    sys.stderr.write(
+        '\n'
+        '========================================================\n'
+        'typego_bringup: FALLING BACK TO BUILT-IN DEFAULTS\n'
+        f'  reason: {reason}\n'
+        '  consequence: vehicle/sensor/motion parameters will NOT\n'
+        '    match robot.yaml. The local_planner collision table is\n'
+        '    baked for the robot.yaml footprint; these defaults differ.\n'
+        '  fix: repair the file above, or set TYPEGO_CONFIG to a valid\n'
+        '    robot.yaml, then relaunch. Check it with:\n'
+        '      make config_validate\n'
+        '========================================================\n\n'
+    )
+
+
 def _load_defaults():
     global _ROBOT_YAML_RAW
     path = _locate_robot_yaml()
     if not path:
+        _warn_fallback(
+            'robot.yaml not found ($TYPEGO_CONFIG unset or missing, and no '
+            'config/robot.yaml in the typego_config share directory)'
+        )
         return dict(_DEFAULT_FALLBACKS)
     try:
         import yaml
@@ -118,7 +145,17 @@ def _load_defaults():
                 if isinstance(overlay, dict):
                     data = _deep_merge_dict(
                         data if isinstance(data, dict) else {}, overlay)
-    except Exception:
+            else:
+                # A requested profile that does not exist is a typo, not a
+                # no-op. Name it rather than silently using base defaults.
+                sys.stderr.write(
+                    f'typego_bringup: WARNING TYPEGO_PROFILE={profile!r} '
+                    f'requested but {p_path} does not exist; continuing '
+                    f'without the overlay.\n'
+                )
+    except Exception as exc:
+        _warn_fallback(f'{path} could not be read or parsed: '
+                       f'{type(exc).__name__}: {exc}')
         return dict(_DEFAULT_FALLBACKS)
     _ROBOT_YAML_RAW = data if isinstance(data, dict) else {}
 
