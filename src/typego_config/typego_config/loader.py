@@ -89,7 +89,14 @@ def load(path: Optional[Path] = None,
     try:
         return RobotConfig.model_validate(data)
     except Exception as exc:
-        raise ConfigError(f'robot.yaml validation failed:\n{exc}') from exc
+        # Name the file. With $TYPEGO_CONFIG set, or a profile overlaid, the
+        # failing document is not necessarily the one the reader expects.
+        detail = f'{resolved}'
+        if profile:
+            detail += f' (with profile {profile!r} overlaid)'
+        raise ConfigError(
+            f'robot.yaml validation failed: {detail}\n{exc}'
+        ) from exc
 
 
 def flatten(cfg: RobotConfig,
