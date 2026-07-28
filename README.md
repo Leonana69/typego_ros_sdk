@@ -106,6 +106,7 @@ robot:
 
 autonomy:
   type: 2d            # 2d (SLAM Toolbox + Nav2) | 3d (LIO + local planner)
+  # planner: pcd_grid # local | far | pcd_grid | exploration   (3d only)
   slam_backend: arise # arise | lightning  (only used when type=3d)
 
 network:
@@ -183,7 +184,7 @@ make console
 `make console` is a TUI that:
 
 1. Asks for the autonomy stack (`2d` / `3d`).
-2. For 3D autonomy, asks which planner — `0` plain, `1` FAR route planner, `2` PCD roadmap planner, `3` TARE exploration planner.
+2. For 3D autonomy, asks which planner — `0` local (no route planner), `1` FAR, `2` PCD grid, `3` TARE exploration. The menu key maps 1:1 to `planner:=local|far|pcd_grid|exploration`.
 3. Lists the maps on disk filtered by stack (2d: `.posegraph`; 3d: `.pcd`) plus **new map** to start from empty. The PCD roadmap option only allows saved PCD maps because it plans from an existing map.
 4. Spawns `ros2 launch typego_sdk typego_bringup.launch.py …` with the right args and streams its logs in the top pane.
 5. In a new-map session, type `s` → enter a name → map is saved and the console returns to the menu; the new map is ready to pick on the next run.
@@ -208,7 +209,7 @@ make launch
 
 # One-off overrides
 make launch ARGS="slam_map_name:=empty_map"
-make launch ARGS="autonomy_type:=3d full_mode:=2"    # 3D + TARE
+make launch ARGS="autonomy_type:=3d planner:=exploration"   # 3D + TARE
 make launch ARGS="autonomy_type:=3d slam_backend:=lightning"  # swap ARISE → lightning-lm
 ```
 
@@ -218,7 +219,7 @@ Or call `ros2 launch` directly (remember to source the env first):
 make robot_env && set -a && source /tmp/typego-runtime.env && set +a
 
 ros2 launch typego_sdk typego_bringup.launch.py
-ros2 launch typego_sdk typego_bringup.launch.py autonomy_type:=3d full_mode:=1
+ros2 launch typego_sdk typego_bringup.launch.py autonomy_type:=3d planner:=pcd_grid
 ros2 launch typego_sdk typego_bringup.launch.py robot_id:=1 robot_type:=kami
 
 # Apply a shipped profile overlay (see src/typego_config/config/profiles/)

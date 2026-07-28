@@ -39,7 +39,7 @@ _DEFAULT_FALLBACKS = {
     'slam_params_file': 'slam.yaml',
     # profiles.* — which per-tool tuning YAML each planner loads
     'local_planner_profile': 'dog',
-    'route_planner_backend': 'far',
+    'planner': 'local',
     'far_planner_profile': 'outdoor',
     'tare_planner_profile': 'indoor_small',
     # sensors.* — sensor mounting offsets
@@ -172,7 +172,7 @@ def _load_defaults():
         'nav2_params_file': ('profiles', 'nav2_params_file'),
         'slam_params_file': ('profiles', 'slam_params_file'),
         'local_planner_profile': ('profiles', 'local_planner_profile'),
-        'route_planner_backend': ('profiles', 'route_planner_backend'),
+        'planner': ('autonomy', 'planner'),
         'far_planner_profile': ('profiles', 'far_planner_profile'),
         'tare_planner_profile': ('profiles', 'tare_planner_profile'),
         'sensor_offset_x': ('sensors', 'lidar_offset_x'),
@@ -230,12 +230,20 @@ ARGUMENTS = [
         description='Pre-existing SLAM map name to load (passed to slam_launch.py).'
     ),
     DeclareLaunchArgument(
+        'planner',
+        default_value=_DEFAULTS['planner'],
+        description='3D-autonomy planner (ignored when autonomy_type=2d): '
+                    'local = local planner only, '
+                    'far = + FAR route planner, '
+                    'pcd_grid = + PCD grid planner, '
+                    'exploration = + TARE exploration planner.'
+    ),
+    DeclareLaunchArgument(
+        # Retired. Declared only so `full_mode:=N` fails with a migration
+        # message instead of ros2 launch's generic unknown-argument error.
         'full_mode',
-        default_value='0',
-        description='3D-autonomy planner sub-mode (ignored when autonomy_type=2d): '
-                    '0 = plain vehicle_simulator, '
-                    '1 = + FAR route planner, '
-                    '2 = + TARE exploration planner.'
+        default_value='',
+        description='RETIRED -- use planner:=local|far|pcd_grid|exploration.'
     ),
     DeclareLaunchArgument(
         'launch_web_gateway',
@@ -269,21 +277,16 @@ ARGUMENTS = [
                     'dog | omniDir | standard.'
     ),
     DeclareLaunchArgument(
-        'route_planner_backend',
-        default_value=_DEFAULTS['route_planner_backend'],
-        description='Route-planner backend for full_mode 1: far | pcd_grid.'
-    ),
-    DeclareLaunchArgument(
         'far_planner_profile',
         default_value=_DEFAULTS['far_planner_profile'],
         description='FAR route-planner profile (profiles.far_planner_profile): '
-                    'indoor | outdoor. Used only in full_mode 1.'
+                    'indoor | outdoor. Used only when planner=far.'
     ),
     DeclareLaunchArgument(
         'tare_planner_profile',
         default_value=_DEFAULTS['tare_planner_profile'],
         description='TARE exploration profile (profiles.tare_planner_profile): '
-                    'indoor_small | indoor_large | outdoor. Used only in full_mode 2.'
+                    'indoor_small | indoor_large | outdoor. Used only when planner=exploration.'
     ),
     DeclareLaunchArgument(
         'sensor_offset_x',
@@ -376,7 +379,7 @@ def generate_launch_description():
         autonomy_type = context.perform_substitution(LaunchConfiguration('autonomy_type'))
         slam_backend = context.perform_substitution(LaunchConfiguration('slam_backend'))
         slam_map_name = context.perform_substitution(LaunchConfiguration('slam_map_name'))
-        full_mode = context.perform_substitution(LaunchConfiguration('full_mode'))
+        planner = context.perform_substitution(LaunchConfiguration('planner'))
         launch_web_gateway = context.perform_substitution(
             LaunchConfiguration('launch_web_gateway')).lower() == 'true'
         web_gateway_port = context.perform_substitution(
@@ -389,8 +392,15 @@ def generate_launch_description():
             LaunchConfiguration('slam_params_file'))
         local_planner_profile = context.perform_substitution(
             LaunchConfiguration('local_planner_profile'))
-        route_planner_backend = context.perform_substitution(
-            LaunchConfiguration('route_planner_backend'))
+        legacy_full_mode = context.perform_substitution(
+            LaunchConfiguration('full_mode'))
+        if legacy_full_mode:
+            raise RuntimeError(
+                f"full_mode:={legacy_full_mode} was replaced by "
+                f"planner:=local|far|pcd_grid|exploration "
+                f"(0->local, 1->far or pcd_grid, 2->exploration). "
+                f"Set autonomy.planner in robot.yaml, or pass planner:=<name>."
+            )
         far_planner_profile = context.perform_substitution(
             LaunchConfiguration('far_planner_profile'))
         tare_planner_profile = context.perform_substitution(
@@ -487,13 +497,15 @@ def generate_launch_description():
 
         if autonomy_type == '3d':
             # --- Full autonomy (vehicle simulator) ---
-            full_mode_launch_files = {
-                '0': 'system_real_robot.launch.py',
-                '1': 'system_real_robot_with_route_planner.launch.py',
-                '2': 'system_real_robot_with_exploration_planner.launch.py',
+            planner_launch_files = {
+                'local': 'system_real_robot.launch.py',
+                'far': 'system_real_robot_with_route_planner.launch.py',
+                'pcd_grid': 'system_real_robot_with_route_planner.launch.py',
+                'exploration':
+                    'system_real_robot_with_exploration_planner.launch.py',
             }
-            full_launch_file = full_mode_launch_files.get(
-                full_mode, 'system_real_robot.launch.py')
+            full_launch_file = planner_launch_files.get(
+                planner, 'system_real_robot.launch.py')
             autonomy_pkg = get_package_share_directory('vehicle_simulator')
             full_map_prefix = os.path.join(
                 typego_sdk_pkg, 'resource', f'Map-{map_name}', map_name)
@@ -514,13 +526,15 @@ def generate_launch_description():
                 'local_planner_config': local_planner_profile,
             }
             # Mode-specific args — only pass an arg the chosen file declares.
-            if full_mode == '1':
-                full_launch_args['route_planner_backend'] = route_planner_backend
+            if planner in ('far', 'pcd_grid'):
+                # Both route planners share one launch file; the planner name
+                # is the backend name it expects.
+                full_launch_args['route_planner_backend'] = planner
                 full_launch_args['route_planner_config'] = far_planner_profile
                 full_launch_args['vgraph_dir'] = (
                     f'{full_map_prefix}.vgh' if map_name != 'empty_map' else ''
                 )
-            elif full_mode == '2':
+            elif planner == 'exploration':
                 full_launch_args['exploration_planner_config'] = tare_planner_profile
             autonomy_launch = IncludeLaunchDescription(
                 PythonLaunchDescriptionSource(

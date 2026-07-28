@@ -3,7 +3,7 @@
 #
 # Sections:
 #   robot       - identity (id / type / name)
-#   autonomy    - 2d vs 3d autonomy + SLAM backend
+#   autonomy    - 2d vs 3d autonomy + planner + SLAM backend
 #   network     - DDS, robot IP, edge service, gstreamer
 #   web_gateway - HMI server + bag recording
 #   map         - which SLAM map to load
@@ -23,6 +23,10 @@ robot:
 
 autonomy:
   type: 2d           # 2d (SLAM Toolbox + Nav2) | 3d (LIO + local planner)
+  # planner: pcd_grid  # local | far | pcd_grid | exploration
+  #   Only valid when type=3d -- 2D autonomy plans with Nav2, so anything
+  #   other than 'local' is rejected here rather than silently ignored.
+  #   Uncomment together with type: 3d.
   slam_backend: arise  # arise | lightning  (only used when type=3d)
 
 network:
@@ -56,7 +60,6 @@ profiles:
   nav2_params_file: nav2_params.yaml      # under typego_sdk/config/
   slam_params_file: slam.yaml             # under typego_sdk/config/
   local_planner_profile: dog              # local_planner/config/<name>.yaml: dog | omniDir | standard
-  route_planner_backend: pcd_grid         # full_mode 1 backend: far | pcd_grid
   far_planner_profile: outdoor            # far_planner/config/<name>.yaml: indoor | outdoor
   tare_planner_profile: indoor_small      # tare_planner/<name>.yaml: indoor_small | indoor_large | outdoor
 

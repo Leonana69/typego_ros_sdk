@@ -24,7 +24,20 @@ AutonomyType = Literal['2d', '3d']
 #: to change instead of just listing the permitted values.
 _MIGRATED_AUTONOMY_TYPES = {'base': '2d', 'full': '3d'}
 SlamBackend = Literal['arise', 'lightning']
-RoutePlannerBackend = Literal['far', 'pcd_grid']
+
+# Which planner stack runs on top of 3D autonomy. Replaces the old
+# `full_mode` launch integer plus `profiles.route_planner_backend`, which
+# together needed two settings to express one choice -- and silently
+# discarded the backend unless full_mode happened to be 1.
+#   local       - local planner only, no global route planner
+#   far         - FAR route planner (persistent visibility graph)
+#   pcd_grid    - PCD grid planner (live 2D grid, owns /navigate_to_pose)
+#   exploration - TARE frontier exploration
+AutonomyPlanner = Literal['local', 'far', 'pcd_grid', 'exploration']
+
+#: Planners that run under system_real_robot_with_route_planner.launch.py and
+#: are forwarded to it as `route_planner_backend`.
+ROUTE_PLANNERS = ('far', 'pcd_grid')
 Rmw = Literal[
     'rmw_cyclonedds_cpp',
     'rmw_fastrtps_cpp',
@@ -57,6 +70,11 @@ class AutonomyConfig(BaseModel):
         description='"2d" = SLAM Toolbox + Nav2; '
                     '"3d" = LIO + terrain analysis + local planner.',
     )
+    planner: AutonomyPlanner = Field(
+        default='local',
+        description='Planner stack for type=3d: local | far | pcd_grid | '
+                    'exploration. Not applicable when type=2d (Nav2 plans).',
+    )
     slam_backend: SlamBackend = Field(
         default='arise',
         description=(
@@ -64,6 +82,26 @@ class AutonomyConfig(BaseModel):
             '"lightning" = vendored lightning-lm. Ignored when type=2d.'
         ),
     )
+
+    @model_validator(mode='after')
+    def _planner_requires_3d(self) -> 'AutonomyConfig':
+        """`planner` is meaningless under 2D autonomy -- Nav2 does the planning.
+
+        Rejected rather than ignored: silently dropping a stated planner is the
+        bug this field exists to fix (the old route_planner_backend was
+        discarded unless full_mode happened to be 1).
+
+        Keyed on the value, not on `model_fields_set`: loader.flatten() emits
+        every field including defaults, so the config service round-trips
+        `planner: local` back through validation on any 2D config.
+        """
+        if self.type == '2d' and self.planner != 'local':
+            raise ValueError(
+                f"autonomy.planner ({self.planner!r}) only applies when "
+                f"autonomy.type is '3d'; 2D autonomy plans with Nav2. "
+                f"Remove autonomy.planner, or set autonomy.type: 3d."
+            )
+        return self
 
     @model_validator(mode='before')
     @classmethod
@@ -168,10 +206,6 @@ class ProfilesConfig(BaseModel):
         default='dog',
         description='Picks local_planner/config/<name>.yaml.',
     )
-    route_planner_backend: RoutePlannerBackend = Field(
-        default='far',
-        description='Global route backend for full_mode=1.',
-    )
     far_planner_profile: str = Field(
         default='outdoor',
         description='Picks far_planner/config/<name>.yaml.',
@@ -180,6 +214,22 @@ class ProfilesConfig(BaseModel):
         default='indoor_small',
         description='Picks tare_planner/config/<name>.yaml.',
     )
+
+    @model_validator(mode='before')
+    @classmethod
+    def _reject_moved_route_planner_backend(cls, data):
+        """`extra='forbid'` alone would only say "Extra inputs are not
+        permitted", which does not tell someone holding a pre-rename
+        robot.yaml where the setting went.
+        """
+        if isinstance(data, dict) and 'route_planner_backend' in data:
+            value = data['route_planner_backend']
+            raise ValueError(
+                f"profiles.route_planner_backend moved to autonomy.planner. "
+                f"Delete it from profiles: and set 'autonomy.planner: {value}' "
+                f"instead (with autonomy.type: 3d)."
+            )
+        return data
 
 
 class VehicleConfig(BaseModel):

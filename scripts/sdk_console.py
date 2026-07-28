@@ -38,12 +38,12 @@ LOG_DIR = PROJECT_ROOT / "logs"
 LAUNCH_CMD = ["ros2", "launch", "typego_sdk", "typego_bringup.launch.py"]
 EMPTY_MAP = "empty_map"
 
-# 3D-autonomy planner options. PCD grid shares full_mode=1 with FAR and is
-# selected by passing route_planner_backend:=pcd_grid.
+# 3D-autonomy planner options. `planner` is the typego_bringup launch-arg
+# value; the menu key is just what the operator types.
 class FullSubOption(NamedTuple):
     key: str
     label: str
-    full_mode: str
+    planner: str
     extra_args: tuple[str, ...] = ()
     requires_existing_map: bool = False
 
@@ -52,18 +52,18 @@ FULL_SUB_OPTIONS = [
     # "local planner only" rather than "base": `base` was the old name of
     # the 2D stack, so reusing it here for "no route planner" would give
     # one word two meanings.
-    FullSubOption("0", "local planner only (no route planner)", "0"),
-    FullSubOption("1", "FAR route planner", "1", ("route_planner_backend:=far",)),
+    FullSubOption("0", "local planner only (no route planner)", "local"),
+    FullSubOption("1", "FAR route planner", "far"),
     FullSubOption(
         "2",
         "PCD grid planner",
-        "1",
-        ("route_planner_backend:=pcd_grid",),
+        "pcd_grid",
+        (),
         # Builds its 2D map live from /registered_scan — no saved map required,
         # so the "new map" option must stay available.
         False,
     ),
-    FullSubOption("3", "TARE exploration planner", "2"),
+    FullSubOption("3", "TARE exploration planner", "exploration"),
 ]
 
 # Operator-facing names for the two autonomy stacks. These keys are the
@@ -178,8 +178,8 @@ class TypegoConsole(App):
         super().__init__()
         self.state: str = "mode"
         self.mode: Optional[str] = None
-        self.full_mode_key: str = "0"         # typego_bringup full_mode launch value
-        self.full_mode_label: str = ""        # short label for status line
+        self.planner_key: str = "local"       # typego_bringup planner launch value
+        self.planner_label: str = ""        # short label for status line
         self.full_extra_launch_args: list[str] = []
         self.full_requires_existing_map: bool = False
         self.map_options: list[str] = []
@@ -211,7 +211,7 @@ class TypegoConsole(App):
     def _show_mode_menu(self) -> None:
         self.state = "mode"
         self.mode = None
-        self.full_mode_label = ""
+        self.planner_label = ""
         self.full_extra_launch_args = []
         self.full_requires_existing_map = False
         self.selected_map = None
@@ -264,8 +264,8 @@ class TypegoConsole(App):
 
     def _mode_label(self) -> str:
         name = _mode_name(self.mode or "")
-        if self.mode == "3d" and self.full_mode_label:
-            return f"{name} · {self.full_mode_label}"
+        if self.mode == "3d" and self.planner_label:
+            return f"{name} · {self.planner_label}"
         return name
 
     def _update_running_status(self) -> None:
@@ -330,8 +330,8 @@ class TypegoConsole(App):
             return
         for option in FULL_SUB_OPTIONS:
             if option.key == raw:
-                self.full_mode_key = option.full_mode
-                self.full_mode_label = option.label
+                self.planner_key = option.planner
+                self.planner_label = option.label
                 self.full_extra_launch_args = list(option.extra_args)
                 self.full_requires_existing_map = option.requires_existing_map
                 self._show_map_menu()
@@ -441,7 +441,7 @@ class TypegoConsole(App):
             f"slam_map_name:={map_arg}",
         ]
         if self.mode == "3d":
-            cmd.append(f"full_mode:={self.full_mode_key}")
+            cmd.append(f"planner:={self.planner_key}")
             cmd.extend(self.full_extra_launch_args)
         self._banner(f"Launching: {' '.join(cmd)}")
         self._open_log_file(cmd)
