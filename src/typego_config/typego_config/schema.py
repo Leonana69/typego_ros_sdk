@@ -15,7 +15,14 @@ from typing import List, Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 RobotType = Literal['go2', 'kami']
-AutonomyType = Literal['base', 'full']
+# "2d" = SLAM Toolbox + Nav2 (2D occupancy grid).
+# "3d" = LIO + terrain analysis + local planner (3D point cloud).
+# Renamed from "base"/"full", which named nothing; see _MIGRATED_AUTONOMY_TYPES.
+AutonomyType = Literal['2d', '3d']
+
+#: Retired spellings, mapped to their replacement so the error can say what
+#: to change instead of just listing the permitted values.
+_MIGRATED_AUTONOMY_TYPES = {'base': '2d', 'full': '3d'}
 SlamBackend = Literal['arise', 'lightning']
 RoutePlannerBackend = Literal['far', 'pcd_grid']
 Rmw = Literal[
@@ -46,16 +53,36 @@ class AutonomyConfig(BaseModel):
     model_config = ConfigDict(extra='forbid')
 
     type: AutonomyType = Field(
-        default='base',
-        description='"base" = SLAM Toolbox + Nav2; "full" = ARISE + TARE/FAR.',
+        default='2d',
+        description='"2d" = SLAM Toolbox + Nav2; '
+                    '"3d" = LIO + terrain analysis + local planner.',
     )
     slam_backend: SlamBackend = Field(
         default='arise',
         description=(
-            'LIO backend when type=full. "arise" = arise_slam_mid360 (default). '
-            '"lightning" = vendored lightning-lm. Ignored when type=base.'
+            'LIO backend when type=3d. "arise" = arise_slam_mid360 (default). '
+            '"lightning" = vendored lightning-lm. Ignored when type=2d.'
         ),
     )
+
+    @model_validator(mode='before')
+    @classmethod
+    def _reject_legacy_type(cls, data):
+        """Turn the old spellings into a migration instruction.
+
+        Bare Literal validation would only say "Input should be '2d' or '3d'",
+        which does not tell someone holding a pre-rename robot.yaml what to do.
+        """
+        if isinstance(data, dict):
+            old = data.get('type')
+            new = _MIGRATED_AUTONOMY_TYPES.get(old)
+            if new is not None:
+                raise ValueError(
+                    f"autonomy.type: {old!r} was renamed to {new!r}. "
+                    f"Change 'type: {old}' to 'type: {new}' in robot.yaml "
+                    f"(and in any profile under config/profiles/)."
+                )
+        return data
 
 
 class EdgeServiceConfig(BaseModel):

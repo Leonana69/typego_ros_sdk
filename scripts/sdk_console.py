@@ -38,7 +38,7 @@ LOG_DIR = PROJECT_ROOT / "logs"
 LAUNCH_CMD = ["ros2", "launch", "typego_sdk", "typego_bringup.launch.py"]
 EMPTY_MAP = "empty_map"
 
-# Full-autonomy menu options. PCD grid shares full_mode=1 with FAR and is
+# 3D-autonomy planner options. PCD grid shares full_mode=1 with FAR and is
 # selected by passing route_planner_backend:=pcd_grid.
 class FullSubOption(NamedTuple):
     key: str
@@ -49,9 +49,9 @@ class FullSubOption(NamedTuple):
 
 
 FULL_SUB_OPTIONS = [
-    # "local planner only" rather than "base": `base` is being retired as the
-    # name of the 2D stack, so reusing it here for "no route planner" would
-    # give one word two meanings.
+    # "local planner only" rather than "base": `base` was the old name of
+    # the 2D stack, so reusing it here for "no route planner" would give
+    # one word two meanings.
     FullSubOption("0", "local planner only (no route planner)", "0"),
     FullSubOption("1", "FAR route planner", "1", ("route_planner_backend:=far",)),
     FullSubOption(
@@ -66,16 +66,15 @@ FULL_SUB_OPTIONS = [
     FullSubOption("3", "TARE exploration planner", "2"),
 ]
 
-# Operator-facing names for the two autonomy stacks. The launch-arg values
-# stay `base` / `full` until the schema rename (doc/improvements.md WS-3);
-# only what the operator reads changes here. `base`/`full` described nothing —
-# 2D vs 3D names the axis that actually differs: the sensing and
-# state-estimation layer.
+# Operator-facing names for the two autonomy stacks. These keys are the
+# actual autonomy_type launch-arg values, matching autonomy.type in
+# robot.yaml. `base`/`full` named nothing; 2d/3d names the axis that
+# really differs -- the sensing and state-estimation layer.
 MODE_MENU = {
-    "base": "2D-autonomy   (SLAM Toolbox + Nav2)",
-    "full": "3D-autonomy   (LIO + terrain analysis + local planner)",
+    "2d": "2D-autonomy   (SLAM Toolbox + Nav2)",
+    "3d": "3D-autonomy   (LIO + terrain analysis + local planner)",
 }
-MODE_SHORT = {"base": "2D-autonomy", "full": "3D-autonomy"}
+MODE_SHORT = {"2d": "2D-autonomy", "3d": "3D-autonomy"}
 
 
 def _mode_name(mode: str) -> str:
@@ -86,8 +85,8 @@ def _mode_name(mode: str) -> str:
 def _maps_for_mode(mode: str) -> list[str]:
     """List maps valid for the given mode by looking at on-disk artefacts.
 
-    base (slam_toolbox):  Map-<name>/<name>.posegraph
-    full (ARISE SLAM):    Map-<name>/<name>.pcd
+    2d (slam_toolbox):  Map-<name>/<name>.posegraph
+    3d (ARISE SLAM):    Map-<name>/<name>.pcd
     """
     if not MAP_RESOURCE_DIR.is_dir():
         return []
@@ -98,9 +97,9 @@ def _maps_for_mode(mode: str) -> list[str]:
         name = entry.name[len("Map-"):]
         if name == EMPTY_MAP:
             continue
-        if mode == "base" and (entry / f"{name}.posegraph").is_file():
+        if mode == "2d" and (entry / f"{name}.posegraph").is_file():
             names.append(name)
-        elif mode == "full" and (entry / f"{name}.pcd").is_file():
+        elif mode == "3d" and (entry / f"{name}.pcd").is_file():
             names.append(name)
     return names
 
@@ -218,8 +217,8 @@ class TypegoConsole(App):
         self.selected_map = None
         self._banner("Typego SDK Console")
         self.log_pane.write("Choose autonomy stack:")
-        self.log_pane.write(f"  [bold]1[/bold]  {MODE_MENU['base']}")
-        self.log_pane.write(f"  [bold]2[/bold]  {MODE_MENU['full']}")
+        self.log_pane.write(f"  [bold]1[/bold]  {MODE_MENU['2d']}")
+        self.log_pane.write(f"  [bold]2[/bold]  {MODE_MENU['3d']}")
         self.log_pane.write("")
         self._set_status("Select autonomy stack")
         self.prompt.placeholder = "Type 1 or 2, then Enter  (q to quit)"
@@ -227,7 +226,7 @@ class TypegoConsole(App):
 
     def _show_full_sub_menu(self) -> None:
         self.state = "full_sub"
-        self._banner(f"Stack: {MODE_SHORT['full']}")
+        self._banner(f"Stack: {MODE_SHORT['3d']}")
         self.log_pane.write("3D-autonomy planner:")
         for option in FULL_SUB_OPTIONS:
             self.log_pane.write(f"  [bold]{option.key}[/bold]  {option.label}")
@@ -245,7 +244,7 @@ class TypegoConsole(App):
         self.log_pane.write("Choose a map:")
         for i, name in enumerate(self.map_options, start=1):
             self.log_pane.write(f"  [bold]{i}[/bold]  {name}")
-        show_new_map = not (self.mode == "full" and self.full_requires_existing_map)
+        show_new_map = not (self.mode == "3d" and self.full_requires_existing_map)
         new_idx = len(self.map_options) + 1
         if show_new_map:
             self.log_pane.write(f"  [bold]{new_idx}[/bold]  [green]new map[/green]  (start mapping from empty)")
@@ -265,7 +264,7 @@ class TypegoConsole(App):
 
     def _mode_label(self) -> str:
         name = _mode_name(self.mode or "")
-        if self.mode == "full" and self.full_mode_label:
+        if self.mode == "3d" and self.full_mode_label:
             return f"{name} · {self.full_mode_label}"
         return name
 
@@ -314,10 +313,10 @@ class TypegoConsole(App):
             await self._quit()
             return
         if raw == "1":
-            self.mode = "base"
+            self.mode = "2d"
             self._show_map_menu()
         elif raw == "2":
-            self.mode = "full"
+            self.mode = "3d"
             self._show_full_sub_menu()
         else:
             self.log_pane.write(f"[red]Unknown option: {raw!r}[/red]")
@@ -344,7 +343,7 @@ class TypegoConsole(App):
             await self._quit()
             return
         if raw in ("b", "back"):
-            if self.mode == "full":
+            if self.mode == "3d":
                 self._show_full_sub_menu()
             else:
                 self._show_mode_menu()
@@ -358,7 +357,7 @@ class TypegoConsole(App):
         if 1 <= idx <= len(self.map_options):
             self.selected_map = self.map_options[idx - 1]
             await self._start_launch()
-        elif idx == new_idx and not (self.mode == "full" and self.full_requires_existing_map):
+        elif idx == new_idx and not (self.mode == "3d" and self.full_requires_existing_map):
             self.selected_map = None
             await self._start_launch()
         else:
@@ -441,7 +440,7 @@ class TypegoConsole(App):
             f"autonomy_type:={self.mode}",
             f"slam_map_name:={map_arg}",
         ]
-        if self.mode == "full":
+        if self.mode == "3d":
             cmd.append(f"full_mode:={self.full_mode_key}")
             cmd.extend(self.full_extra_launch_args)
         self._banner(f"Launching: {' '.join(cmd)}")

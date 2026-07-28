@@ -29,7 +29,7 @@ from launch_ros.actions import Node
 _DEFAULT_FALLBACKS = {
     'robot_id': '',
     'robot_type': 'go2',
-    'autonomy_type': 'base',
+    'autonomy_type': '2d',
     'slam_backend': 'arise',
     'slam_map_name': 'empty_map',
     'launch_web_gateway': 'true',
@@ -222,7 +222,7 @@ ARGUMENTS = [
         'slam_backend',
         default_value=_DEFAULTS['slam_backend'],
         description='LIO backend for full autonomy: "arise" or "lightning". '
-                    'Ignored when autonomy_type=base.'
+                    'Ignored when autonomy_type=2d.'
     ),
     DeclareLaunchArgument(
         'slam_map_name',
@@ -232,7 +232,7 @@ ARGUMENTS = [
     DeclareLaunchArgument(
         'full_mode',
         default_value='0',
-        description='Full-autonomy sub-mode (ignored when autonomy_type=base): '
+        description='3D-autonomy planner sub-mode (ignored when autonomy_type=2d): '
                     '0 = plain vehicle_simulator, '
                     '1 = + FAR route planner, '
                     '2 = + TARE exploration planner.'
@@ -485,7 +485,7 @@ def generate_launch_description():
             }],
         )
 
-        if autonomy_type == 'full':
+        if autonomy_type == '3d':
             # --- Full autonomy (vehicle simulator) ---
             full_mode_launch_files = {
                 '0': 'system_real_robot.launch.py',
@@ -532,7 +532,7 @@ def generate_launch_description():
             # --- Base autonomy (SLAM, waypoints service, Nav2) ---
             autonomy_launch = IncludeLaunchDescription(
                 PythonLaunchDescriptionSource(
-                    os.path.join(typego_sdk_pkg, 'launch', 'base_autonomy.launch.py')
+                    os.path.join(typego_sdk_pkg, 'launch', 'autonomy_2d.launch.py')
                 ),
                 launch_arguments={
                     'robot_id': robot_id,

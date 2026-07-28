@@ -58,8 +58,8 @@ PYTHON_ENTRYPOINTS := \
 
 # Build the project
 build: $(ROBOT_ENV)
-	@if [ "$(AUTONOMY_TYPE)" = "base" ]; then \
-		echo "=> AUTONOMY_TYPE=base, excluding autonomy packages..."; \
+	@if [ "$(AUTONOMY_TYPE)" = "2d" ]; then \
+		echo "=> AUTONOMY_TYPE=2d, excluding autonomy packages..."; \
 		AUTONOMY_PACKAGES=$$(find src/autonomy -name "package.xml" \
 			-exec grep -h "<name>" {} \; \
 			| sed 's/.*<name>\(.*\)<\/name>.*/\1/' \
@@ -97,7 +97,7 @@ config_validate:
 # 2. OR-Tools
 setup: $(ROBOT_ENV)
 	@echo "=> Setting up TypeGo SDK..."
-	@if [ "$(AUTONOMY_TYPE)" = "full" ]; then \
+	@if [ "$(AUTONOMY_TYPE)" = "3d" ]; then \
 		echo "=> Building SLAM dependencies (Sophus + gtsam)..."; \
 		cd $(CURDIR)/src/autonomy/slam/dependency/Sophus && \
 		rm -rf build && mkdir build && cd build && \
@@ -245,7 +245,7 @@ console: $(ROBOT_ENV)
 
 # Save the current SLAM map. Auto-picks the right workflow from AUTONOMY_TYPE
 # (base → slam_toolbox via docker; full → ARISE SLAM on host). All logic
-# lives in scripts/save_map.py. Pass MODE=base|full to override the autonomy
+# lives in scripts/save_map.py. Pass MODE=2d|3d to override the autonomy
 # type from robot.yaml (e.g. when the running stack differs from the config).
 .PHONY: save_map
 save_map: SHELL := /bin/bash

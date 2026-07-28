@@ -3,7 +3,7 @@
 #
 # Sections:
 #   robot       - identity (id / type / name)
-#   autonomy    - base vs full autonomy + SLAM backend
+#   autonomy    - 2d vs 3d autonomy + SLAM backend
 #   network     - DDS, robot IP, edge service, gstreamer
 #   web_gateway - HMI server + bag recording
 #   map         - which SLAM map to load
@@ -22,8 +22,8 @@ robot:
   name: robot-alpha
 
 autonomy:
-  type: base         # base | full
-  slam_backend: arise  # arise | lightning  (only used when type=full)
+  type: 2d           # 2d (SLAM Toolbox + Nav2) | 3d (LIO + local planner)
+  slam_backend: arise  # arise | lightning  (only used when type=3d)
 
 network:
   ros_domain_id: 1

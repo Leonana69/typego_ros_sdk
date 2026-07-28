@@ -10,7 +10,7 @@ from typego_config.schema import RobotConfig
 def test_defaults_construct_cleanly():
     cfg = RobotConfig()
     assert cfg.robot.type == 'go2'
-    assert cfg.autonomy.type == 'base'
+    assert cfg.autonomy.type == '2d'
     assert cfg.network.ros_domain_id == 0
     assert cfg.network.rmw.startswith('rmw_')
     assert cfg.web_gateway.port == 8080

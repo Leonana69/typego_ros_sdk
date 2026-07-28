@@ -50,7 +50,7 @@ For saved-map navigation that should not depend on FAR's live `freespace_vgraph`
 
 ```
 ros2 launch typego_sdk typego_bringup.launch.py \
-  autonomy_type:=full full_mode:=1 slam_map_name:=<map-name> \
+  autonomy_type:=3d full_mode:=1 slam_map_name:=<map-name> \
   route_planner_backend:=pcd_grid
 ```
 

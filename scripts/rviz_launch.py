@@ -9,7 +9,7 @@ which planner's config to load:
     2  PCD grid planner      pcd_grid_planner/default.rviz
     3  exploration (TARE)    tare_planner_ground.rviz
 
-Base mode runs plain rviz (no -d). Once launched, rviz's stdout/stderr
+2D-autonomy runs plain rviz (no -d). Once launched, rviz's stdout/stderr
 streams into the log pane; type `q` + Enter to quit, or `m` + Enter to go
 back to the menu and pick a different config.
 
@@ -53,13 +53,13 @@ FULL_CONFIGS = [
 ]
 
 # Operator-facing names for the two autonomy stacks; kept identical to
-# scripts/sdk_console.py so the two TUIs agree. The launch-arg values stay
-# `base` / `full` until the schema rename (doc/improvements.md WS-3).
+# scripts/sdk_console.py so the two TUIs agree. Keys are the autonomy_type
+# launch-arg values, matching autonomy.type in robot.yaml.
 MODE_MENU = {
-    "base": "2D-autonomy   (SLAM Toolbox + Nav2)",
-    "full": "3D-autonomy   (LIO + terrain analysis + local planner)",
+    "2d": "2D-autonomy   (SLAM Toolbox + Nav2)",
+    "3d": "3D-autonomy   (LIO + terrain analysis + local planner)",
 }
-MODE_SHORT = {"base": "2D-autonomy", "full": "3D-autonomy"}
+MODE_SHORT = {"2d": "2D-autonomy", "3d": "3D-autonomy"}
 
 
 def _mode_name(mode: str) -> str:
@@ -129,8 +129,8 @@ class RvizConsole(App):
         self.mode = None
         self._banner("Typego rviz launcher")
         self.log_pane.write("Choose autonomy stack:")
-        self.log_pane.write(f"  [bold]1[/bold]  {MODE_MENU['base']}")
-        self.log_pane.write(f"  [bold]2[/bold]  {MODE_MENU['full']}")
+        self.log_pane.write(f"  [bold]1[/bold]  {MODE_MENU['2d']}")
+        self.log_pane.write(f"  [bold]2[/bold]  {MODE_MENU['3d']}")
         self.log_pane.write("")
         self._set_status("Select autonomy stack")
         self.prompt.placeholder = "Type 1 or 2, then Enter  (q to quit)"
@@ -138,7 +138,7 @@ class RvizConsole(App):
 
     def _show_sub_menu(self) -> None:
         self.state = "sub"
-        self._banner(f"Stack: {MODE_SHORT['full']}")
+        self._banner(f"Stack: {MODE_SHORT['3d']}")
         self.log_pane.write("Rviz config:")
         for key, label, _ in FULL_CONFIGS:
             self.log_pane.write(f"  [bold]{key}[/bold]  {label}")
@@ -170,10 +170,10 @@ class RvizConsole(App):
             await self._quit()
             return
         if raw == "1":
-            self.mode = "base"
+            self.mode = "2d"
             await self._start_rviz(rviz_args=[])
         elif raw == "2":
-            self.mode = "full"
+            self.mode = "3d"
             self._show_sub_menu()
         else:
             self.log_pane.write(f"[red]Unknown option: {raw!r}[/red]")
