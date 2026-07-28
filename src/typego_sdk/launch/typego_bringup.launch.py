@@ -1,5 +1,4 @@
 import os
-import sys
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
@@ -16,60 +15,55 @@ from launch_ros.actions import Node
 
 
 # ─── Defaults from robot.yaml ────────────────────────────────────────────────
-# Read robot.yaml at import time so DeclareLaunchArgument defaults reflect
-# the single source of truth. CLI overrides (`key:=value`) still win because
-# launch.substitutions prefers the CLI-provided value over the declared
-# default.
+# robot.yaml is validated with pydantic here, at launch-description time, and
+# an invalid config raises rather than falling back. Previously this path
+# parsed raw YAML and swallowed every error into a table of hardcoded
+# fallbacks -- so a missing or malformed file silently started the stack on a
+# different robot geometry than the one the collision table was baked for.
 #
-# We deliberately avoid importing ``typego_config`` here — ros2 launch runs
-# under /usr/bin/python3 by default, and typego_config depends on pydantic
-# which typically lives in a conda env. Use plain PyYAML (which rosdep
-# provides on Humble) with a tolerant lookup; full schema validation
-# happens later in the typego_config service node.
-_DEFAULT_FALLBACKS = {
-    'robot_id': '',
-    'robot_type': 'go2',
-    'autonomy_type': '2d',
-    'slam_backend': 'arise',
-    'slam_map_name': 'empty_map',
-    'launch_web_gateway': 'true',
-    'web_gateway_port': '8080',
-    'robot_ip': '',
-    'nav2_params_file': 'nav2_params.yaml',
-    'slam_params_file': 'slam.yaml',
-    # profiles.* — which per-tool tuning YAML each planner loads
-    'local_planner_profile': 'dog',
-    'planner': 'local',
-    'far_planner_profile': 'outdoor',
-    'tare_planner_profile': 'indoor_small',
-    # sensors.* — sensor mounting offsets
-    'sensor_offset_x': '0.05',
-    'sensor_offset_y': '0.0',
-    'camera_offset_z': '0.25',
-    # vehicle.* — physical footprint
-    'vehicle_length': '0.7',
-    'vehicle_width': '0.3',
-    # motion.* — speed / yaw limits
-    'max_speed': '1.375',
-    'autonomy_speed': '0.875',
-    'max_accel': '2.0',
-    'max_decel': '2.0',
-    'cmd_vel_max_linear': '0.8',
-    'cmd_vel_max_angular': '1.0',
-    'cmd_vel_min_angular': '0.2',
+# The old workaround comment claimed typego_config could not be imported
+# because "ros2 launch runs under /usr/bin/python3 without pydantic". That is
+# not true of this workspace or the Docker image; both have it. Discovery and
+# merging still come from typego_config.bootstrap, which is dependency-free,
+# so the import chain does not require pydantic until validation itself.
+#
+# CLI overrides (`key:=value`) still win: launch.substitutions prefers the
+# CLI-provided value over the declared default.
+from typego_config.bootstrap import load_merged            # noqa: E402
+from typego_config.loader import ConfigError, load         # noqa: E402
+
+
+# Launch-arg name -> dotted path in the validated config.
+_ARG_SOURCES = {
+    'robot_id': ('robot', 'id'),
+    'robot_type': ('robot', 'type'),
+    'autonomy_type': ('autonomy', 'type'),
+    'planner': ('autonomy', 'planner'),
+    'slam_backend': ('autonomy', 'slam_backend'),
+    'slam_map_name': ('map', 'slam_map_name'),
+    'launch_web_gateway': ('web_gateway', 'enabled'),
+    'web_gateway_port': ('web_gateway', 'port'),
+    'robot_ip': ('network', 'robot_ip'),
+    'nav2_params_file': ('profiles', 'nav2_params_file'),
+    'slam_params_file': ('profiles', 'slam_params_file'),
+    'local_planner_profile': ('profiles', 'local_planner_profile'),
+    'far_planner_profile': ('profiles', 'far_planner_profile'),
+    'tare_planner_profile': ('profiles', 'tare_planner_profile'),
+    'sensor_offset_x': ('sensors', 'lidar_offset_x'),
+    'sensor_offset_y': ('sensors', 'lidar_offset_y'),
+    'camera_offset_z': ('sensors', 'camera_offset_z'),
+    'vehicle_length': ('vehicle', 'length'),
+    'vehicle_width': ('vehicle', 'width'),
+    'max_speed': ('motion', 'max_speed'),
+    'autonomy_speed': ('motion', 'autonomy_speed'),
+    'max_accel': ('motion', 'max_accel'),
+    'max_decel': ('motion', 'max_decel'),
+    'cmd_vel_max_linear': ('motion', 'cmd_vel_max_linear'),
+    'cmd_vel_max_angular': ('motion', 'cmd_vel_max_angular'),
+    'cmd_vel_min_angular': ('motion', 'cmd_vel_min_angular'),
 }
 
-
-def _locate_robot_yaml():
-    env = os.environ.get('TYPEGO_CONFIG')
-    if env and os.path.isfile(env):
-        return env
-    try:
-        share = get_package_share_directory('typego_config')
-    except Exception:
-        return None
-    candidate = os.path.join(share, 'config', 'robot.yaml')
-    return candidate if os.path.isfile(candidate) else None
+_ROBOT_YAML_RAW = {}
 
 
 def _dig(data, *keys, default=None):
@@ -81,122 +75,42 @@ def _dig(data, *keys, default=None):
     return cur
 
 
-def _deep_merge_dict(base, overlay):
-    out = {}
-    for key in set(base) | set(overlay):
-        if key in overlay and isinstance(overlay[key], dict) \
-                and isinstance(base.get(key), dict):
-            out[key] = _deep_merge_dict(base[key], overlay[key])
-        elif key in overlay:
-            out[key] = overlay[key]
-        else:
-            out[key] = base[key]
-    return out
-
-
-_ROBOT_YAML_RAW = {}
-
-
-def _warn_fallback(reason):
-    """Never fail silently: the built-in fallbacks disagree with the shipped
-    robot.yaml on physical geometry (footprint 0.7x0.3 vs 0.75x0.4, lidar
-    offset 0.05 vs 0.30), and local_planner's collision table is baked for
-    the robot.yaml values. Launching on the fallbacks is a real hazard, so
-    say so loudly rather than proceeding quietly.
-    """
-    sys.stderr.write(
-        '\n'
-        '========================================================\n'
-        'typego_bringup: FALLING BACK TO BUILT-IN DEFAULTS\n'
-        f'  reason: {reason}\n'
-        '  consequence: vehicle/sensor/motion parameters will NOT\n'
-        '    match robot.yaml. The local_planner collision table is\n'
-        '    baked for the robot.yaml footprint; these defaults differ.\n'
-        '  fix: repair the file above, or set TYPEGO_CONFIG to a valid\n'
-        '    robot.yaml, then relaunch. Check it with:\n'
-        '      make config_validate\n'
-        '========================================================\n\n'
-    )
+def _as_launch_str(value):
+    if isinstance(value, bool):
+        return 'true' if value else 'false'
+    return str(value)
 
 
 def _load_defaults():
+    """Validated config -> launch-argument defaults. Raises on a bad config."""
     global _ROBOT_YAML_RAW
-    path = _locate_robot_yaml()
-    if not path:
-        _warn_fallback(
-            'robot.yaml not found ($TYPEGO_CONFIG unset or missing, and no '
-            'config/robot.yaml in the typego_config share directory)'
-        )
-        return dict(_DEFAULT_FALLBACKS)
     try:
-        import yaml
-        with open(path, 'r') as f:
-            data = yaml.safe_load(f) or {}
-        # Honour $TYPEGO_PROFILE so setting it pre-launch reshapes the
-        # defaults the same way `profile:=...` would at launch time.
-        profile = os.environ.get('TYPEGO_PROFILE')
-        if profile:
-            p_path = os.path.join(
-                os.path.dirname(path), 'profiles', f'{profile}.yaml'
-            )
-            if os.path.isfile(p_path):
-                with open(p_path, 'r') as f:
-                    overlay = yaml.safe_load(f) or {}
-                if isinstance(overlay, dict):
-                    data = _deep_merge_dict(
-                        data if isinstance(data, dict) else {}, overlay)
-            else:
-                # A requested profile that does not exist is a typo, not a
-                # no-op. Name it rather than silently using base defaults.
-                sys.stderr.write(
-                    f'typego_bringup: WARNING TYPEGO_PROFILE={profile!r} '
-                    f'requested but {p_path} does not exist; continuing '
-                    f'without the overlay.\n'
-                )
-    except Exception as exc:
-        _warn_fallback(f'{path} could not be read or parsed: '
-                       f'{type(exc).__name__}: {exc}')
-        return dict(_DEFAULT_FALLBACKS)
-    _ROBOT_YAML_RAW = data if isinstance(data, dict) else {}
+        cfg = load()
+    except ConfigError as exc:
+        raise RuntimeError(
+            f'\n{"=" * 66}\n'
+            f'typego_bringup: robot.yaml is invalid — refusing to launch.\n'
+            f'{exc}\n'
+            f'{"-" * 66}\n'
+            f'Launching on built-in defaults would silently run the stack on a\n'
+            f'different vehicle geometry than local_planner\'s collision table\n'
+            f'was baked for, so this is fatal rather than a warning.\n'
+            f'Check the file with:  make config_validate\n'
+            f'{"=" * 66}'
+        ) from exc
 
-    out = dict(_DEFAULT_FALLBACKS)
-    mapping = {
-        'robot_id': ('robot', 'id'),
-        'robot_type': ('robot', 'type'),
-        'autonomy_type': ('autonomy', 'type'),
-        'slam_backend': ('autonomy', 'slam_backend'),
-        'slam_map_name': ('map', 'slam_map_name'),
-        'launch_web_gateway': ('web_gateway', 'enabled'),
-        'web_gateway_port': ('web_gateway', 'port'),
-        'robot_ip': ('network', 'robot_ip'),
-        'nav2_params_file': ('profiles', 'nav2_params_file'),
-        'slam_params_file': ('profiles', 'slam_params_file'),
-        'local_planner_profile': ('profiles', 'local_planner_profile'),
-        'planner': ('autonomy', 'planner'),
-        'far_planner_profile': ('profiles', 'far_planner_profile'),
-        'tare_planner_profile': ('profiles', 'tare_planner_profile'),
-        'sensor_offset_x': ('sensors', 'lidar_offset_x'),
-        'sensor_offset_y': ('sensors', 'lidar_offset_y'),
-        'camera_offset_z': ('sensors', 'camera_offset_z'),
-        'vehicle_length': ('vehicle', 'length'),
-        'vehicle_width': ('vehicle', 'width'),
-        'max_speed': ('motion', 'max_speed'),
-        'autonomy_speed': ('motion', 'autonomy_speed'),
-        'max_accel': ('motion', 'max_accel'),
-        'max_decel': ('motion', 'max_decel'),
-        'cmd_vel_max_linear': ('motion', 'cmd_vel_max_linear'),
-        'cmd_vel_max_angular': ('motion', 'cmd_vel_max_angular'),
-        'cmd_vel_min_angular': ('motion', 'cmd_vel_min_angular'),
+    # The raw merged dict still backs the few consumers that read sections the
+    # launch args do not cover (edge_service, web_gateway extras).
+    try:
+        _ROBOT_YAML_RAW, _ = load_merged()
+    except Exception:
+        _ROBOT_YAML_RAW = {}
+
+    dumped = cfg.model_dump(mode='json')
+    return {
+        arg: _as_launch_str(_dig(dumped, *path))
+        for arg, path in _ARG_SOURCES.items()
     }
-    for key, path_keys in mapping.items():
-        value = _dig(data, *path_keys)
-        if value is None:
-            continue
-        if isinstance(value, bool):
-            out[key] = 'true' if value else 'false'
-        else:
-            out[key] = str(value)
-    return out
 
 
 _DEFAULTS = _load_defaults()
