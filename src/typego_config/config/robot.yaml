@@ -1,6 +1,16 @@
 # Single-source robot configuration. This file replaces docker/.env and
 # the scattered launch-arg defaults. Edit once, relaunch the stack.
 #
+# STATIC MODEL: this file is read and validated once, at launch. The resolved
+# configuration is immutable for the life of the run -- every parameter on the
+# /typego_config node is read-only, and there is no reload service. To change
+# anything, edit here and relaunch. `ros2 run typego_config typego-config
+# dryrun` prints the fully resolved tree.
+#
+# An invalid file is fatal: typego_bringup refuses to launch rather than
+# falling back to built-in defaults, because those defaults differ from the
+# real vehicle geometry that local_planner's collision table is baked for.
+#
 # Sections:
 #   robot       - identity (id / type / name)
 #   autonomy    - 2d vs 3d autonomy + planner + SLAM backend
@@ -85,10 +95,3 @@ motion:
   cmd_vel_max_linear: 0.8  # m/s   cmd_vel_controller clamp (vx & vy)
   cmd_vel_max_angular: 1.0 # rad/s cmd_vel_controller yaw clamp
   cmd_vel_min_angular: 0.2 # rad/s cmd_vel_controller yaw deadband floor
-
-# Dotted keys permitted for runtime mutation via ros2 param set /typego_config
-# and the /typego_config/reload service. Everything else is read-only.
-dynamic:
-  - web_gateway.bag_retain
-  - web_gateway.bag_chunk_seconds
-  - map.slam_map_name

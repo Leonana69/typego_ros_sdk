@@ -15,10 +15,8 @@ from rcl_interfaces.msg import (
     IntegerRange,
     ParameterDescriptor,
     ParameterType,
-    SetParametersResult,
 )
 from rclpy.node import Node
-from rclpy.parameter import Parameter
 from std_srvs.srv import Trigger
 
 from .loader import ConfigError, default_config_path, flatten, load, to_json_dict
@@ -89,13 +87,9 @@ class ConfigServiceNode(Node):
         self._ranges = _build_ranges_from_schema()
         self._declared: List[str] = []
         self._declare_all()
-        self.add_on_set_parameters_callback(self._on_set_params)
 
         self.create_service(
             Trigger, 'typego_config/get_config', self._srv_get_config,
-        )
-        self.create_service(
-            Trigger, 'typego_config/reload', self._srv_reload,
         )
 
         self.get_logger().info(
@@ -103,13 +97,20 @@ class ConfigServiceNode(Node):
         )
 
     def _declare_all(self) -> None:
+        # Static model: the resolved config is immutable for the life of the
+        # launch, so every parameter is declared read-only. The node exists to
+        # be *inspected* (`ros2 param list /typego_config`, get_config) -- not
+        # to be mutated. Change robot.yaml and relaunch.
         flat = flatten(self._cfg)
-        dyn = set(self._cfg.dynamic)
         for key, value in flat.items():
-            read_only = key not in dyn
-            desc = _descriptor_for(value, key, read_only, self._ranges)
+            desc = _descriptor_for(value, key, True, self._ranges)
             try:
-                self.declare_parameter(key, value, descriptor=desc)
+                # ignore_override=True: a `-p key:=value` at startup must not
+                # win over the validated config. Read-only blocks runtime
+                # set() but not launch-time overrides, so without this the
+                # parameter table and get_config report different values.
+                self.declare_parameter(
+                    key, value, descriptor=desc, ignore_override=True)
             except Exception as exc:
                 self.get_logger().error(
                     f'failed to declare {key!r}={value!r}: {exc}'
@@ -117,86 +118,11 @@ class ConfigServiceNode(Node):
                 continue
             self._declared.append(key)
 
-    def _on_set_params(self, params: List[Parameter]) -> SetParametersResult:
-        proposed = to_json_dict(self._cfg)
-        for p in params:
-            _assign_nested(proposed, p.name, _param_value(p))
-        try:
-            self._cfg = RobotConfig.model_validate(proposed)
-        except Exception as exc:
-            return SetParametersResult(
-                successful=False,
-                reason=f'validation failed: {exc}',
-            )
-        return SetParametersResult(successful=True)
-
     def _srv_get_config(self, request, response):
         del request
         response.success = True
         response.message = json.dumps(to_json_dict(self._cfg))
         return response
-
-    def _srv_reload(self, request, response):
-        del request
-        try:
-            new_cfg = load(self._config_path)
-        except ConfigError as exc:
-            response.success = False
-            response.message = str(exc)
-            return response
-
-        old_flat = flatten(self._cfg)
-        new_flat = flatten(new_cfg)
-        dyn = set(new_cfg.dynamic)
-        read_only_diffs = [
-            k for k, v in new_flat.items()
-            if k not in dyn and old_flat.get(k) != v
-        ]
-        if read_only_diffs:
-            response.success = False
-            response.message = (
-                'refused: read-only fields changed on disk — '
-                'relaunch the stack to pick them up. Keys: '
-                + ', '.join(sorted(read_only_diffs))
-            )
-            return response
-
-        updates = [
-            Parameter(name=k, value=new_flat[k])
-            for k in dyn
-            if k in new_flat and old_flat.get(k) != new_flat[k]
-        ]
-        if updates:
-            result = self.set_parameters_atomically(updates)
-            if not result.successful:
-                response.success = False
-                response.message = f'set_parameters rejected: {result.reason}'
-                return response
-
-        self._cfg = new_cfg
-        response.success = True
-        response.message = (
-            f'reloaded; {len(updates)} dynamic param(s) updated'
-        )
-        return response
-
-
-def _assign_nested(d: Dict, dotted_key: str, value) -> None:
-    cur = d
-    parts = dotted_key.split('.')
-    for p in parts[:-1]:
-        nxt = cur.get(p)
-        if not isinstance(nxt, dict):
-            nxt = {}
-            cur[p] = nxt
-        cur = nxt
-    cur[parts[-1]] = value
-
-
-def _param_value(p: Parameter):
-    if hasattr(p, 'value'):
-        return p.value
-    return p.get_parameter_value().value  # pragma: no cover
 
 
 def _parse_args(argv) -> argparse.Namespace:

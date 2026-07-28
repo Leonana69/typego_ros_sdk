@@ -10,7 +10,7 @@ YAMLs — those keep their tool-native formats and are referenced by
 """
 from __future__ import annotations
 
-from typing import List, Literal
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -326,15 +326,3 @@ class RobotConfig(BaseModel):
     vehicle: VehicleConfig = Field(default_factory=VehicleConfig)
     sensors: SensorsConfig = Field(default_factory=SensorsConfig)
     motion: MotionConfig = Field(default_factory=MotionConfig)
-
-    dynamic: List[str] = Field(
-        default_factory=lambda: [
-            'web_gateway.bag_retain',
-            'web_gateway.bag_chunk_seconds',
-            'map.slam_map_name',
-        ],
-        description=(
-            'Dotted keys that the config service may mutate at runtime. '
-            'All other fields are read-only after launch.'
-        ),
-    )

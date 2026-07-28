@@ -98,6 +98,13 @@ All robot SDKs expose these topics. If `ROBOT_ID` is set, topics are namespaced 
 
 One file owns the deployment: `src/typego_config/config/robot.yaml`. Edit it, relaunch the stack. `docker/.env` is no longer read.
 
+**Configuration is static.** `robot.yaml` is validated once at launch and the
+resolved tree is immutable for the life of the run: every `/typego_config`
+parameter is read-only and there is no reload service. Change the file and
+relaunch. An invalid file is **fatal** — the stack refuses to start rather than
+falling back to built-in defaults, which would silently run a different vehicle
+geometry than `local_planner`'s collision table was baked for.
+
 ```yaml
 robot:
   id: ""

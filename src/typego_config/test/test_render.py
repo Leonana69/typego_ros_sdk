@@ -12,7 +12,6 @@ def test_config_node_params_have_flat_keys():
     params = doc['/**']['ros__parameters']
     assert 'network.ros_domain_id' in params
     assert 'profiles.nav2_params_file' in params
-    assert isinstance(params['dynamic'], list)
 
 
 def test_write_render_bundle_creates_files(tmp_path):

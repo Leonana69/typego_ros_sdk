@@ -18,9 +18,9 @@ def test_deep_merge_adds_keys():
 
 
 def test_deep_merge_replaces_lists():
-    base = {'dynamic': ['x', 'y']}
-    overlay = {'dynamic': ['z']}
-    assert _deep_merge(base, overlay) == {'dynamic': ['z']}
+    base = {'some_list': ['x', 'y']}
+    overlay = {'some_list': ['z']}
+    assert _deep_merge(base, overlay) == {'some_list': ['z']}
 
 
 def test_load_with_shipped_go2_indoor_profile():

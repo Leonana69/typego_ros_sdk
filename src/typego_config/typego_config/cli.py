@@ -46,7 +46,6 @@ def _cmd_dryrun(args: argparse.Namespace) -> int:
     width = max(len(k) for k in flat) if flat else 0
     for key in sorted(flat):
         print(f'{key.ljust(width)}  {flat[key]!r}')
-    print(f'\n(dynamic: {", ".join(cfg.dynamic) or "<none>"})', file=sys.stderr)
     return 0
 
 
