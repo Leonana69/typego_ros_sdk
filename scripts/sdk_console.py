@@ -49,7 +49,10 @@ class FullSubOption(NamedTuple):
 
 
 FULL_SUB_OPTIONS = [
-    FullSubOption("0", "plain (vehicle simulator)", "0"),
+    # "local planner only" rather than "base": `base` is being retired as the
+    # name of the 2D stack, so reusing it here for "no route planner" would
+    # give one word two meanings.
+    FullSubOption("0", "local planner only (no route planner)", "0"),
     FullSubOption("1", "FAR route planner", "1", ("route_planner_backend:=far",)),
     FullSubOption(
         "2",
@@ -62,6 +65,22 @@ FULL_SUB_OPTIONS = [
     ),
     FullSubOption("3", "TARE exploration planner", "2"),
 ]
+
+# Operator-facing names for the two autonomy stacks. The launch-arg values
+# stay `base` / `full` until the schema rename (doc/improvements.md WS-3);
+# only what the operator reads changes here. `base`/`full` described nothing —
+# 2D vs 3D names the axis that actually differs: the sensing and
+# state-estimation layer.
+MODE_MENU = {
+    "base": "2D-autonomy   (SLAM Toolbox + Nav2)",
+    "full": "3D-autonomy   (LIO + terrain analysis + local planner)",
+}
+MODE_SHORT = {"base": "2D-autonomy", "full": "3D-autonomy"}
+
+
+def _mode_name(mode: str) -> str:
+    """Short display name; falls back to the raw value if unrecognised."""
+    return MODE_SHORT.get(mode, mode or "")
 
 
 def _maps_for_mode(mode: str) -> list[str]:
@@ -198,23 +217,23 @@ class TypegoConsole(App):
         self.full_requires_existing_map = False
         self.selected_map = None
         self._banner("Typego SDK Console")
-        self.log_pane.write("Choose autonomy mode:")
-        self.log_pane.write("  [bold]1[/bold]  base   (slam_toolbox)")
-        self.log_pane.write("  [bold]2[/bold]  full   (ARISE SLAM)")
+        self.log_pane.write("Choose autonomy stack:")
+        self.log_pane.write(f"  [bold]1[/bold]  {MODE_MENU['base']}")
+        self.log_pane.write(f"  [bold]2[/bold]  {MODE_MENU['full']}")
         self.log_pane.write("")
-        self._set_status("Select mode")
+        self._set_status("Select autonomy stack")
         self.prompt.placeholder = "Type 1 or 2, then Enter  (q to quit)"
         self.prompt.value = ""
 
     def _show_full_sub_menu(self) -> None:
         self.state = "full_sub"
-        self._banner("Mode: full")
-        self.log_pane.write("Full-autonomy layer:")
+        self._banner(f"Stack: {MODE_SHORT['full']}")
+        self.log_pane.write("3D-autonomy planner:")
         for option in FULL_SUB_OPTIONS:
             self.log_pane.write(f"  [bold]{option.key}[/bold]  {option.label}")
         self.log_pane.write("")
         self.log_pane.write("  [bold]b[/bold]  back       [bold]q[/bold]  quit")
-        self._set_status("Select full-autonomy layer")
+        self._set_status("Select 3D-autonomy planner")
         self.prompt.placeholder = "Type 0, 1, 2, or 3 (or b / q), then Enter"
         self.prompt.value = ""
 
@@ -222,7 +241,7 @@ class TypegoConsole(App):
         self.state = "map"
         self.selected_map = None
         self.map_options = _maps_for_mode(self.mode or "")
-        self._banner(f"Mode: {self.mode}")
+        self._banner(f"Stack: {_mode_name(self.mode or '')}")
         self.log_pane.write("Choose a map:")
         for i, name in enumerate(self.map_options, start=1):
             self.log_pane.write(f"  [bold]{i}[/bold]  {name}")
@@ -231,10 +250,10 @@ class TypegoConsole(App):
         if show_new_map:
             self.log_pane.write(f"  [bold]{new_idx}[/bold]  [green]new map[/green]  (start mapping from empty)")
         elif not self.map_options:
-            self.log_pane.write("[yellow]No saved PCD maps found. PCD roadmap planner needs an existing full map.[/yellow]")
+            self.log_pane.write("[yellow]No saved PCD maps found. This planner needs an existing 3D-autonomy map.[/yellow]")
         self.log_pane.write("")
         self.log_pane.write("  [bold]b[/bold]  back      [bold]q[/bold]  quit")
-        self._set_status(f"Mode: {self.mode}  —  select map")
+        self._set_status(f"{_mode_name(self.mode or '')}  —  select map")
         if show_new_map:
             upper = max(new_idx, 1)
             self.prompt.placeholder = f"Type 1-{upper} (or b / q), then Enter"
@@ -245,9 +264,10 @@ class TypegoConsole(App):
         self.prompt.value = ""
 
     def _mode_label(self) -> str:
+        name = _mode_name(self.mode or "")
         if self.mode == "full" and self.full_mode_label:
-            return f"full · {self.full_mode_label}"
-        return self.mode or ""
+            return f"{name} · {self.full_mode_label}"
+        return name
 
     def _update_running_status(self) -> None:
         label = self._mode_label()
