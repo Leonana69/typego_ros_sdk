@@ -19,8 +19,8 @@ def generate_launch_description():
     )
     autonomy_type_arg = DeclareLaunchArgument(
         'autonomy_type',
-        default_value='base',
-        description='Autonomy type: "base" (Twist) or "full" (TwistStamped + CustomMsg)'
+        default_value='2d',
+        description='Autonomy type: "2d" (Twist) or "3d" (TwistStamped + CustomMsg)'
     )
     robot_ip_arg = DeclareLaunchArgument(
         'robot_ip',
@@ -66,7 +66,7 @@ def generate_launch_description():
 
         # Define nodes
         nodes = []
-        if autonomy_type == 'base':
+        if autonomy_type == '2d':
             xfer_format = 'None'
             tf_client_node = Node(
                 package='kami_sdk',
@@ -76,7 +76,7 @@ def generate_launch_description():
                 output='screen'
             )
             nodes.append(tf_client_node)
-        elif autonomy_type == 'full':
+        elif autonomy_type == '3d':
             xfer_format = 'CustomMsg'
         else:
             raise ValueError(f'Invalid autonomy type: {autonomy_type}')

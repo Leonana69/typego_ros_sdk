@@ -15,60 +15,55 @@ from launch_ros.actions import Node
 
 
 # ─── Defaults from robot.yaml ────────────────────────────────────────────────
-# Read robot.yaml at import time so DeclareLaunchArgument defaults reflect
-# the single source of truth. CLI overrides (`key:=value`) still win because
-# launch.substitutions prefers the CLI-provided value over the declared
-# default.
+# robot.yaml is validated with pydantic here, at launch-description time, and
+# an invalid config raises rather than falling back. Previously this path
+# parsed raw YAML and swallowed every error into a table of hardcoded
+# fallbacks -- so a missing or malformed file silently started the stack on a
+# different robot geometry than the one the collision table was baked for.
 #
-# We deliberately avoid importing ``typego_config`` here — ros2 launch runs
-# under /usr/bin/python3 by default, and typego_config depends on pydantic
-# which typically lives in a conda env. Use plain PyYAML (which rosdep
-# provides on Humble) with a tolerant lookup; full schema validation
-# happens later in the typego_config service node.
-_DEFAULT_FALLBACKS = {
-    'robot_id': '',
-    'robot_type': 'go2',
-    'autonomy_type': 'base',
-    'slam_backend': 'arise',
-    'slam_map_name': 'empty_map',
-    'launch_web_gateway': 'true',
-    'web_gateway_port': '8080',
-    'robot_ip': '',
-    'nav2_params_file': 'nav2_params.yaml',
-    'slam_params_file': 'slam.yaml',
-    # profiles.* — which per-tool tuning YAML each planner loads
-    'local_planner_profile': 'dog',
-    'route_planner_backend': 'far',
-    'far_planner_profile': 'outdoor',
-    'tare_planner_profile': 'indoor_small',
-    # sensors.* — sensor mounting offsets
-    'sensor_offset_x': '0.05',
-    'sensor_offset_y': '0.0',
-    'camera_offset_z': '0.25',
-    # vehicle.* — physical footprint
-    'vehicle_length': '0.7',
-    'vehicle_width': '0.3',
-    # motion.* — speed / yaw limits
-    'max_speed': '1.375',
-    'autonomy_speed': '0.875',
-    'max_accel': '2.0',
-    'max_decel': '2.0',
-    'cmd_vel_max_linear': '0.8',
-    'cmd_vel_max_angular': '1.0',
-    'cmd_vel_min_angular': '0.2',
+# The old workaround comment claimed typego_config could not be imported
+# because "ros2 launch runs under /usr/bin/python3 without pydantic". That is
+# not true of this workspace or the Docker image; both have it. Discovery and
+# merging still come from typego_config.bootstrap, which is dependency-free,
+# so the import chain does not require pydantic until validation itself.
+#
+# CLI overrides (`key:=value`) still win: launch.substitutions prefers the
+# CLI-provided value over the declared default.
+from typego_config.bootstrap import load_merged            # noqa: E402
+from typego_config.loader import ConfigError, load         # noqa: E402
+
+
+# Launch-arg name -> dotted path in the validated config.
+_ARG_SOURCES = {
+    'robot_id': ('robot', 'id'),
+    'robot_type': ('robot', 'type'),
+    'autonomy_type': ('autonomy', 'type'),
+    'planner': ('autonomy', 'planner'),
+    'slam_backend': ('autonomy', 'slam_backend'),
+    'slam_map_name': ('map', 'slam_map_name'),
+    'launch_web_gateway': ('web_gateway', 'enabled'),
+    'web_gateway_port': ('web_gateway', 'port'),
+    'robot_ip': ('network', 'robot_ip'),
+    'nav2_params_file': ('profiles', 'nav2_params_file'),
+    'slam_params_file': ('profiles', 'slam_params_file'),
+    'local_planner_profile': ('profiles', 'local_planner_profile'),
+    'far_planner_profile': ('profiles', 'far_planner_profile'),
+    'tare_planner_profile': ('profiles', 'tare_planner_profile'),
+    'sensor_offset_x': ('sensors', 'lidar_offset_x'),
+    'sensor_offset_y': ('sensors', 'lidar_offset_y'),
+    'camera_offset_z': ('sensors', 'camera_offset_z'),
+    'vehicle_length': ('vehicle', 'length'),
+    'vehicle_width': ('vehicle', 'width'),
+    'max_speed': ('motion', 'max_speed'),
+    'autonomy_speed': ('motion', 'autonomy_speed'),
+    'max_accel': ('motion', 'max_accel'),
+    'max_decel': ('motion', 'max_decel'),
+    'cmd_vel_max_linear': ('motion', 'cmd_vel_max_linear'),
+    'cmd_vel_max_angular': ('motion', 'cmd_vel_max_angular'),
+    'cmd_vel_min_angular': ('motion', 'cmd_vel_min_angular'),
 }
 
-
-def _locate_robot_yaml():
-    env = os.environ.get('TYPEGO_CONFIG')
-    if env and os.path.isfile(env):
-        return env
-    try:
-        share = get_package_share_directory('typego_config')
-    except Exception:
-        return None
-    candidate = os.path.join(share, 'config', 'robot.yaml')
-    return candidate if os.path.isfile(candidate) else None
+_ROBOT_YAML_RAW = {}
 
 
 def _dig(data, *keys, default=None):
@@ -80,86 +75,42 @@ def _dig(data, *keys, default=None):
     return cur
 
 
-def _deep_merge_dict(base, overlay):
-    out = {}
-    for key in set(base) | set(overlay):
-        if key in overlay and isinstance(overlay[key], dict) \
-                and isinstance(base.get(key), dict):
-            out[key] = _deep_merge_dict(base[key], overlay[key])
-        elif key in overlay:
-            out[key] = overlay[key]
-        else:
-            out[key] = base[key]
-    return out
-
-
-_ROBOT_YAML_RAW = {}
+def _as_launch_str(value):
+    if isinstance(value, bool):
+        return 'true' if value else 'false'
+    return str(value)
 
 
 def _load_defaults():
+    """Validated config -> launch-argument defaults. Raises on a bad config."""
     global _ROBOT_YAML_RAW
-    path = _locate_robot_yaml()
-    if not path:
-        return dict(_DEFAULT_FALLBACKS)
     try:
-        import yaml
-        with open(path, 'r') as f:
-            data = yaml.safe_load(f) or {}
-        # Honour $TYPEGO_PROFILE so setting it pre-launch reshapes the
-        # defaults the same way `profile:=...` would at launch time.
-        profile = os.environ.get('TYPEGO_PROFILE')
-        if profile:
-            p_path = os.path.join(
-                os.path.dirname(path), 'profiles', f'{profile}.yaml'
-            )
-            if os.path.isfile(p_path):
-                with open(p_path, 'r') as f:
-                    overlay = yaml.safe_load(f) or {}
-                if isinstance(overlay, dict):
-                    data = _deep_merge_dict(
-                        data if isinstance(data, dict) else {}, overlay)
-    except Exception:
-        return dict(_DEFAULT_FALLBACKS)
-    _ROBOT_YAML_RAW = data if isinstance(data, dict) else {}
+        cfg = load()
+    except ConfigError as exc:
+        raise RuntimeError(
+            f'\n{"=" * 66}\n'
+            f'typego_bringup: robot.yaml is invalid — refusing to launch.\n'
+            f'{exc}\n'
+            f'{"-" * 66}\n'
+            f'Launching on built-in defaults would silently run the stack on a\n'
+            f'different vehicle geometry than local_planner\'s collision table\n'
+            f'was baked for, so this is fatal rather than a warning.\n'
+            f'Check the file with:  make config_validate\n'
+            f'{"=" * 66}'
+        ) from exc
 
-    out = dict(_DEFAULT_FALLBACKS)
-    mapping = {
-        'robot_id': ('robot', 'id'),
-        'robot_type': ('robot', 'type'),
-        'autonomy_type': ('autonomy', 'type'),
-        'slam_backend': ('autonomy', 'slam_backend'),
-        'slam_map_name': ('map', 'slam_map_name'),
-        'launch_web_gateway': ('web_gateway', 'enabled'),
-        'web_gateway_port': ('web_gateway', 'port'),
-        'robot_ip': ('network', 'robot_ip'),
-        'nav2_params_file': ('profiles', 'nav2_params_file'),
-        'slam_params_file': ('profiles', 'slam_params_file'),
-        'local_planner_profile': ('profiles', 'local_planner_profile'),
-        'route_planner_backend': ('profiles', 'route_planner_backend'),
-        'far_planner_profile': ('profiles', 'far_planner_profile'),
-        'tare_planner_profile': ('profiles', 'tare_planner_profile'),
-        'sensor_offset_x': ('sensors', 'lidar_offset_x'),
-        'sensor_offset_y': ('sensors', 'lidar_offset_y'),
-        'camera_offset_z': ('sensors', 'camera_offset_z'),
-        'vehicle_length': ('vehicle', 'length'),
-        'vehicle_width': ('vehicle', 'width'),
-        'max_speed': ('motion', 'max_speed'),
-        'autonomy_speed': ('motion', 'autonomy_speed'),
-        'max_accel': ('motion', 'max_accel'),
-        'max_decel': ('motion', 'max_decel'),
-        'cmd_vel_max_linear': ('motion', 'cmd_vel_max_linear'),
-        'cmd_vel_max_angular': ('motion', 'cmd_vel_max_angular'),
-        'cmd_vel_min_angular': ('motion', 'cmd_vel_min_angular'),
+    # The raw merged dict still backs the few consumers that read sections the
+    # launch args do not cover (edge_service, web_gateway extras).
+    try:
+        _ROBOT_YAML_RAW, _ = load_merged()
+    except Exception:
+        _ROBOT_YAML_RAW = {}
+
+    dumped = cfg.model_dump(mode='json')
+    return {
+        arg: _as_launch_str(_dig(dumped, *path))
+        for arg, path in _ARG_SOURCES.items()
     }
-    for key, path_keys in mapping.items():
-        value = _dig(data, *path_keys)
-        if value is None:
-            continue
-        if isinstance(value, bool):
-            out[key] = 'true' if value else 'false'
-        else:
-            out[key] = str(value)
-    return out
 
 
 _DEFAULTS = _load_defaults()
@@ -185,7 +136,7 @@ ARGUMENTS = [
         'slam_backend',
         default_value=_DEFAULTS['slam_backend'],
         description='LIO backend for full autonomy: "arise" or "lightning". '
-                    'Ignored when autonomy_type=base.'
+                    'Ignored when autonomy_type=2d.'
     ),
     DeclareLaunchArgument(
         'slam_map_name',
@@ -193,12 +144,20 @@ ARGUMENTS = [
         description='Pre-existing SLAM map name to load (passed to slam_launch.py).'
     ),
     DeclareLaunchArgument(
+        'planner',
+        default_value=_DEFAULTS['planner'],
+        description='3D-autonomy planner (ignored when autonomy_type=2d): '
+                    'local = local planner only, '
+                    'far = + FAR route planner, '
+                    'pcd_grid = + PCD grid planner, '
+                    'exploration = + TARE exploration planner.'
+    ),
+    DeclareLaunchArgument(
+        # Retired. Declared only so `full_mode:=N` fails with a migration
+        # message instead of ros2 launch's generic unknown-argument error.
         'full_mode',
-        default_value='0',
-        description='Full-autonomy sub-mode (ignored when autonomy_type=base): '
-                    '0 = plain vehicle_simulator, '
-                    '1 = + FAR route planner, '
-                    '2 = + TARE exploration planner.'
+        default_value='',
+        description='RETIRED -- use planner:=local|far|pcd_grid|exploration.'
     ),
     DeclareLaunchArgument(
         'launch_web_gateway',
@@ -232,21 +191,16 @@ ARGUMENTS = [
                     'dog | omniDir | standard.'
     ),
     DeclareLaunchArgument(
-        'route_planner_backend',
-        default_value=_DEFAULTS['route_planner_backend'],
-        description='Route-planner backend for full_mode 1: far | pcd_grid.'
-    ),
-    DeclareLaunchArgument(
         'far_planner_profile',
         default_value=_DEFAULTS['far_planner_profile'],
         description='FAR route-planner profile (profiles.far_planner_profile): '
-                    'indoor | outdoor. Used only in full_mode 1.'
+                    'indoor | outdoor. Used only when planner=far.'
     ),
     DeclareLaunchArgument(
         'tare_planner_profile',
         default_value=_DEFAULTS['tare_planner_profile'],
         description='TARE exploration profile (profiles.tare_planner_profile): '
-                    'indoor_small | indoor_large | outdoor. Used only in full_mode 2.'
+                    'indoor_small | indoor_large | outdoor. Used only when planner=exploration.'
     ),
     DeclareLaunchArgument(
         'sensor_offset_x',
@@ -339,7 +293,7 @@ def generate_launch_description():
         autonomy_type = context.perform_substitution(LaunchConfiguration('autonomy_type'))
         slam_backend = context.perform_substitution(LaunchConfiguration('slam_backend'))
         slam_map_name = context.perform_substitution(LaunchConfiguration('slam_map_name'))
-        full_mode = context.perform_substitution(LaunchConfiguration('full_mode'))
+        planner = context.perform_substitution(LaunchConfiguration('planner'))
         launch_web_gateway = context.perform_substitution(
             LaunchConfiguration('launch_web_gateway')).lower() == 'true'
         web_gateway_port = context.perform_substitution(
@@ -352,8 +306,15 @@ def generate_launch_description():
             LaunchConfiguration('slam_params_file'))
         local_planner_profile = context.perform_substitution(
             LaunchConfiguration('local_planner_profile'))
-        route_planner_backend = context.perform_substitution(
-            LaunchConfiguration('route_planner_backend'))
+        legacy_full_mode = context.perform_substitution(
+            LaunchConfiguration('full_mode'))
+        if legacy_full_mode:
+            raise RuntimeError(
+                f"full_mode:={legacy_full_mode} was replaced by "
+                f"planner:=local|far|pcd_grid|exploration "
+                f"(0->local, 1->far or pcd_grid, 2->exploration). "
+                f"Set autonomy.planner in robot.yaml, or pass planner:=<name>."
+            )
         far_planner_profile = context.perform_substitution(
             LaunchConfiguration('far_planner_profile'))
         tare_planner_profile = context.perform_substitution(
@@ -448,15 +409,17 @@ def generate_launch_description():
             }],
         )
 
-        if autonomy_type == 'full':
+        if autonomy_type == '3d':
             # --- Full autonomy (vehicle simulator) ---
-            full_mode_launch_files = {
-                '0': 'system_real_robot.launch.py',
-                '1': 'system_real_robot_with_route_planner.launch.py',
-                '2': 'system_real_robot_with_exploration_planner.launch.py',
+            planner_launch_files = {
+                'local': 'system_real_robot.launch.py',
+                'far': 'system_real_robot_with_route_planner.launch.py',
+                'pcd_grid': 'system_real_robot_with_route_planner.launch.py',
+                'exploration':
+                    'system_real_robot_with_exploration_planner.launch.py',
             }
-            full_launch_file = full_mode_launch_files.get(
-                full_mode, 'system_real_robot.launch.py')
+            full_launch_file = planner_launch_files.get(
+                planner, 'system_real_robot.launch.py')
             autonomy_pkg = get_package_share_directory('vehicle_simulator')
             full_map_prefix = os.path.join(
                 typego_sdk_pkg, 'resource', f'Map-{map_name}', map_name)
@@ -477,13 +440,15 @@ def generate_launch_description():
                 'local_planner_config': local_planner_profile,
             }
             # Mode-specific args — only pass an arg the chosen file declares.
-            if full_mode == '1':
-                full_launch_args['route_planner_backend'] = route_planner_backend
+            if planner in ('far', 'pcd_grid'):
+                # Both route planners share one launch file; the planner name
+                # is the backend name it expects.
+                full_launch_args['route_planner_backend'] = planner
                 full_launch_args['route_planner_config'] = far_planner_profile
                 full_launch_args['vgraph_dir'] = (
                     f'{full_map_prefix}.vgh' if map_name != 'empty_map' else ''
                 )
-            elif full_mode == '2':
+            elif planner == 'exploration':
                 full_launch_args['exploration_planner_config'] = tare_planner_profile
             autonomy_launch = IncludeLaunchDescription(
                 PythonLaunchDescriptionSource(
@@ -495,7 +460,8 @@ def generate_launch_description():
             # --- Base autonomy (SLAM, waypoints service, Nav2) ---
             autonomy_launch = IncludeLaunchDescription(
                 PythonLaunchDescriptionSource(
-                    os.path.join(typego_sdk_pkg, 'launch', 'base_autonomy.launch.py')
+                    os.path.join(get_package_share_directory('autonomy_2d'),
+                                 'launch', 'autonomy_2d.launch.py')
                 ),
                 launch_arguments={
                     'robot_id': robot_id,

@@ -3,7 +3,7 @@ robot:
   type: kami
   name: kami-warehouse
 autonomy:
-  type: base
+  type: 2d
 profiles:
   nav2_params_file: nav2_params.yaml
   slam_params_file: slam.yaml

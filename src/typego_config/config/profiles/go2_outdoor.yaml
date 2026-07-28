@@ -3,7 +3,7 @@ robot:
   type: go2
   name: go2-outdoor
 autonomy:
-  type: full
+  type: 3d
 profiles:
   far_planner_profile: outdoor
   tare_planner_profile: outdoor

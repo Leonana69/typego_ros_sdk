@@ -196,7 +196,7 @@ def main() -> int:
     parser.add_argument("name", help="Map name (→ src/typego_sdk/resource/Map-<name>/)")
     parser.add_argument(
         "--mode",
-        choices=("base", "full"),
+        choices=("2d", "3d"),
         default=os.environ.get("AUTONOMY_TYPE"),
         help="Autonomy mode. Defaults to $AUTONOMY_TYPE from /tmp/typego-runtime.env.",
     )
@@ -207,8 +207,8 @@ def main() -> int:
     )
     args = parser.parse_args()
 
-    if args.mode not in ("base", "full"):
-        parser.error("--mode is required (base|full), or set AUTONOMY_TYPE in the environment.")
+    if args.mode not in ("2d", "3d"):
+        parser.error("--mode is required (2d|3d), or set AUTONOMY_TYPE in the environment.")
 
     map_dir = MAP_RESOURCE_DIR / f"Map-{args.name}"
     map_dir.mkdir(parents=True, exist_ok=True)
@@ -218,7 +218,7 @@ def main() -> int:
     try:
         node = Node("save_map_client", namespace=_ns_prefix(args.robot_id))
         try:
-            if args.mode == "full":
+            if args.mode == "3d":
                 _save_full(node, args.name, map_dir)
             else:
                 _write_init_pose(node, map_dir)

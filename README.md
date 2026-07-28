@@ -12,11 +12,11 @@ typego_bringup.launch.py
 │   ├── TF publisher          → odom → base_link → lidar_link
 │   └── Command handler       → /cmd_vel
 │
-├── Base Autonomy (autonomy_type:=base)
+├── 2D Autonomy (autonomy_type:=2d)
 │   ├── SLAM Toolbox          → /map
 │   └── Nav2 (MPPI controller)
 │
-└── Full Autonomy (autonomy_type:=full)
+└── 3D Autonomy (autonomy_type:=3d)
     ├── LIO/SLAM (slam_backend:=arise | lightning)
     │   ├── ARISE SLAM (LOAM-based, Livox Mid360)
     │   └── Lightning-LM (FasterLIO + loop closure, Livox Mid360)
@@ -98,6 +98,13 @@ All robot SDKs expose these topics. If `ROBOT_ID` is set, topics are namespaced 
 
 One file owns the deployment: `src/typego_config/config/robot.yaml`. Edit it, relaunch the stack. `docker/.env` is no longer read.
 
+**Configuration is static.** `robot.yaml` is validated once at launch and the
+resolved tree is immutable for the life of the run: every `/typego_config`
+parameter is read-only and there is no reload service. Change the file and
+relaunch. An invalid file is **fatal** — the stack refuses to start rather than
+falling back to built-in defaults, which would silently run a different vehicle
+geometry than `local_planner`'s collision table was baked for.
+
 ```yaml
 robot:
   id: ""
@@ -105,8 +112,9 @@ robot:
   name: robot-alpha
 
 autonomy:
-  type: base          # base | full
-  slam_backend: arise # arise | lightning  (only used when type=full)
+  type: 2d            # 2d (SLAM Toolbox + Nav2) | 3d (LIO + local planner)
+  # planner: pcd_grid # local | far | pcd_grid | exploration   (3d only)
+  slam_backend: arise # arise | lightning  (only used when type=3d)
 
 network:
   ros_domain_id: 1
@@ -182,9 +190,9 @@ make console
 
 `make console` is a TUI that:
 
-1. Asks for autonomy mode (`base` / `full`).
-2. For full autonomy, asks which layer — `0` plain, `1` FAR route planner, `2` PCD roadmap planner, `3` TARE exploration planner.
-3. Lists the maps on disk filtered by mode (base: `.posegraph`; full: `.pcd`) plus **new map** to start from empty. The PCD roadmap option only allows saved PCD maps because it plans from an existing map.
+1. Asks for the autonomy stack (`2d` / `3d`).
+2. For 3D autonomy, asks which planner — `0` local (no route planner), `1` FAR, `2` PCD grid, `3` TARE exploration. The menu key maps 1:1 to `planner:=local|far|pcd_grid|exploration`.
+3. Lists the maps on disk filtered by stack (2d: `.posegraph`; 3d: `.pcd`) plus **new map** to start from empty. The PCD roadmap option only allows saved PCD maps because it plans from an existing map.
 4. Spawns `ros2 launch typego_sdk typego_bringup.launch.py …` with the right args and streams its logs in the top pane.
 5. In a new-map session, type `s` → enter a name → map is saved and the console returns to the menu; the new map is ready to pick on the next run.
 
@@ -208,8 +216,8 @@ make launch
 
 # One-off overrides
 make launch ARGS="slam_map_name:=empty_map"
-make launch ARGS="autonomy_type:=full full_mode:=2"    # full + TARE
-make launch ARGS="autonomy_type:=full slam_backend:=lightning"  # swap ARISE → lightning-lm
+make launch ARGS="autonomy_type:=3d planner:=exploration"   # 3D + TARE
+make launch ARGS="autonomy_type:=3d slam_backend:=lightning"  # swap ARISE → lightning-lm
 ```
 
 Or call `ros2 launch` directly (remember to source the env first):
@@ -218,7 +226,7 @@ Or call `ros2 launch` directly (remember to source the env first):
 make robot_env && set -a && source /tmp/typego-runtime.env && set +a
 
 ros2 launch typego_sdk typego_bringup.launch.py
-ros2 launch typego_sdk typego_bringup.launch.py autonomy_type:=full full_mode:=1
+ros2 launch typego_sdk typego_bringup.launch.py autonomy_type:=3d planner:=pcd_grid
 ros2 launch typego_sdk typego_bringup.launch.py robot_id:=1 robot_type:=kami
 
 # Apply a shipped profile overlay (see src/typego_config/config/profiles/)
@@ -249,7 +257,7 @@ The easiest path is through `make console` — pick **new map**, walk the robot,
 Headless equivalent:
 
 ```bash
-# Save the current SLAM map (picks base/full from robot.yaml's AUTONOMY_TYPE)
+# Save the current SLAM map (picks 2d/3d from robot.yaml's AUTONOMY_TYPE)
 make save_map FILE=my-map
 
 # Load a saved map
@@ -292,7 +300,7 @@ Useful `place_graph_waypoints_node` parameters include `waypoint_spacing_m`,
 
 | Target | Description |
 |--------|-------------|
-| `make build` | Build all packages (skips autonomy packages when `AUTONOMY_TYPE=base`) |
+| `make build` | Build all packages (skips autonomy packages when `AUTONOMY_TYPE=2d`) |
 | `make config_validate` | Validate `src/typego_config/config/robot.yaml` against the pydantic schema |
 | `make robot_env` | Render `/tmp/typego-runtime.env` from `robot.yaml` for shell/Docker consumption |
 | `make setup` | Install SLAM dependencies (Sophus, gtsam) and OR-Tools for full autonomy |
@@ -312,21 +320,25 @@ Useful `place_graph_waypoints_node` parameters include `waypoint_spacing_m`,
 - **CycloneDDS** (configured as default RMW)
 - **GStreamer** for camera streaming
 - **PCL**, **OpenCV**, **Eigen** for perception
-- **GTSAM**, **Sophus** for SLAM factor graph optimization (full autonomy)
-- **OR-Tools** for exploration planning (full autonomy, auto-downloads arm64 variant)
+- **GTSAM**, **Sophus** for SLAM factor graph optimization (3D autonomy)
+- **OR-Tools** for exploration planning (3D autonomy, auto-downloads arm64 variant)
 
 ## Project Structure
 
 ```
 src/
 ├── typego_interface/          # Custom messages/services
-├── typego_sdk/                # Main SDK, launch files, configs, maps
+├── typego_config/             # robot.yaml schema, loader, config service
+├── typego_sdk/                # Bringup orchestration, place-graph waypoints, maps
+├── typego_web_gateway/        # FastAPI + React operator HMI
+├── place_graph/               # Room segmentation, viz, VLM labelling
 ├── go2_sdk/                   # Unitree Go2 robot driver
 ├── kami_sdk/                  # Kami robot driver
-└── autonomy/
+├── 2d_autonomy/               # SLAM Toolbox + Nav2   (package: autonomy_2d)
+└── 3d_autonomy/
     ├── local_navigation/      # Terrain analysis, local planner, vehicle simulator
-    ├── slam/                  # ARISE SLAM + dependencies (Sophus, gtsam)
-    ├── route_planner/         # FAR planner, boundary/graph handlers
+    ├── slam/                  # ARISE SLAM, lightning-lm + deps (Sophus, gtsam)
+    ├── route_planner/         # FAR planner, PCD grid planner, boundary/graph handlers
     ├── exploration_planner/   # TARE planner + OR-Tools
     └── utilities/             # RViz plugins, teleop, domain bridge
 scripts/                       # Patrol, goal sending, sensor test utilities

@@ -10,7 +10,7 @@ from typego_config.schema import RobotConfig
 def test_defaults_construct_cleanly():
     cfg = RobotConfig()
     assert cfg.robot.type == 'go2'
-    assert cfg.autonomy.type == 'base'
+    assert cfg.autonomy.type == '2d'
     assert cfg.network.ros_domain_id == 0
     assert cfg.network.rmw.startswith('rmw_')
     assert cfg.web_gateway.port == 8080
@@ -24,7 +24,6 @@ def test_shipped_robot_yaml_loads(tmp_path):
     cfg = RobotConfig.model_validate(data)
     assert cfg.robot.type in ('go2', 'kami')
     assert 1 <= cfg.network.edge_service.port <= 65535
-    assert 'web_gateway.bag_retain' in cfg.dynamic
 
 
 def test_web_gateway_camera_topic_default():
@@ -71,7 +70,6 @@ def test_flatten_produces_dotted_keys():
     assert 'vehicle.length' in flat
     assert 'sensors.camera_offset_z' in flat
     assert 'motion.max_speed' in flat
-    assert not any(k.startswith('dynamic') for k in flat)
 
 
 def test_vehicle_sensors_motion_defaults():

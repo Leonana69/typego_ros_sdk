@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
 """Interactive rviz launcher with a log pane + quit input.
 
-Asks for autonomy mode (base/full), and for full mode asks which layer's
-config to load (mirrors MODE=0/1/2 in src/autonomy/real_robot.sh):
+Asks for the autonomy stack (2D-autonomy / 3D-autonomy), and for 3D asks
+which planner's config to load:
 
     0  local_navigation      vehicle_simulator.rviz
     1  FAR route planner     far_planner/default.rviz
     2  PCD grid planner      pcd_grid_planner/default.rviz
     3  exploration (TARE)    tare_planner_ground.rviz
 
-Base mode runs plain rviz (no -d). Once launched, rviz's stdout/stderr
+2D-autonomy runs plain rviz (no -d). Once launched, rviz's stdout/stderr
 streams into the log pane; type `q` + Enter to quit, or `m` + Enter to go
 back to the menu and pick a different config.
 
@@ -39,7 +39,7 @@ except ImportError:
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-AUTONOMY = PROJECT_ROOT / "src/autonomy"
+AUTONOMY = PROJECT_ROOT / "src/3d_autonomy"
 
 FULL_CONFIGS = [
     ("0", "vehicle simulator (local navigation layer)",
@@ -51,6 +51,20 @@ FULL_CONFIGS = [
     ("3", "TARE exploration planner",
      AUTONOMY / "exploration_planner/tare_planner/rviz/tare_planner_ground.rviz"),
 ]
+
+# Operator-facing names for the two autonomy stacks; kept identical to
+# scripts/sdk_console.py so the two TUIs agree. Keys are the autonomy_type
+# launch-arg values, matching autonomy.type in robot.yaml.
+MODE_MENU = {
+    "2d": "2D-autonomy   (SLAM Toolbox + Nav2)",
+    "3d": "3D-autonomy   (LIO + terrain analysis + local planner)",
+}
+MODE_SHORT = {"2d": "2D-autonomy", "3d": "3D-autonomy"}
+
+
+def _mode_name(mode: str) -> str:
+    """Short display name; falls back to the raw value if unrecognised."""
+    return MODE_SHORT.get(mode, mode or "")
 
 
 def _ns_remaps() -> list[str]:
@@ -114,17 +128,17 @@ class RvizConsole(App):
         self.state = "mode"
         self.mode = None
         self._banner("Typego rviz launcher")
-        self.log_pane.write("Choose autonomy mode:")
-        self.log_pane.write("  [bold]1[/bold]  base  (slam_toolbox)")
-        self.log_pane.write("  [bold]2[/bold]  full  (ARISE SLAM)")
+        self.log_pane.write("Choose autonomy stack:")
+        self.log_pane.write(f"  [bold]1[/bold]  {MODE_MENU['2d']}")
+        self.log_pane.write(f"  [bold]2[/bold]  {MODE_MENU['3d']}")
         self.log_pane.write("")
-        self._set_status("Select mode")
+        self._set_status("Select autonomy stack")
         self.prompt.placeholder = "Type 1 or 2, then Enter  (q to quit)"
         self.prompt.value = ""
 
     def _show_sub_menu(self) -> None:
         self.state = "sub"
-        self._banner("Mode: full")
+        self._banner(f"Stack: {MODE_SHORT['3d']}")
         self.log_pane.write("Rviz config:")
         for key, label, _ in FULL_CONFIGS:
             self.log_pane.write(f"  [bold]{key}[/bold]  {label}")
@@ -156,10 +170,10 @@ class RvizConsole(App):
             await self._quit()
             return
         if raw == "1":
-            self.mode = "base"
+            self.mode = "2d"
             await self._start_rviz(rviz_args=[])
         elif raw == "2":
-            self.mode = "full"
+            self.mode = "3d"
             self._show_sub_menu()
         else:
             self.log_pane.write(f"[red]Unknown option: {raw!r}[/red]")
@@ -196,7 +210,7 @@ class RvizConsole(App):
         self.state = "running"
         cmd = ["ros2", "run", "rviz2", "rviz2", *rviz_args, *_ns_remaps()]
         self._banner(f"Launching: {' '.join(cmd)}")
-        self._set_status(f"Running rviz [{self.mode}]")
+        self._set_status(f"Running rviz [{_mode_name(self.mode or '')}]")
         self.prompt.placeholder = "[q]uit  ·  [m]enu (pick a different config)"
         try:
             self.rviz_proc = await asyncio.create_subprocess_exec(

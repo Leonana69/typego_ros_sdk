@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Per-message latency CSV for /state_estimation.
 
-Same math as src/autonomy/slam/lightning_lm/scripts/slam_latency.py but writes
+Same math as src/3d_autonomy/slam/lightning_lm/scripts/slam_latency.py but writes
 one row per received Odometry message instead of rolling stdout reports, so
 summarize.py can compute p50/p95/p99 lag and mean rate offline.
 

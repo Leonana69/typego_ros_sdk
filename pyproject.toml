@@ -11,6 +11,10 @@ authors = [{ name = "guojun", email = "chengj0803@gmail.com" }]
 # required by the ament_python packages (typego_web_gateway, typego_config).
 # ROS 2 Python bindings (rclpy, etc.) come from apt, not PyPI, so they are
 # intentionally not listed here.
+#
+# Also covers host-side tooling, so that a bare `uv sync` is enough to run
+# every documented `make` target. docker/Dockerfile keeps its own explicit
+# pip list, so host-only entries here do not reach the container image.
 dependencies = [
     "fastapi==0.115.*",
     "uvicorn[standard]==0.32.*",
@@ -20,6 +24,9 @@ dependencies = [
     "pydantic>=2,<3",
     "PyYAML>=6",
     "setuptools",
+    # Host-side TUI behind `make console` and `make rviz`
+    # (scripts/sdk_console.py, scripts/rviz_launch.py).
+    "textual>=8,<9",
 ]
 
 [dependency-groups]

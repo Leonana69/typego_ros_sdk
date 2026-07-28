@@ -17,7 +17,6 @@ def render_config_node_params(cfg: RobotConfig,
                               node_name: str = CONFIG_NODE_NAME) -> str:
     flat = flatten(cfg)
     params: Dict[str, object] = dict(flat)
-    params['dynamic'] = list(cfg.dynamic)
     doc = {'/**': {'ros__parameters': params}}
     del node_name
     return yaml.safe_dump(doc, sort_keys=True, default_flow_style=False)

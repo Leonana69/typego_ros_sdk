@@ -18,21 +18,21 @@ def test_deep_merge_adds_keys():
 
 
 def test_deep_merge_replaces_lists():
-    base = {'dynamic': ['x', 'y']}
-    overlay = {'dynamic': ['z']}
-    assert _deep_merge(base, overlay) == {'dynamic': ['z']}
+    base = {'some_list': ['x', 'y']}
+    overlay = {'some_list': ['z']}
+    assert _deep_merge(base, overlay) == {'some_list': ['z']}
 
 
 def test_load_with_shipped_go2_indoor_profile():
     cfg = load(profile='go2_indoor')
     assert cfg.robot.type == 'go2'
-    assert cfg.autonomy.type == 'base'
+    assert cfg.autonomy.type == '2d'
 
 
 def test_load_with_shipped_kami_warehouse_profile():
     cfg = load(profile='kami_warehouse')
     assert cfg.robot.type == 'kami'
-    assert cfg.autonomy.type == 'base'
+    assert cfg.autonomy.type == '2d'
 
 
 def test_missing_profile_rejected():

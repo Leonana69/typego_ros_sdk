@@ -32,11 +32,16 @@ def test_node_declares_expected_params(node):
     assert 'web_gateway.bag_retain' in names
 
 
-def test_read_only_flag_applied(node):
-    desc = node.describe_parameter('network.ros_domain_id')
-    assert desc.read_only is True
-    desc = node.describe_parameter('web_gateway.bag_retain')
-    assert desc.read_only is False
+def test_every_parameter_is_read_only(node):
+    """Static model: the resolved config is immutable for the launch's life.
+
+    Previously `dynamic:` marked a handful of keys writable, but nothing
+    downstream ever observed a change -- BagRotator snapshots its values at
+    construction and slam_map_name is baked into the launch. The writable
+    surface promised mutation it could not deliver, so it is gone.
+    """
+    for name in node._declared:
+        assert node.describe_parameter(name).read_only is True, name
 
 
 def test_integer_range_descriptor(node):
@@ -47,21 +52,25 @@ def test_integer_range_descriptor(node):
     assert ir.from_value == 0 and ir.to_value == 232
 
 
-def test_on_set_rejects_out_of_range(node):
-    result = node.set_parameters([
-        Parameter('web_gateway.bag_retain', Parameter.Type.INTEGER, -1),
-    ])
-    assert result and result[0].successful is False
-    reason = result[0].reason.lower()
-    assert 'range' in reason or 'validation' in reason
+def test_set_parameter_is_refused(node):
+    """A read-only parameter cannot be mutated at runtime."""
+    from rclpy.exceptions import ParameterImmutableException
+    try:
+        result = node.set_parameters([
+            Parameter('web_gateway.bag_retain', Parameter.Type.INTEGER, 12),
+        ])
+    except ParameterImmutableException:
+        pass
+    else:
+        assert result[0].successful is False
+    assert node.get_parameter('web_gateway.bag_retain').value != 12
 
 
-def test_on_set_accepts_valid(node):
-    result = node.set_parameters([
-        Parameter('web_gateway.bag_retain', Parameter.Type.INTEGER, 12),
-    ])
-    assert result[0].successful is True
-    assert node.get_parameter('web_gateway.bag_retain').value == 12
+def test_reload_service_is_gone(node):
+    """/typego_config/reload had zero callers and implied live mutation."""
+    names = [n for n, _ in node.get_service_names_and_types()]
+    assert not any(n.endswith('typego_config/reload') for n in names)
+    assert any(n.endswith('typego_config/get_config') for n in names)
 
 
 def test_get_config_service_returns_json(node):

@@ -38,37 +38,89 @@ LOG_DIR = PROJECT_ROOT / "logs"
 LAUNCH_CMD = ["ros2", "launch", "typego_sdk", "typego_bringup.launch.py"]
 EMPTY_MAP = "empty_map"
 
-# Full-autonomy menu options. PCD grid shares full_mode=1 with FAR and is
-# selected by passing route_planner_backend:=pcd_grid.
+# 3D-autonomy planner options. `planner` is the typego_bringup launch-arg
+# value; the menu key is just what the operator types.
 class FullSubOption(NamedTuple):
     key: str
     label: str
-    full_mode: str
+    planner: str
     extra_args: tuple[str, ...] = ()
     requires_existing_map: bool = False
 
 
 FULL_SUB_OPTIONS = [
-    FullSubOption("0", "plain (vehicle simulator)", "0"),
-    FullSubOption("1", "FAR route planner", "1", ("route_planner_backend:=far",)),
+    # "local planner only" rather than "base": `base` was the old name of
+    # the 2D stack, so reusing it here for "no route planner" would give
+    # one word two meanings.
+    FullSubOption("0", "local planner only (no route planner)", "local"),
+    FullSubOption("1", "FAR route planner", "far"),
     FullSubOption(
         "2",
         "PCD grid planner",
-        "1",
-        ("route_planner_backend:=pcd_grid",),
+        "pcd_grid",
+        (),
         # Builds its 2D map live from /registered_scan — no saved map required,
         # so the "new map" option must stay available.
         False,
     ),
-    FullSubOption("3", "TARE exploration planner", "2"),
+    FullSubOption("3", "TARE exploration planner", "exploration"),
 ]
+
+# Operator-facing names for the two autonomy stacks. These keys are the
+# actual autonomy_type launch-arg values, matching autonomy.type in
+# robot.yaml. `base`/`full` named nothing; 2d/3d names the axis that
+# really differs -- the sensing and state-estimation layer.
+MODE_MENU = {
+    "2d": "2D-autonomy   (SLAM Toolbox + Nav2)",
+    "3d": "3D-autonomy   (LIO + terrain analysis + local planner)",
+}
+MODE_SHORT = {"2d": "2D-autonomy", "3d": "3D-autonomy"}
+
+
+def _mode_name(mode: str) -> str:
+    """Short display name; falls back to the raw value if unrecognised."""
+    return MODE_SHORT.get(mode, mode or "")
+
+
+def _current_slam_backend() -> str:
+    """autonomy.slam_backend from robot.yaml, or "" if it cannot be read.
+
+    Display only. The console never passes slam_backend:=, so whatever
+    robot.yaml says is what the launch uses -- which is exactly why it is
+    worth showing before you commit to a run.
+    """
+    try:
+        from typego_config.bootstrap import load_merged
+        data, _ = load_merged()
+        value = (data.get("autonomy") or {}).get("slam_backend")
+        return str(value) if value else ""
+    except Exception:
+        return ""
+
+
+def _backend_is_built(backend: str) -> bool:
+    """Is the package that backend selects actually in the overlay?
+
+    `lightning` is optional and expensive to build, so a robot.yaml asking for
+    it on a workspace that never built it is a launch failure waiting to
+    happen. Cheap to check here, painful to diagnose later.
+    """
+    pkg = {"arise": "arise_slam_mid360", "lightning": "lightning"}.get(backend)
+    if pkg is None:
+        return True
+    try:
+        from ament_index_python.packages import get_package_share_directory
+        get_package_share_directory(pkg)
+        return True
+    except Exception:
+        return False
 
 
 def _maps_for_mode(mode: str) -> list[str]:
     """List maps valid for the given mode by looking at on-disk artefacts.
 
-    base (slam_toolbox):  Map-<name>/<name>.posegraph
-    full (ARISE SLAM):    Map-<name>/<name>.pcd
+    2d (slam_toolbox):  Map-<name>/<name>.posegraph
+    3d (ARISE SLAM):    Map-<name>/<name>.pcd
     """
     if not MAP_RESOURCE_DIR.is_dir():
         return []
@@ -79,9 +131,9 @@ def _maps_for_mode(mode: str) -> list[str]:
         name = entry.name[len("Map-"):]
         if name == EMPTY_MAP:
             continue
-        if mode == "base" and (entry / f"{name}.posegraph").is_file():
+        if mode == "2d" and (entry / f"{name}.posegraph").is_file():
             names.append(name)
-        elif mode == "full" and (entry / f"{name}.pcd").is_file():
+        elif mode == "3d" and (entry / f"{name}.pcd").is_file():
             names.append(name)
     return names
 
@@ -160,8 +212,8 @@ class TypegoConsole(App):
         super().__init__()
         self.state: str = "mode"
         self.mode: Optional[str] = None
-        self.full_mode_key: str = "0"         # typego_bringup full_mode launch value
-        self.full_mode_label: str = ""        # short label for status line
+        self.planner_key: str = "local"       # typego_bringup planner launch value
+        self.planner_label: str = ""        # short label for status line
         self.full_extra_launch_args: list[str] = []
         self.full_requires_existing_map: bool = False
         self.map_options: list[str] = []
@@ -185,36 +237,52 @@ class TypegoConsole(App):
 
     # ---------- Menu rendering ----------
 
-    def _banner(self, text: str) -> None:
-        self.log_pane.clear()
+    def _banner(self, text: str, clear: bool = True) -> None:
+        # clear=False keeps whatever is already on screen -- used when the menu
+        # is being redrawn after a failure, so the error stays readable.
+        if clear:
+            self.log_pane.clear()
         self.log_pane.write(f"[bold cyan]{text}[/bold cyan]")
         self.log_pane.write("")
 
-    def _show_mode_menu(self) -> None:
+    def _show_mode_menu(self, clear: bool = True) -> None:
         self.state = "mode"
         self.mode = None
-        self.full_mode_label = ""
+        self.planner_label = ""
         self.full_extra_launch_args = []
         self.full_requires_existing_map = False
         self.selected_map = None
-        self._banner("Typego SDK Console")
-        self.log_pane.write("Choose autonomy mode:")
-        self.log_pane.write("  [bold]1[/bold]  base   (slam_toolbox)")
-        self.log_pane.write("  [bold]2[/bold]  full   (ARISE SLAM)")
+        self._banner("Typego SDK Console", clear=clear)
+        self.log_pane.write("Choose autonomy stack:")
+        self.log_pane.write(f"  [bold]1[/bold]  {MODE_MENU['2d']}")
+        self.log_pane.write(f"  [bold]2[/bold]  {MODE_MENU['3d']}")
         self.log_pane.write("")
-        self._set_status("Select mode")
+        self._set_status("Select autonomy stack")
         self.prompt.placeholder = "Type 1 or 2, then Enter  (q to quit)"
         self.prompt.value = ""
 
     def _show_full_sub_menu(self) -> None:
         self.state = "full_sub"
-        self._banner("Mode: full")
-        self.log_pane.write("Full-autonomy layer:")
+        self._banner(f"Stack: {MODE_SHORT['3d']}")
+        backend = _current_slam_backend()
+        if not backend:
+            self.log_pane.write(
+                "SLAM backend: [red]unknown — could not read robot.yaml[/red]")
+        else:
+            self.log_pane.write(
+                f"SLAM backend: [bold]{backend}[/bold]"
+                f"   [dim](robot.yaml: autonomy.slam_backend)[/dim]")
+            if not _backend_is_built(backend):
+                self.log_pane.write(
+                    f"  [red]![/red] package for [bold]{backend}[/bold] is not "
+                    f"built — this run will fail")
+        self.log_pane.write("")
+        self.log_pane.write("3D-autonomy planner:")
         for option in FULL_SUB_OPTIONS:
             self.log_pane.write(f"  [bold]{option.key}[/bold]  {option.label}")
         self.log_pane.write("")
         self.log_pane.write("  [bold]b[/bold]  back       [bold]q[/bold]  quit")
-        self._set_status("Select full-autonomy layer")
+        self._set_status("Select 3D-autonomy planner")
         self.prompt.placeholder = "Type 0, 1, 2, or 3 (or b / q), then Enter"
         self.prompt.value = ""
 
@@ -222,19 +290,19 @@ class TypegoConsole(App):
         self.state = "map"
         self.selected_map = None
         self.map_options = _maps_for_mode(self.mode or "")
-        self._banner(f"Mode: {self.mode}")
+        self._banner(f"Stack: {_mode_name(self.mode or '')}")
         self.log_pane.write("Choose a map:")
         for i, name in enumerate(self.map_options, start=1):
             self.log_pane.write(f"  [bold]{i}[/bold]  {name}")
-        show_new_map = not (self.mode == "full" and self.full_requires_existing_map)
+        show_new_map = not (self.mode == "3d" and self.full_requires_existing_map)
         new_idx = len(self.map_options) + 1
         if show_new_map:
             self.log_pane.write(f"  [bold]{new_idx}[/bold]  [green]new map[/green]  (start mapping from empty)")
         elif not self.map_options:
-            self.log_pane.write("[yellow]No saved PCD maps found. PCD roadmap planner needs an existing full map.[/yellow]")
+            self.log_pane.write("[yellow]No saved PCD maps found. This planner needs an existing 3D-autonomy map.[/yellow]")
         self.log_pane.write("")
         self.log_pane.write("  [bold]b[/bold]  back      [bold]q[/bold]  quit")
-        self._set_status(f"Mode: {self.mode}  —  select map")
+        self._set_status(f"{_mode_name(self.mode or '')}  —  select map")
         if show_new_map:
             upper = max(new_idx, 1)
             self.prompt.placeholder = f"Type 1-{upper} (or b / q), then Enter"
@@ -245,9 +313,10 @@ class TypegoConsole(App):
         self.prompt.value = ""
 
     def _mode_label(self) -> str:
-        if self.mode == "full" and self.full_mode_label:
-            return f"full · {self.full_mode_label}"
-        return self.mode or ""
+        name = _mode_name(self.mode or "")
+        if self.mode == "3d" and self.planner_label:
+            return f"{name} · {self.planner_label}"
+        return name
 
     def _update_running_status(self) -> None:
         label = self._mode_label()
@@ -294,10 +363,10 @@ class TypegoConsole(App):
             await self._quit()
             return
         if raw == "1":
-            self.mode = "base"
+            self.mode = "2d"
             self._show_map_menu()
         elif raw == "2":
-            self.mode = "full"
+            self.mode = "3d"
             self._show_full_sub_menu()
         else:
             self.log_pane.write(f"[red]Unknown option: {raw!r}[/red]")
@@ -311,8 +380,8 @@ class TypegoConsole(App):
             return
         for option in FULL_SUB_OPTIONS:
             if option.key == raw:
-                self.full_mode_key = option.full_mode
-                self.full_mode_label = option.label
+                self.planner_key = option.planner
+                self.planner_label = option.label
                 self.full_extra_launch_args = list(option.extra_args)
                 self.full_requires_existing_map = option.requires_existing_map
                 self._show_map_menu()
@@ -324,7 +393,7 @@ class TypegoConsole(App):
             await self._quit()
             return
         if raw in ("b", "back"):
-            if self.mode == "full":
+            if self.mode == "3d":
                 self._show_full_sub_menu()
             else:
                 self._show_mode_menu()
@@ -338,7 +407,7 @@ class TypegoConsole(App):
         if 1 <= idx <= len(self.map_options):
             self.selected_map = self.map_options[idx - 1]
             await self._start_launch()
-        elif idx == new_idx and not (self.mode == "full" and self.full_requires_existing_map):
+        elif idx == new_idx and not (self.mode == "3d" and self.full_requires_existing_map):
             self.selected_map = None
             await self._start_launch()
         else:
@@ -421,8 +490,8 @@ class TypegoConsole(App):
             f"autonomy_type:={self.mode}",
             f"slam_map_name:={map_arg}",
         ]
-        if self.mode == "full":
-            cmd.append(f"full_mode:={self.full_mode_key}")
+        if self.mode == "3d":
+            cmd.append(f"planner:={self.planner_key}")
             cmd.extend(self.full_extra_launch_args)
         self._banner(f"Launching: {' '.join(cmd)}")
         self._open_log_file(cmd)
@@ -453,13 +522,27 @@ class TypegoConsole(App):
             self._tee_line(line)
         rc = await proc.wait()
         if proc is self.launch_proc:
-            self.log_pane.write(f"[dim]-- ros2 launch exited ({rc}) --[/dim]")
             self.launch_proc = None
+            # Capture before _close_log_file() drops it.
+            log_path = self.log_path
             self._close_log_file()
+            died_on_its_own = self.state == "running"
+            if rc == 0:
+                self.log_pane.write(f"[dim]-- ros2 launch exited ({rc}) --[/dim]")
+            else:
+                self.log_pane.write("")
+                self.log_pane.write(
+                    f"[bold red]-- ros2 launch FAILED (exit {rc}) --[/bold red]")
+                self.log_pane.write(
+                    "[yellow]The error is above. Scroll with PageUp.[/yellow]")
+                if log_path is not None:
+                    self.log_pane.write(f"[yellow]Full log: {log_path}[/yellow]")
             # If it died on its own, drop back to the menu rather than leaving
-            # the user staring at a frozen-looking screen.
-            if self.state == "running":
-                self._show_mode_menu()
+            # the user staring at a frozen-looking screen -- but on a failure
+            # do NOT clear the pane, or the diagnostic is destroyed before it
+            # can be read.
+            if died_on_its_own:
+                self._show_mode_menu(clear=(rc == 0))
 
     async def _kill_launch(self) -> None:
         proc = self.launch_proc
