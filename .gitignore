@@ -5,6 +5,9 @@ build/
 
 __pycache__/
 
+# `uv sync` (README's documented setup step) materialises the environment here.
+.venv/
+
 .vscode/
 .DS_Store
 
