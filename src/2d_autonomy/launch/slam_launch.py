@@ -38,7 +38,10 @@ def generate_launch_description():
     ]
 
     def launch_setup(context, *args, **kwargs):
-        pkg_dir = FindPackageShare("typego_sdk").find("typego_sdk")
+        # Config moved here with the 2D stack; robot maps stay in
+        # typego_sdk, which both the 2D and 3D stacks share.
+        pkg_dir = FindPackageShare("autonomy_2d").find("autonomy_2d")
+        maps_dir = FindPackageShare("typego_sdk").find("typego_sdk")
 
         ns = context.perform_substitution(LaunchConfiguration("robot_namespace"))
         slam_yaml = context.perform_substitution(LaunchConfiguration("slam_params_file"))
@@ -51,8 +54,8 @@ def generate_launch_description():
 
         slam_params_path = os.path.join(pkg_dir, "config", slam_yaml)
         rviz_config_path = os.path.join(pkg_dir, "config", "slam.rviz")
-        map_file_path = os.path.join(pkg_dir, f"resource/Map-{existing_map}/{existing_map}")
-        init_pose_path = os.path.join(pkg_dir, f"resource/Map-{existing_map}/init_pose.json")
+        map_file_path = os.path.join(maps_dir, f"resource/Map-{existing_map}/{existing_map}")
+        init_pose_path = os.path.join(maps_dir, f"resource/Map-{existing_map}/init_pose.json")
 
         # ------------------------------------------------------------
         # 🔥 FRAME IDs MUST MATCH WHAT OTHER NODES PUBLISH

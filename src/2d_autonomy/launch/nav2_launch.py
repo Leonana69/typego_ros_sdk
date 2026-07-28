@@ -17,7 +17,7 @@ ARGUMENTS = [
     DeclareLaunchArgument(
         'nav2_params_file',
         default_value='nav2_params.yaml',
-        description='Nav2 parameter file, resolved against typego_sdk/config/ '
+        description='Nav2 parameter file, resolved against autonomy_2d/config/ '
                     'unless an absolute path is given. Fed from '
                     'profiles.nav2_params_file in robot.yaml.'
     ),
@@ -35,13 +35,13 @@ def modify_nav2_params(context):
         scan_topic = '/scan'
 
     # Resolve the params file: absolute path wins; otherwise look under
-    # typego_sdk/config/.
-    pkg_typego_sdk = get_package_share_directory('typego_sdk')
+    # autonomy_2d/config/.
+    pkg_autonomy_2d = get_package_share_directory('autonomy_2d')
     if os.path.isabs(nav2_params_file):
         original_config_path = nav2_params_file
     else:
         original_config_path = os.path.join(
-            pkg_typego_sdk, 'config', nav2_params_file)
+            pkg_autonomy_2d, 'config', nav2_params_file)
     
     with open(original_config_path, 'r') as f:
         params = yaml.safe_load(f)
@@ -88,7 +88,7 @@ def generate_launch_description():
         
         # Nav2 speed service — mirrors the autonomy SetSpeed pattern for Nav2
         nav2_speed_node = Node(
-            package='typego_sdk',
+            package='autonomy_2d',
             executable='nav2_speed_service_node',
             name='nav2_speed_service',
             namespace=robot_namespace,

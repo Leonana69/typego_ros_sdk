@@ -57,8 +57,8 @@ map:
   init_pose_from_file: true
 
 profiles:
-  nav2_params_file: nav2_params.yaml      # under typego_sdk/config/
-  slam_params_file: slam.yaml             # under typego_sdk/config/
+  nav2_params_file: nav2_params.yaml      # under 2d_autonomy/config/
+  slam_params_file: slam.yaml             # under 2d_autonomy/config/
   local_planner_profile: dog              # local_planner/config/<name>.yaml: dog | omniDir | standard
   far_planner_profile: outdoor            # far_planner/config/<name>.yaml: indoor | outdoor
   tare_planner_profile: indoor_small      # tare_planner/<name>.yaml: indoor_small | indoor_large | outdoor

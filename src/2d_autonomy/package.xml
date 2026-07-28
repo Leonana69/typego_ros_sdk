@@ -1,0 +1,34 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <!-- Directory is src/2d_autonomy/ but the package is `autonomy_2d`: ROS 2
+       package names must start with a letter (ament derives Python module
+       names from them, and `import 2d_autonomy` is a syntax error). -->
+  <name>autonomy_2d</name>
+  <version>0.1.0</version>
+  <description>
+    2D autonomy stack: SLAM Toolbox mapping/localisation plus Nav2 planning and
+    control. Split out of typego_sdk so the 2D integration layer is a package in
+    its own right, mirroring src/3d_autonomy/ for the LIO + local-planner stack.
+    Robot maps stay in typego_sdk, which both stacks share.
+  </description>
+  <maintainer email="chengj0803@gmail.com">guojun</maintainer>
+  <license>Apache-2.0</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <depend>rclcpp</depend>
+  <depend>rcl_interfaces</depend>
+  <depend>typego_interface</depend>
+
+  <exec_depend>launch</exec_depend>
+  <exec_depend>launch_ros</exec_depend>
+  <exec_depend>nav2_bringup</exec_depend>
+  <exec_depend>slam_toolbox</exec_depend>
+  <!-- slam_launch.py resolves Map-<name>/ out of the typego_sdk share. -->
+  <exec_depend>typego_sdk</exec_depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>

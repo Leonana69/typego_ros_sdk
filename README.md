@@ -321,13 +321,17 @@ Useful `place_graph_waypoints_node` parameters include `waypoint_spacing_m`,
 ```
 src/
 ├── typego_interface/          # Custom messages/services
-├── typego_sdk/                # Main SDK, launch files, configs, maps
+├── typego_config/             # robot.yaml schema, loader, config service
+├── typego_sdk/                # Bringup orchestration, place-graph waypoints, maps
+├── typego_web_gateway/        # FastAPI + React operator HMI
+├── place_graph/               # Room segmentation, viz, VLM labelling
 ├── go2_sdk/                   # Unitree Go2 robot driver
 ├── kami_sdk/                  # Kami robot driver
-└── autonomy/
+├── 2d_autonomy/               # SLAM Toolbox + Nav2   (package: autonomy_2d)
+└── 3d_autonomy/
     ├── local_navigation/      # Terrain analysis, local planner, vehicle simulator
-    ├── slam/                  # ARISE SLAM + dependencies (Sophus, gtsam)
-    ├── route_planner/         # FAR planner, boundary/graph handlers
+    ├── slam/                  # ARISE SLAM, lightning-lm + deps (Sophus, gtsam)
+    ├── route_planner/         # FAR planner, PCD grid planner, boundary/graph handlers
     ├── exploration_planner/   # TARE planner + OR-Tools
     └── utilities/             # RViz plugins, teleop, domain bridge
 scripts/                       # Patrol, goal sending, sensor test utilities

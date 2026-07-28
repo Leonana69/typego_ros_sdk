@@ -196,11 +196,11 @@ class ProfilesConfig(BaseModel):
 
     nav2_params_file: str = Field(
         default='nav2_params.yaml',
-        description='Under typego_sdk/config/.',
+        description='Under 2d_autonomy/config/ (package autonomy_2d).',
     )
     slam_params_file: str = Field(
         default='slam.yaml',
-        description='Under typego_sdk/config/.',
+        description='Under 2d_autonomy/config/ (package autonomy_2d).',
     )
     local_planner_profile: str = Field(
         default='dog',

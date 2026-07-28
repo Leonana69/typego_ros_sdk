@@ -546,7 +546,8 @@ def generate_launch_description():
             # --- Base autonomy (SLAM, waypoints service, Nav2) ---
             autonomy_launch = IncludeLaunchDescription(
                 PythonLaunchDescriptionSource(
-                    os.path.join(typego_sdk_pkg, 'launch', 'autonomy_2d.launch.py')
+                    os.path.join(get_package_share_directory('autonomy_2d'),
+                                 'launch', 'autonomy_2d.launch.py')
                 ),
                 launch_arguments={
                     'robot_id': robot_id,

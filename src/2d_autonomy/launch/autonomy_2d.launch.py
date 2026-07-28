@@ -53,7 +53,7 @@ def generate_launch_description():
             robot_index = ''
             map_topic = '/map'
 
-        typego_sdk_pkg = get_package_share_directory('typego_sdk')
+        autonomy_2d_pkg = get_package_share_directory('autonomy_2d')
 
         # --- SLAM ---
         slam_args = {
@@ -65,7 +65,7 @@ def generate_launch_description():
 
         slam_launch = IncludeLaunchDescription(
             PythonLaunchDescriptionSource(
-                os.path.join(typego_sdk_pkg, 'launch', 'slam_launch.py')
+                os.path.join(autonomy_2d_pkg, 'launch', 'slam_launch.py')
             ),
             launch_arguments=slam_args.items(),
         )
@@ -88,7 +88,7 @@ def generate_launch_description():
 
         nav2_launch = IncludeLaunchDescription(
             PythonLaunchDescriptionSource(
-                os.path.join(typego_sdk_pkg, 'launch', 'nav2_launch.py')
+                os.path.join(autonomy_2d_pkg, 'launch', 'nav2_launch.py')
             ),
             launch_arguments=nav2_args.items(),
         )
