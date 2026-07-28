@@ -82,6 +82,66 @@ def _mode_name(mode: str) -> str:
     return MODE_SHORT.get(mode, mode or "")
 
 
+def _robot_yaml_path() -> Optional[str]:
+    """Resolve robot.yaml the way typego_bringup.launch.py does.
+
+    $TYPEGO_CONFIG wins, then the installed typego_config share, then the
+    source tree. Kept in step with typego_bringup so the console shows the
+    file the launch will actually read.
+    """
+    env = os.environ.get("TYPEGO_CONFIG")
+    if env and os.path.isfile(env):
+        return env
+    try:
+        from ament_index_python.packages import get_package_share_directory
+        candidate = os.path.join(
+            get_package_share_directory("typego_config"), "config", "robot.yaml")
+        if os.path.isfile(candidate):
+            return candidate
+    except Exception:
+        pass
+    fallback = PROJECT_ROOT / "src/typego_config/config/robot.yaml"
+    return str(fallback) if fallback.is_file() else None
+
+
+def _current_slam_backend() -> str:
+    """autonomy.slam_backend from robot.yaml, or "" if it cannot be read.
+
+    Display only. The console never passes slam_backend:=, so whatever
+    robot.yaml says is what the launch uses -- which is exactly why it is
+    worth showing before you commit to a run.
+    """
+    path = _robot_yaml_path()
+    if not path:
+        return ""
+    try:
+        import yaml
+        with open(path, "r") as f:
+            data = yaml.safe_load(f) or {}
+        value = (data.get("autonomy") or {}).get("slam_backend")
+        return str(value) if value else ""
+    except Exception:
+        return ""
+
+
+def _backend_is_built(backend: str) -> bool:
+    """Is the package that backend selects actually in the overlay?
+
+    `lightning` is optional and expensive to build, so a robot.yaml asking for
+    it on a workspace that never built it is a launch failure waiting to
+    happen. Cheap to check here, painful to diagnose later.
+    """
+    pkg = {"arise": "arise_slam_mid360", "lightning": "lightning"}.get(backend)
+    if pkg is None:
+        return True
+    try:
+        from ament_index_python.packages import get_package_share_directory
+        get_package_share_directory(pkg)
+        return True
+    except Exception:
+        return False
+
+
 def _maps_for_mode(mode: str) -> list[str]:
     """List maps valid for the given mode by looking at on-disk artefacts.
 
@@ -230,6 +290,19 @@ class TypegoConsole(App):
     def _show_full_sub_menu(self) -> None:
         self.state = "full_sub"
         self._banner(f"Stack: {MODE_SHORT['3d']}")
+        backend = _current_slam_backend()
+        if not backend:
+            self.log_pane.write(
+                "SLAM backend: [red]unknown — could not read robot.yaml[/red]")
+        else:
+            self.log_pane.write(
+                f"SLAM backend: [bold]{backend}[/bold]"
+                f"   [dim](robot.yaml: autonomy.slam_backend)[/dim]")
+            if not _backend_is_built(backend):
+                self.log_pane.write(
+                    f"  [red]![/red] package for [bold]{backend}[/bold] is not "
+                    f"built — this run will fail")
+        self.log_pane.write("")
         self.log_pane.write("3D-autonomy planner:")
         for option in FULL_SUB_OPTIONS:
             self.log_pane.write(f"  [bold]{option.key}[/bold]  {option.label}")
