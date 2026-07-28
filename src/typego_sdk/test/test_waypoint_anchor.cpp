@@ -88,6 +88,29 @@ Candidate center_cand(const std::string& place_id, double x, double y) {
     return c;
 }
 
+Candidate coverage_cand(const std::string& place_id, const std::string& key,
+                        double x, double y) {
+    Candidate c;
+    c.generation_key = place_id + "|grid|" + key;
+    c.place_id = place_id;
+    c.place_kind = tpg::PlaceKind::kCorridor;
+    c.waypoint_role = "coverage";
+    c.x = x;
+    c.y = y;
+    return c;
+}
+
+Candidate doorway_cand(const std::string& place_id, double x, double y) {
+    Candidate c;
+    c.generation_key = place_id + "|doorway";
+    c.place_id = place_id;
+    c.place_kind = tpg::PlaceKind::kPortal;
+    c.waypoint_role = "doorway";
+    c.x = x;
+    c.y = y;
+    return c;
+}
+
 }  // namespace
 
 TEST(AnchorRegistry, SameKeyKeepsFrozenPose) {
@@ -158,6 +181,141 @@ TEST(AnchorRegistry, ProvisionalSoftAnchorsGated) {
                             map);
     ASSERT_EQ(r2.size(), 1u);
     EXPECT_EQ(r2[0].waypoint_role, "center");
+}
+
+// A hallway is provisional for its entire traversal -- it is by construction
+// the place with the most unexplored boundary -- so gating coverage on
+// `provisional` meant the newly-walked part never received any waypoints.
+TEST(AnchorRegistry, CoverageMintsWhileProvisional) {
+    auto map = make_free_map();
+    AnchorRegistry reg;
+    GraphBuilder prov;
+    prov.add("room_0", tpg::PlaceKind::kCorridor, 5, 5, 25, 25,
+             /*provisional=*/true);
+
+    auto r = reg.reconcile({coverage_cand("room_0", "0_0", wc(10), wc(10))},
+                           prov.g, map);
+    ASSERT_EQ(r.size(), 1u);
+    EXPECT_EQ(r[0].waypoint_role, "coverage");
+
+    // The center anchor stays gated: it is meant to represent the whole
+    // region, which is not yet known.
+    AnchorRegistry reg2;
+    auto r2 = reg2.reconcile({center_cand("room_0", wc(12), wc(12))}, prov.g,
+                             map);
+    EXPECT_TRUE(r2.empty());
+}
+
+// Retiring by erasing the record *before* attempting the replacement loses the
+// anchor forever whenever the re-mint is refused, because nothing remembers
+// the generation key afterwards.
+TEST(AnchorRegistry, RetireKeepsRecordWhenReplacementRefused) {
+    auto map = make_free_map();
+    AnchorRegistry reg;
+    reg.stale_anchor_retire_refreshes = 2;
+
+    GraphBuilder g1;
+    g1.add("room_0", tpg::PlaceKind::kRoom, 5, 5, 20, 20);
+    ASSERT_EQ(
+        reg.reconcile({center_cand("room_0", wc(10), wc(10))}, g1.g, map).size(),
+        1u);
+
+    // The room moves (freezing the pose out of the place) AND becomes
+    // provisional, so the replacement center anchor cannot be minted.
+    GraphBuilder g2;
+    g2.add("room_0", tpg::PlaceKind::kRoom, 18, 18, 27, 27, /*provisional=*/true);
+    Candidate moved = center_cand("room_0", wc(22), wc(22));
+    for (int i = 0; i < 5; ++i) {
+        EXPECT_TRUE(reg.reconcile({moved}, g2.g, map).empty());
+        ASSERT_EQ(reg.records.count("room_0|center"), 1u)
+            << "record forgotten on refresh " << i;
+    }
+
+    // Once the place closes, the replacement mints under the same key.
+    GraphBuilder g3;
+    g3.add("room_0", tpg::PlaceKind::kRoom, 18, 18, 27, 27);
+    auto r = reg.reconcile({moved}, g3.g, map);
+    ASSERT_EQ(r.size(), 1u);
+    EXPECT_DOUBLE_EQ(r[0].x, wc(22));
+}
+
+// The candidate-time dedup tests fresh candidate poses, but reconcile publishes
+// frozen record poses, so anchors minted against different maps can drift
+// together and are never re-checked. The publish-time pass closes that gap.
+TEST(AnchorRegistry, ClusteredAnchorsWithheldNotRetired) {
+    auto map = make_free_map();
+    AnchorRegistry reg;
+    reg.min_separation_m = 0.5;  // 5 cells at 0.1 m/cell
+
+    GraphBuilder gb;
+    gb.add("room_0", tpg::PlaceKind::kCorridor, 2, 2, 28, 28);
+    Candidate a = coverage_cand("room_0", "0_0", wc(10), wc(10));
+    Candidate b = coverage_cand("room_0", "1_0", wc(12), wc(10));  // 0.2 m away
+
+    auto r1 = reg.reconcile({a, b}, gb.g, map);
+    ASSERT_EQ(r1.size(), 1u);
+    const std::uint32_t kept = r1[0].id;
+    // Withheld, not retired: both records survive.
+    EXPECT_EQ(reg.records.size(), 2u);
+
+    // Order-independent: the older (lower) id wins either way.
+    auto r2 = reg.reconcile({b, a}, gb.g, map);
+    ASSERT_EQ(r2.size(), 1u);
+    EXPECT_EQ(r2[0].id, kept);
+
+    // With the survivor's candidate gone, the suppressed anchor returns under
+    // its own id rather than having been destroyed.
+    auto r3 = reg.reconcile({b}, gb.g, map);
+    ASSERT_EQ(r3.size(), 1u);
+    EXPECT_NE(r3[0].id, kept);
+    EXPECT_DOUBLE_EQ(r3[0].x, wc(12));
+}
+
+// Priority beats age: a doorway marks real topology, so it survives a clash
+// with a coverage point even though the coverage anchor is older.
+TEST(AnchorRegistry, SeparationKeepsConnectorOverCoverage) {
+    auto map = make_free_map();
+    AnchorRegistry reg;
+    reg.min_separation_m = 0.5;
+
+    GraphBuilder gb;
+    gb.add("room_0", tpg::PlaceKind::kCorridor, 2, 2, 28, 28);
+    gb.add("portal_0", tpg::PlaceKind::kPortal, 4, 4, 6, 6, /*provisional=*/false,
+           {"room_0"});
+
+    Candidate cov = coverage_cand("room_0", "0_0", wc(20), wc(20));
+    ASSERT_EQ(reg.reconcile({cov}, gb.g, map).size(), 1u);
+
+    Candidate door = doorway_cand("portal_0", wc(22), wc(20));  // 0.2 m away
+    auto r = reg.reconcile({cov, door}, gb.g, map);
+    ASSERT_EQ(r.size(), 1u);
+    EXPECT_EQ(r[0].waypoint_role, "doorway");
+}
+
+// Frontier waypoints are volatile exploration targets, not place coverage, so
+// the separation pass must leave them alone in both directions.
+TEST(AnchorRegistry, SeparationExemptsFrontierWaypoints) {
+    auto map = make_free_map();
+    AnchorRegistry reg;
+    reg.min_separation_m = 0.5;
+
+    GraphBuilder gb;
+    gb.add("room_0", tpg::PlaceKind::kCorridor, 2, 2, 28, 28);
+    gb.add("frontier_0", tpg::PlaceKind::kFrontierRegion, 2, 2, 4, 4);
+
+    // Poses must each resolve to their own place, so put them either side of
+    // the frontier boundary: 0.28 m apart, well inside min_separation_m.
+    Candidate cov = coverage_cand("room_0", "0_0", wc(5), wc(5));
+    Candidate fr;
+    fr.generation_key = "frontier_0|frontier";
+    fr.place_id = "frontier_0";
+    fr.place_kind = tpg::PlaceKind::kFrontierRegion;
+    fr.waypoint_role = "frontier";
+    fr.x = wc(3);
+    fr.y = wc(3);
+
+    auto r = reg.reconcile({cov, fr}, gb.g, map);
+    ASSERT_EQ(r.size(), 2u);
 }
 
 TEST(AnchorRegistry, RestartRecoveryPreservesIdAndPose) {

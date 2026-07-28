@@ -1,6 +1,8 @@
 #include "typego_sdk/waypoint_anchor.hpp"
 
+#include <algorithm>
 #include <cmath>
+#include <cstddef>
 
 namespace typego_sdk {
 
@@ -8,8 +10,29 @@ namespace {
 
 constexpr double kPi = 3.14159265358979323846;
 
+// Roles whose pose only becomes meaningful once the place's extent is known, so
+// minting one from a half-explored place would freeze a misplaced anchor.
+//
+// "coverage" is deliberately NOT in this set. A coverage anchor describes the
+// spot it occupies, not the region as a whole, and every candidate has already
+// cleared pose_valid, so it is a usable pose even mid-exploration. Gating it
+// meant a hallway -- which is provisional (frontier_ratio > 0.2) for its entire
+// traversal, precisely because it is the place with the most unexplored
+// boundary -- silently refused every new coverage anchor and kept only whatever
+// was minted in the first refresh.
 bool is_soft_role(const std::string& role) {
-    return role == "center" || role == "coverage";
+    return role == "center";
+}
+
+// Publication priority when two anchors sit closer than the minimum separation:
+// the lower rank survives. Connector anchors mark real topology and must never
+// be dropped in favour of a coverage point; coverage is the most expendable.
+int role_rank(const std::string& role) {
+    if (role == "doorway" || role == "transition" || role == "junction")
+        return 0;
+    if (role == "entrance") return 1;
+    if (role == "center") return 2;
+    return 3;  // coverage, and anything unrecognized
 }
 
 const tpg::PlaceRegion* find_place(const tpg::PlaceGraphSnapshot& g,
@@ -138,8 +161,22 @@ std::vector<PublishedWaypoint> AnchorRegistry::reconcile(
                 rec.stale = true;
                 rec.active = false;
                 if (should_retire(rec)) {
-                    records.erase(it);
+                    // Attempt the replacement BEFORE dropping the record.
+                    // Erasing first loses the anchor permanently whenever the
+                    // re-mint is refused (unusable candidate pose, or the
+                    // provisional gate for a soft role), because nothing
+                    // remembers the key afterwards. mint_if_valid overwrites
+                    // records[generation_key] on success, so the retire happens
+                    // exactly when a replacement actually exists.
+                    const std::size_t before = out.size();
                     mint_if_valid(cand, connector, g, map, seen_keys, out);
+                    if (out.size() == before) {
+                        // No replacement available: keep the stale record (and
+                        // hold the counter at the threshold so every later
+                        // refresh retries) rather than forgetting the anchor.
+                        rec.stale_refresh_count = static_cast<std::uint32_t>(
+                            stale_anchor_retire_refreshes);
+                    }
                 }
                 // else: withhold this refresh (degraded but not moved)
             }
@@ -171,7 +208,66 @@ std::vector<PublishedWaypoint> AnchorRegistry::reconcile(
         }
         ++it;
     }
+    suppress_clustered(out);
     return out;
+}
+
+// Enforce `min_separation_m` on the poses we actually publish.
+//
+// The candidate-time dedup in add_grid_coverage_candidates compares FRESH
+// candidate poses, but reconcile publishes the FROZEN record poses. Two anchors
+// minted against different map versions can therefore drift within the dedup
+// radius and are never re-checked against each other -- the positions that got
+// dedup-tested are discarded before publication. This pass closes that gap.
+//
+// Deterministic and order-independent: survivors are chosen by (role_rank, id),
+// so the older anchor of a clustered pair is the one kept and the result does
+// not depend on candidate ordering. A suppressed anchor is only withheld from
+// this publish -- its record stays active, so if the survivor later disappears
+// the suppressed one comes back with its original id.
+//
+// Frontier waypoints are volatile exploration targets rather than place
+// coverage, so they are neither suppressed nor allowed to suppress anything.
+void AnchorRegistry::suppress_clustered(
+    std::vector<PublishedWaypoint>& wps) const {
+    if (min_separation_m <= 0.0 || wps.size() < 2) return;
+
+    std::vector<std::size_t> order;
+    order.reserve(wps.size());
+    for (std::size_t i = 0; i < wps.size(); ++i)
+        if (wps[i].id < kFrontierIdBase) order.push_back(i);
+    std::sort(order.begin(), order.end(), [&](std::size_t a, std::size_t b) {
+        const int ra = role_rank(wps[a].waypoint_role);
+        const int rb = role_rank(wps[b].waypoint_role);
+        if (ra != rb) return ra < rb;
+        return wps[a].id < wps[b].id;
+    });
+
+    const double r2 = min_separation_m * min_separation_m;
+    std::vector<std::size_t> kept;
+    std::unordered_set<std::uint32_t> dropped;
+    for (std::size_t idx : order) {
+        bool clustered = false;
+        for (std::size_t k : kept) {
+            const double dx = wps[idx].x - wps[k].x;
+            const double dy = wps[idx].y - wps[k].y;
+            if (dx * dx + dy * dy < r2) {
+                clustered = true;
+                break;
+            }
+        }
+        if (clustered)
+            dropped.insert(wps[idx].id);
+        else
+            kept.push_back(idx);
+    }
+    if (dropped.empty()) return;
+
+    std::vector<PublishedWaypoint> filtered;
+    filtered.reserve(wps.size() - dropped.size());
+    for (const auto& w : wps)
+        if (!dropped.count(w.id)) filtered.push_back(w);
+    wps.swap(filtered);
 }
 
 void AnchorRegistry::mint_if_valid(const Candidate& cand, bool connector,

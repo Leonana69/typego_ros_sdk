@@ -257,6 +257,11 @@ class PlaceGraphWaypointsNode : public rclcpp::Node {
             declare_parameter<double>("user_waypoint_clearance_m", 0.375);
         waypoint_spacing_m_ =
             declare_parameter<double>("waypoint_spacing_m", 2.0);
+        // Publish-time floor on the distance between two published waypoints.
+        // <= 0 derives it from the spacing (below), which is what you want: it
+        // scales with waypoint_spacing_m instead of silently decoupling.
+        waypoint_min_separation_m_ =
+            declare_parameter<double>("waypoint_min_separation_m", 0.0);
         coverage_min_area_m2_ =
             declare_parameter<double>("coverage_min_area_m2", 12.0);
         stale_anchor_retire_refreshes_ =
@@ -267,6 +272,15 @@ class PlaceGraphWaypointsNode : public rclcpp::Node {
         registry_.min_anchor_clearance_m = min_anchor_clearance_m_;
         registry_.stale_anchor_retire_refreshes = stale_anchor_retire_refreshes_;
         registry_.publish_stale_anchors = publish_stale_anchors_;
+        // 0.6 of a lattice pitch. Above the candidate-time dedup radius
+        // (0.5 pitch) so it actually removes pairs that drifted together after
+        // their poses froze, and below the point where suppression starts
+        // costing real coverage. Measured on a 62 m2 / 29.7 m hallway: 0.5-0.6
+        // pitch leaves the worst gap unchanged at 4.18 m, while 0.75 pitch
+        // pushes it to 5.43 m and the area beyond 2 m from 3.2% to 6.4%.
+        registry_.min_separation_m = waypoint_min_separation_m_ > 0.0
+                                         ? waypoint_min_separation_m_
+                                         : 0.6 * waypoint_spacing_m_;
         user_store_.min_clearance_m = user_waypoint_clearance_m_;
 
         if (!wf.empty()) {
@@ -936,30 +950,33 @@ class PlaceGraphWaypointsNode : public rclcpp::Node {
             for (int gy = gy0; gy <= gy1; ++gy) {
                 double px = gx * s, py = gy * s;
                 double ax = px, ay = py;
-                bool ok = pose_valid(px, py, p.place_id, false, g, map,
-                                     min_anchor_clearance_m_);
-                if (!ok) {
-                    double tx = p.centroid.x - px, ty = p.centroid.y - py;
-                    double tn = std::hypot(tx, ty);
-                    if (tn > 1e-6) {
-                        tx /= tn;
-                        ty /= tn;
-                        for (double off : {0.25 * s, 0.5 * s}) {
-                            double nx = px + off * tx, ny = py + off * ty;
-                            if (pose_valid(nx, ny, p.place_id, false, g, map,
-                                           min_anchor_clearance_m_)) {
-                                ax = nx;
-                                ay = ny;
-                                ok = true;
-                                break;
-                            }
-                        }
-                    }
-                }
-                if (!ok) continue;
 
-                // Center it in the open width before deduping on final pose.
+                // Bring the node into this place when it does not already land
+                // there. This replaces a ray probed toward p.centroid at two
+                // coarse offsets, which failed on bent places: a concave
+                // region's cell-average centroid can lie outside the region
+                // entirely (exactly why PlaceRegion::peak exists -- see
+                // types.hpp), so around an L-bend the ray aimed into the notch
+                // and every node there was abandoned, leaving a hole spanning
+                // the full corridor width. Snapping to the region's nearest
+                // cell has no direction to get wrong.
+                const tpg::PlaceRegion* at = g.place_at_world(ax, ay);
+                if (!at || at->place_id != p.place_id) {
+                    if (!snap_into_place(g, p, ax, ay)) continue;
+                    // Preserve the lattice's meaning: a node may be recovered
+                    // within its own cell, not dragged in from across the map.
+                    if (std::hypot(ax - px, ay - py) > max_disp) continue;
+                }
+
+                // Center it in the open width, then validate the pose we are
+                // actually going to publish. The previous order validated the
+                // pre-snap pose and never re-checked the snapped one, and it
+                // discarded in-place nodes that this centering would have made
+                // legal (a node near a wall but inside the region).
                 snap_to_clearest(g, map, p.place_id, ax, ay, max_disp);
+                if (!pose_valid(ax, ay, p.place_id, false, g, map,
+                                min_anchor_clearance_m_))
+                    continue;
 
                 bool clustered = false;
                 for (const auto& q : placed) {
@@ -1430,6 +1447,7 @@ class PlaceGraphWaypointsNode : public rclcpp::Node {
     double min_anchor_clearance_m_ = 0.25;
     double user_waypoint_clearance_m_ = 0.375;
     double waypoint_spacing_m_ = 2.0;
+    double waypoint_min_separation_m_ = 0.0;
     double coverage_min_area_m2_ = 12.0;
     int stale_anchor_retire_refreshes_ = 3;
     bool publish_stale_anchors_ = false;

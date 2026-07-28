@@ -102,16 +102,22 @@ class AnchorRegistry {
     double min_anchor_clearance_m = 0.25;
     int stale_anchor_retire_refreshes = 3;
     bool publish_stale_anchors = false;
+    // Minimum spacing (m) enforced on the poses actually published. Needed
+    // because the candidate-time dedup tests fresh candidate poses while
+    // reconcile publishes frozen record poses, which can drift together. <= 0
+    // disables the pass.
+    double min_separation_m = 0.0;
 
     // Persistent state (serialized by the node).
     std::unordered_map<std::string, AnchorRecord> records;
     std::uint32_t next_id = 0;
 
     // Reconcile candidates against the registry and return the waypoints to
-    // publish. Soft anchors (center/coverage) are gated while their place is
+    // publish. Soft anchors (center) are gated while their place is
     // provisional; frontier candidates are volatile (published, never stored);
     // a known anchor keeps its frozen pose while valid, and is retired +
-    // replaced only after its pose has been invalid for too many refreshes.
+    // replaced only once a replacement can actually be minted. The published
+    // set is finally thinned to min_separation_m.
     std::vector<PublishedWaypoint> reconcile(
         const std::vector<Candidate>& candidates,
         const tpg::PlaceGraphSnapshot& g, const tpg::MapSnapshot& map);
@@ -133,6 +139,9 @@ class AnchorRegistry {
                                      const tpg::PlaceGraphSnapshot& g) const;
     PublishedWaypoint make_published_from_record(
         const AnchorRecord& rec, const tpg::PlaceGraphSnapshot& g) const;
+    // Withhold (do not retire) anchors closer than min_separation_m to a
+    // higher-priority one. Frontier waypoints are exempt.
+    void suppress_clustered(std::vector<PublishedWaypoint>& wps) const;
 };
 
 }  // namespace typego_sdk
