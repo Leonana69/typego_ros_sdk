@@ -203,19 +203,22 @@ class TypegoConsole(App):
 
     # ---------- Menu rendering ----------
 
-    def _banner(self, text: str) -> None:
-        self.log_pane.clear()
+    def _banner(self, text: str, clear: bool = True) -> None:
+        # clear=False keeps whatever is already on screen -- used when the menu
+        # is being redrawn after a failure, so the error stays readable.
+        if clear:
+            self.log_pane.clear()
         self.log_pane.write(f"[bold cyan]{text}[/bold cyan]")
         self.log_pane.write("")
 
-    def _show_mode_menu(self) -> None:
+    def _show_mode_menu(self, clear: bool = True) -> None:
         self.state = "mode"
         self.mode = None
         self.planner_label = ""
         self.full_extra_launch_args = []
         self.full_requires_existing_map = False
         self.selected_map = None
-        self._banner("Typego SDK Console")
+        self._banner("Typego SDK Console", clear=clear)
         self.log_pane.write("Choose autonomy stack:")
         self.log_pane.write(f"  [bold]1[/bold]  {MODE_MENU['2d']}")
         self.log_pane.write(f"  [bold]2[/bold]  {MODE_MENU['3d']}")
@@ -472,13 +475,27 @@ class TypegoConsole(App):
             self._tee_line(line)
         rc = await proc.wait()
         if proc is self.launch_proc:
-            self.log_pane.write(f"[dim]-- ros2 launch exited ({rc}) --[/dim]")
             self.launch_proc = None
+            # Capture before _close_log_file() drops it.
+            log_path = self.log_path
             self._close_log_file()
+            died_on_its_own = self.state == "running"
+            if rc == 0:
+                self.log_pane.write(f"[dim]-- ros2 launch exited ({rc}) --[/dim]")
+            else:
+                self.log_pane.write("")
+                self.log_pane.write(
+                    f"[bold red]-- ros2 launch FAILED (exit {rc}) --[/bold red]")
+                self.log_pane.write(
+                    "[yellow]The error is above. Scroll with PageUp.[/yellow]")
+                if log_path is not None:
+                    self.log_pane.write(f"[yellow]Full log: {log_path}[/yellow]")
             # If it died on its own, drop back to the menu rather than leaving
-            # the user staring at a frozen-looking screen.
-            if self.state == "running":
-                self._show_mode_menu()
+            # the user staring at a frozen-looking screen -- but on a failure
+            # do NOT clear the pane, or the diagnostic is destroyed before it
+            # can be read.
+            if died_on_its_own:
+                self._show_mode_menu(clear=(rc == 0))
 
     async def _kill_launch(self) -> None:
         proc = self.launch_proc
