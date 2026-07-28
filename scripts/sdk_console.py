@@ -82,28 +82,6 @@ def _mode_name(mode: str) -> str:
     return MODE_SHORT.get(mode, mode or "")
 
 
-def _robot_yaml_path() -> Optional[str]:
-    """Resolve robot.yaml the way typego_bringup.launch.py does.
-
-    $TYPEGO_CONFIG wins, then the installed typego_config share, then the
-    source tree. Kept in step with typego_bringup so the console shows the
-    file the launch will actually read.
-    """
-    env = os.environ.get("TYPEGO_CONFIG")
-    if env and os.path.isfile(env):
-        return env
-    try:
-        from ament_index_python.packages import get_package_share_directory
-        candidate = os.path.join(
-            get_package_share_directory("typego_config"), "config", "robot.yaml")
-        if os.path.isfile(candidate):
-            return candidate
-    except Exception:
-        pass
-    fallback = PROJECT_ROOT / "src/typego_config/config/robot.yaml"
-    return str(fallback) if fallback.is_file() else None
-
-
 def _current_slam_backend() -> str:
     """autonomy.slam_backend from robot.yaml, or "" if it cannot be read.
 
@@ -111,13 +89,9 @@ def _current_slam_backend() -> str:
     robot.yaml says is what the launch uses -- which is exactly why it is
     worth showing before you commit to a run.
     """
-    path = _robot_yaml_path()
-    if not path:
-        return ""
     try:
-        import yaml
-        with open(path, "r") as f:
-            data = yaml.safe_load(f) or {}
+        from typego_config.bootstrap import load_merged
+        data, _ = load_merged()
         value = (data.get("autonomy") or {}).get("slam_backend")
         return str(value) if value else ""
     except Exception:

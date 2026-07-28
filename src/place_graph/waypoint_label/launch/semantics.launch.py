@@ -7,32 +7,16 @@ from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 
 
-def _locate_robot_yaml():
-    env = os.environ.get('TYPEGO_CONFIG')
-    if env and os.path.isfile(env):
-        return env
-    try:
-        share = get_package_share_directory('typego_config')
-    except Exception:
-        return None
-    candidate = os.path.join(share, 'config', 'robot.yaml')
-    return candidate if os.path.isfile(candidate) else None
-
-
 def _edge_service_endpoint():
     """Build the qwenvl `/process` URL from robot.yaml's network.edge_service.
 
-    Read with plain PyYAML — ros2 launch runs under /usr/bin/python3 without
-    pydantic, the same constraint typego_bringup.launch.py works around. Returns
-    '' when unavailable; the node then falls back to $EDGE_SERVICE_IP / localhost.
+    Discovery comes from typego_config.bootstrap, which is dependency-free, so
+    this does not require pydantic. Returns '' when unavailable; the node then
+    falls back to $EDGE_SERVICE_IP / localhost.
     """
-    path = _locate_robot_yaml()
-    if not path:
-        return ''
     try:
-        import yaml
-        with open(path, 'r') as f:
-            data = yaml.safe_load(f) or {}
+        from typego_config.bootstrap import load_merged
+        data, _ = load_merged()
         edge = ((data.get('network') or {}).get('edge_service') or {})
         ip = str(edge.get('ip', '') or '').strip()
         if not ip:
