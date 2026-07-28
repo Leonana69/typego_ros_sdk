@@ -39,7 +39,7 @@ except ImportError:
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-AUTONOMY = PROJECT_ROOT / "src/autonomy"
+AUTONOMY = PROJECT_ROOT / "src/3d_autonomy"
 
 FULL_CONFIGS = [
     ("0", "vehicle simulator (local navigation layer)",

@@ -11,7 +11,7 @@ __pycache__/
 .vscode/
 .DS_Store
 
-./src/autonomy/local_navigation/vehicle_simulator/mesh/
+./src/3d_autonomy/local_navigation/vehicle_simulator/mesh/
 temp/
 src/typego_sdk/resource/Map-*/
 !src/typego_sdk/resource/Map-*/
@@ -21,9 +21,9 @@ src/typego_sdk/resource/Map-*/*
 # OR-Tools: fetched by `make or-tools` per-arch. Keep the small Makefile and
 # README.md tracked as placeholders; the headers, libraries, and executables
 # are ~155 MB of arch-specific binaries regenerated on demand.
-src/autonomy/exploration_planner/tare_planner/or-tools/include/
-src/autonomy/exploration_planner/tare_planner/or-tools/lib/
-src/autonomy/exploration_planner/tare_planner/or-tools/bin/
+src/3d_autonomy/exploration_planner/tare_planner/or-tools/include/
+src/3d_autonomy/exploration_planner/tare_planner/or-tools/lib/
+src/3d_autonomy/exploration_planner/tare_planner/or-tools/bin/
 
 doc/
 bags/

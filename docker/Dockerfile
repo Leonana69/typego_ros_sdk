@@ -77,11 +77,11 @@ ENV AUTONOMY_TYPE=${AUTONOMY_TYPE}
 # `make or-tools` is a no-op on amd64 (uses the committed binary); on aarch64
 # it downloads the arch-correct tarball before colcon links libortools.so.
 RUN if [ "$AUTONOMY_TYPE" = "3d" ]; then \
-    cd /workspace/src/autonomy/slam/dependency/Sophus && \
+    cd /workspace/src/3d_autonomy/slam/dependency/Sophus && \
     rm -rf build && mkdir build && cd build && \
     cmake .. -DBUILD_TESTS=OFF && \
     make && make install && \
-    cd /workspace/src/autonomy/slam/dependency/gtsam && \
+    cd /workspace/src/3d_autonomy/slam/dependency/gtsam && \
     rm -rf build && mkdir build && cd build && \
     cmake .. -DGTSAM_USE_SYSTEM_EIGEN=ON -DGTSAM_BUILD_WITH_MARCH_NATIVE=OFF && \
     make -j6 && make install && \

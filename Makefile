@@ -60,7 +60,7 @@ PYTHON_ENTRYPOINTS := \
 build: $(ROBOT_ENV)
 	@if [ "$(AUTONOMY_TYPE)" = "2d" ]; then \
 		echo "=> AUTONOMY_TYPE=2d, excluding autonomy packages..."; \
-		AUTONOMY_PACKAGES=$$(find src/autonomy -name "package.xml" \
+		AUTONOMY_PACKAGES=$$(find src/3d_autonomy -name "package.xml" \
 			-exec grep -h "<name>" {} \; \
 			| sed 's/.*<name>\(.*\)<\/name>.*/\1/' \
 			| tr '\n' ' '); \
@@ -99,11 +99,11 @@ setup: $(ROBOT_ENV)
 	@echo "=> Setting up TypeGo SDK..."
 	@if [ "$(AUTONOMY_TYPE)" = "3d" ]; then \
 		echo "=> Building SLAM dependencies (Sophus + gtsam)..."; \
-		cd $(CURDIR)/src/autonomy/slam/dependency/Sophus && \
+		cd $(CURDIR)/src/3d_autonomy/slam/dependency/Sophus && \
 		rm -rf build && mkdir build && cd build && \
 		cmake .. -DBUILD_TESTS=OFF && \
 		make && sudo make install; \
-		# cd $(CURDIR)/src/autonomy/slam/dependency/gtsam && \
+		# cd $(CURDIR)/src/3d_autonomy/slam/dependency/gtsam && \
 		# rm -rf build && mkdir build && cd build && \
 		# cmake .. -DGTSAM_USE_SYSTEM_EIGEN=ON -DGTSAM_BUILD_WITH_MARCH_NATIVE=OFF && \
 		# make -j6 && sudo make install && \
@@ -118,7 +118,7 @@ setup: $(ROBOT_ENV)
 # overwritten here — the vendored amd64 copy in git is incomplete (missing
 # absl/log/ headers and the bin/{protoc,scip,fzn-cp-sat} executables that
 # protobuf-targets.cmake / scip-targets.cmake validate at configure time).
-OR_TOOLS_DIR := $(CURDIR)/src/autonomy/exploration_planner/tare_planner/or-tools
+OR_TOOLS_DIR := $(CURDIR)/src/3d_autonomy/exploration_planner/tare_planner/or-tools
 OR_TOOLS_VERSION := v9.8.3296
 OR_TOOLS_BASE := https://github.com/google/or-tools/releases/download/v9.8
 OR_TOOLS_ARCHIVE ?= /tmp/or-tools.tar.gz
