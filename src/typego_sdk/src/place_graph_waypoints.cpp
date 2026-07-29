@@ -49,6 +49,7 @@
 #include "typego_interface/srv/resolve_place_at_point.hpp"
 #include "typego_interface/srv/set_place_label.hpp"
 
+#include "place_graph/coverage.hpp"
 #include "place_graph/matching.hpp"
 #include "place_graph/place_graph.hpp"
 #include "place_graph/sampling.hpp"
@@ -264,6 +265,19 @@ class PlaceGraphWaypointsNode : public rclcpp::Node {
             declare_parameter<double>("waypoint_min_separation_m", 0.0);
         coverage_min_area_m2_ =
             declare_parameter<double>("coverage_min_area_m2", 12.0);
+        // "geodesic" measures which part of a place is worst covered and puts
+        // the next point there, so the coverage hole is bounded by
+        // waypoint_spacing_m by construction. "lattice" is the previous
+        // world-grid sampler, kept so the change can be reverted on the robot
+        // without a rebuild.
+        coverage_sampler_ =
+            declare_parameter<std::string>("coverage_sampler", "geodesic");
+        if (coverage_sampler_ != "geodesic" && coverage_sampler_ != "lattice") {
+            RCLCPP_WARN(get_logger(),
+                        "unknown coverage_sampler '%s', using 'geodesic'",
+                        coverage_sampler_.c_str());
+            coverage_sampler_ = "geodesic";
+        }
         stale_anchor_retire_refreshes_ =
             declare_parameter<int>("stale_anchor_retire_refreshes", 3);
         publish_stale_anchors_ =
@@ -703,9 +717,16 @@ class PlaceGraphWaypointsNode : public rclcpp::Node {
     }
 
     // ----- candidate generation -----
+    // Not const: resolving each place's route terminal updates route_terminals_,
+    // which has to persist so the traversal direction does not flip.
     std::vector<Candidate> generate_candidates(
-        const tpg::PlaceGraphSnapshot& g, const tpg::MapSnapshot& map) const {
+        const tpg::PlaceGraphSnapshot& g, const tpg::MapSnapshot& map) {
         std::vector<Candidate> out;
+        // Terminals are claimed by position, never by place_id -- place ids
+        // churn on every split/merge, and a terminal that lost its key would be
+        // re-swept and could come back pointing the other way.
+        terminal_claimed_.assign(route_terminals_.size(), 0);
+        minted_terminals_.clear();
         // place_id -> connector places that list it as an endpoint.
         std::unordered_map<std::string, std::vector<const tpg::PlaceRegion*>>
             connectors_of;
@@ -739,8 +760,13 @@ class PlaceGraphWaypointsNode : public rclcpp::Node {
                     std::vector<Candidate> coverage;
                     if (p.kind == tpg::PlaceKind::kCorridor ||
                         p.area_m2 > coverage_min_area_m2_) {
-                        add_grid_coverage_candidates(g, map, p, entrance_pts,
-                                                     coverage);
+                        if (coverage_sampler_ == "lattice") {
+                            add_grid_coverage_candidates(g, map, p, entrance_pts,
+                                                         coverage);
+                        } else {
+                            add_geodesic_coverage_candidates(
+                                g, map, p, entrance_pts, coverage);
+                        }
                     }
 
                     if (!coverage.empty()) {
@@ -800,7 +826,33 @@ class PlaceGraphWaypointsNode : public rclcpp::Node {
                 }
             }
         }
+
+        // Retire terminals that no longer land in any place; keep the rest so a
+        // place that is briefly not corridor-like does not lose its direction.
+        std::vector<tpg::Point2d> keep;
+        for (std::size_t i = 0; i < route_terminals_.size(); ++i) {
+            if (terminal_claimed_[i] ||
+                g.place_at_world(route_terminals_[i].x, route_terminals_[i].y))
+                keep.push_back(route_terminals_[i]);
+        }
+        for (const auto& t : minted_terminals_) keep.push_back(t);
+        route_terminals_.swap(keep);
         return out;
+    }
+
+    // The terminal pinned for `p`, if one of the persisted terminals still
+    // resolves into it. Claims it so two places cannot share one.
+    const tpg::Point2d* claim_terminal(const tpg::PlaceGraphSnapshot& g,
+                                       const tpg::PlaceRegion& p) {
+        for (std::size_t i = 0; i < route_terminals_.size(); ++i) {
+            if (terminal_claimed_[i]) continue;
+            const tpg::PlaceRegion* at =
+                g.place_at_world(route_terminals_[i].x, route_terminals_[i].y);
+            if (!at || at->place_id != p.place_id) continue;
+            terminal_claimed_[i] = 1;
+            return &route_terminals_[i];
+        }
+        return nullptr;
     }
 
     std::optional<Candidate> entrance_candidate(
@@ -909,6 +961,104 @@ class PlaceGraphWaypointsNode : public rclcpp::Node {
         }
         x = bx;
         y = by;
+    }
+
+    // Quantize a world coordinate into a stable generation-key token.
+    // Coverage anchors are keyed on their own pose rather than on a lattice
+    // index or the place_id: the pose is what has to stay stable as the map
+    // grows, and leaving place_id out of the key keeps an anchor alive across
+    // the place renames/splits/merges that reconcile already absorbs by
+    // refreshing rec.place_id.
+    static std::string pose_key(double x, double y) {
+        auto q = [](double v) {
+            return std::to_string(
+                static_cast<long long>(std::llround(v / 0.25)));
+        };
+        return "cov|" + q(x) + "_" + q(y);
+    }
+
+    // Geodesic coverage: place points so every reachable cell of `p` is within
+    // waypoint_spacing_m of in-region travel from one of them. Unlike the world
+    // lattice below, this bounds the coverage hole by construction rather than
+    // controlling only where points land and dropping whatever misses.
+    void add_geodesic_coverage_candidates(
+        const tpg::PlaceGraphSnapshot& g, const tpg::MapSnapshot& map,
+        const tpg::PlaceRegion& p,
+        const std::vector<std::pair<double, double>>& entrance_pts,
+        std::vector<Candidate>& out) {
+        std::unordered_set<std::string> keys;
+        auto emit = [&](double x, double y, const std::string& key) {
+            if (!keys.insert(key).second) return;
+            Candidate c;
+            c.generation_key = key;
+            c.place_id = p.place_id;
+            c.place_kind = p.kind;
+            c.waypoint_role = "coverage";
+            c.x = x;
+            c.y = y;
+            c.yaw = 0.0;
+            c.semantic_context = "coverage in " + p.place_id;
+            out.push_back(std::move(c));
+        };
+
+        // Entrances already cover their surroundings.
+        std::vector<tpg::Point2d> seeds;
+        seeds.reserve(entrance_pts.size());
+        for (const auto& e : entrance_pts) seeds.push_back({e.first, e.second});
+
+        // Re-propose the coverage anchors already committed inside this place
+        // under their existing keys, and seed the sampler with them. That is
+        // what makes coverage INCREMENTAL: committed waypoints stay put and the
+        // sampler only fills genuine gaps, instead of re-deriving -- and
+        // churning -- the whole set every time the map grows. Membership is
+        // resolved by pose rather than by the record's place_id, so it survives
+        // a rename.
+        std::vector<std::pair<double, double>> committed;
+        std::vector<std::string> committed_keys;
+        for (const auto& kv : registry_.records) {
+            const AnchorRecord& r = kv.second;
+            if (r.waypoint_role != "coverage") continue;
+            const tpg::PlaceRegion* at = g.place_at_world(r.x, r.y);
+            if (!at || at->place_id != p.place_id) continue;
+            committed.emplace_back(r.x, r.y);
+            committed_keys.push_back(r.generation_key);
+            seeds.push_back({r.x, r.y});
+        }
+
+        tpg::CoverageConfig cfg;
+        cfg.spacing_m = waypoint_spacing_m_;
+        cfg.min_clearance_m = min_anchor_clearance_m_;
+        cfg.min_separation_m = registry_.min_separation_m;
+        // Hand the sampler our own validation so it never proposes a pose the
+        // registry would reject -- a rejected proposal silently reopens a hole.
+        auto ok = [&](double x, double y) {
+            return pose_valid(x, y, p.place_id, false, g, map,
+                              min_anchor_clearance_m_);
+        };
+        const tpg::Point2d* pin = claim_terminal(g, p);
+        const tpg::PlaceRoute route = tpg::compute_place_route(g, p, cfg, pin);
+        // A freshly swept terminal has to be remembered, or the next refresh
+        // sweeps again and can pick the other end.
+        if (route.corridor_like && !pin)
+            minted_terminals_.push_back(route.terminal_a_world);
+
+        // Emit in route order. Committed anchors come out of an unordered_map,
+        // and new points are appended, so without this the published sequence
+        // is arbitrary -- and the whole point of the ordering is that the list
+        // can be driven as a patrol without anything re-sorting it.
+        std::vector<tpg::Point2d> all;
+        std::vector<std::string> gen_keys;
+        for (std::size_t i = 0; i < committed.size(); ++i) {
+            all.push_back({committed[i].first, committed[i].second});
+            gen_keys.push_back(committed_keys[i]);
+        }
+        for (const auto& cp :
+             tpg::sample_coverage(g, map, p, seeds, cfg, ok, &route)) {
+            all.push_back(cp.point);
+            gen_keys.push_back(pose_key(cp.point.x, cp.point.y));
+        }
+        for (std::size_t i : tpg::order_route(g, p, all, &route))
+            emit(all[i].x, all[i].y, gen_keys[i]);
     }
 
     // Sample interval waypoints on an absolute world lattice of pitch
@@ -1168,7 +1318,7 @@ class PlaceGraphWaypointsNode : public rclcpp::Node {
         const std::unordered_map<std::string, std::vector<std::uint32_t>>&
             members) {
         json doc;
-        doc["version"] = 4;
+        doc["version"] = 5;  // + route_terminals
         doc["map_version"] = g.map_version;
         doc["next_waypoint_id"] = registry_.next_id;
 
@@ -1232,6 +1382,10 @@ class PlaceGraphWaypointsNode : public rclcpp::Node {
                 it != members.end() ? it->second : std::vector<std::uint32_t>{};
             doc["places"].push_back(jp);
         }
+
+        doc["route_terminals"] = json::array();
+        for (const auto& t : route_terminals_)
+            doc["route_terminals"].push_back({{"x", t.x}, {"y", t.y}});
 
         doc["anchor_registry"] = json::array();
         for (const auto& kv : registry_.records) {
@@ -1342,6 +1496,11 @@ class PlaceGraphWaypointsNode : public rclcpp::Node {
                         registry_.records[r.generation_key] = r;
                 }
             }
+            if (doc.contains("route_terminals")) {
+                for (const auto& t : doc["route_terminals"])
+                    route_terminals_.push_back(
+                        {t.value("x", 0.0), t.value("y", 0.0)});
+            }
             user_store_.from_json(doc);  // v4: user_waypoints + next id
             RCLCPP_INFO(get_logger(),
                         "loaded %zu anchors, %zu user waypoints, next_id=%u",
@@ -1449,6 +1608,7 @@ class PlaceGraphWaypointsNode : public rclcpp::Node {
     double waypoint_spacing_m_ = 2.0;
     double waypoint_min_separation_m_ = 0.0;
     double coverage_min_area_m2_ = 12.0;
+    std::string coverage_sampler_ = "geodesic";
     int stale_anchor_retire_refreshes_ = 3;
     bool publish_stale_anchors_ = false;
     tpg::Config cfg_;
@@ -1482,6 +1642,11 @@ class PlaceGraphWaypointsNode : public rclcpp::Node {
     std::vector<tpg::CellState> last_cells_;
 
     // Worker-thread-owned (no lock needed; only the worker touches these).
+    // Per-place route terminals, persisted so the published traversal direction
+    // survives both map growth and a restart. Held by pose, not by place_id.
+    std::vector<tpg::Point2d> route_terminals_;
+    std::vector<char> terminal_claimed_;
+    std::vector<tpg::Point2d> minted_terminals_;
     tpg::PlaceGraphSnapshot prev_;
     bool have_prev_ = false;
     AnchorRegistry registry_;
